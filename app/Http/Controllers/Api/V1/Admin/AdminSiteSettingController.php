@@ -36,17 +36,33 @@ class AdminSiteSettingController extends Controller
 
     public function upsert(Request $request)
     {
-        $data = $request->validate([
+        $group = (string) $request->input('group');
+
+        $rules = [
             'group' => ['required','string','max:64'],
             'key' => ['required','string','max:128'],
-            'value' => ['nullable'],
+            'value' => ['required'], // default: wajib ada
             'is_public' => ['required','boolean'],
-        ]);
+        ];
+
+        // KHUSUS kontak: wajib upload icon + wajib ada nama & link
+        if ($group === 'contact') {
+            $rules['value'] = ['required','array'];
+            $rules['value.name'] = ['required','string'];
+            $rules['value.link'] = ['required','string'];
+            $rules['value.display'] = ['nullable','string'];
+
+            // WAJIB upload
+            $rules['value.icon_path'] = ['required','string'];
+            $rules['value.icon_url']  = ['required','string'];
+        }
+
+        $data = $request->validate($rules);
 
         DB::table('site_settings')->updateOrInsert(
             ['group' => $data['group'], 'key' => $data['key']],
             [
-                'value' => $data['value'] === null ? null : json_encode($data['value']),
+                'value' => $data['value'],
                 'is_public' => $data['is_public'],
                 'updated_at' => now(),
                 'created_at' => now(),
@@ -72,27 +88,27 @@ class AdminSiteSettingController extends Controller
     }
 
     // POST /api/v1/admin/settings/icon/sign
-    public function signIconUpload(SettingIconSignRequest $request, SupabaseStorageService $supabase)
+    public function signIconUpload(Request $request, SupabaseStorageService $supabase)
     {
+        $data = $request->validate([
+            'mime' => ['required','string','starts_with:image/'],
+        ]);
+
         $adminId = auth()->id() ?? 0;
 
-        // pakai bucket_photos (default: photos)
         $bucket  = (string) config('services.supabase.bucket_icons', 'icons');
         $expires = (int) config('services.supabase.sign_expires', 60);
 
-        $mime = $request->input('mime');
-        $path = $supabase->buildSettingIconPath($adminId, $mime);
-
+        $path = $supabase->buildSettingIconPath($adminId, $data['mime']);
         $signed = $supabase->createSignedUploadUrl($bucket, $path, $expires);
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'path' => $signed['path'],
-                'signed_url' => $signed['signedUrl'],
-                'public_url' => $supabase->publicObjectUrl($bucket, $signed['path']),
-            ],
+        return $this->ok([
+            'path' => $signed['path'],
+            'signed_url' => $signed['signedUrl'],
+            'public_url' => $supabase->publicObjectUrl($bucket, $signed['path']),
         ]);
     }
+
+    
 
 }
