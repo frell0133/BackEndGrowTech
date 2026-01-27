@@ -64,8 +64,8 @@ class SocialAuthController extends Controller
             $token = $user->createToken('api-token-social')->plainTextToken;
 
             // ✅ Google sering harus balik ke localhost/public domain, bukan IP 10.x
-            $frontendDefault = rtrim(env('FRONTEND_URL', 'http://10.45.196.166:3000'), '/');
-            $frontendLocal = rtrim(env('FRONTEND_URL_LOCAL', 'http://localhost:3000'), '/');
+            $frontendDefault = rtrim(env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production.up.railway.app/'), '/');
+            $frontendLocal = rtrim(env('FRONTEND_URL_LOCAL', 'https://frontendgrowtechtesting1-production.up.railway.app/'), '/');
 
             $frontend = $provider === 'google' ? $frontendLocal : $frontendDefault;
 
