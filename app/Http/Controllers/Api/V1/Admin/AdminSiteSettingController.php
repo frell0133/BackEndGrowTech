@@ -41,36 +41,39 @@ class AdminSiteSettingController extends Controller
         $rules = [
             'group' => ['required','string','max:64'],
             'key' => ['required','string','max:128'],
-            'value' => ['required'], // default: wajib ada
+            'value' => ['required'],
             'is_public' => ['required','boolean'],
         ];
 
-        // KHUSUS kontak: wajib upload icon + wajib ada nama & link
         if ($group === 'contact') {
             $rules['value'] = ['required','array'];
             $rules['value.name'] = ['required','string'];
             $rules['value.link'] = ['required','string'];
             $rules['value.display'] = ['nullable','string'];
-
-            // WAJIB upload
             $rules['value.icon_path'] = ['required','string'];
             $rules['value.icon_url']  = ['required','string'];
         }
 
         $data = $request->validate($rules);
 
+        // ✅ PENTING: simpan value sebagai JSON string supaya aman di DB (text/json/jsonb)
+        $value = $data['value'];
+        if (is_array($value) || is_object($value)) {
+            $value = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        }
+
         DB::table('site_settings')->updateOrInsert(
             ['group' => $data['group'], 'key' => $data['key']],
             [
-                'value' => $data['value'],
+                'value' => $value,
                 'is_public' => $data['is_public'],
                 'updated_at' => now(),
                 'created_at' => now(),
             ]
         );
 
-        return $this->ok(['saved' => true]);
-    }
+    return response()->json(['success' => true, 'data' => ['saved' => true]]);
+}
 
     public function destroy(Request $request)
     {
