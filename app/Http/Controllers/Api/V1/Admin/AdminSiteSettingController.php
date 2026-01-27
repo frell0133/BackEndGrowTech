@@ -6,6 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use App\Http\Requests\Admin\SettingIconSignRequest;
+use App\Services\SupabaseStorageService;
+
 
 class AdminSiteSettingController extends Controller
 {
@@ -67,4 +70,29 @@ class AdminSiteSettingController extends Controller
 
         return $this->ok(['deleted' => true]);
     }
+
+    // POST /api/v1/admin/settings/icon/sign
+    public function signIconUpload(SettingIconSignRequest $request, SupabaseStorageService $supabase)
+    {
+        $adminId = auth()->id() ?? 0;
+
+        // pakai bucket_photos (default: photos)
+        $bucket  = (string) config('services.supabase.bucket_icons', 'icons');
+        $expires = (int) config('services.supabase.sign_expires', 60);
+
+        $mime = $request->input('mime');
+        $path = $supabase->buildSettingIconPath($adminId, $mime);
+
+        $signed = $supabase->createSignedUploadUrl($bucket, $path, $expires);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'path' => $signed['path'],
+                'signed_url' => $signed['signedUrl'],
+                'public_url' => $supabase->publicObjectUrl($bucket, $signed['path']),
+            ],
+        ]);
+    }
+
 }

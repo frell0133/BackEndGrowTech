@@ -206,6 +206,7 @@ Route::prefix('v1')->group(function () {
             Route::get('settings', [AdminSiteSettingController::class, 'index']);
             Route::post('settings/upsert', [AdminSiteSettingController::class, 'upsert']);
             Route::delete('settings', [AdminSiteSettingController::class, 'destroy']);
+            Route::post('settings/icon/sign', [AdminSiteSettingController::class, 'signIconUpload']);
 
             // BANNERS
             Route::get('banners', [AdminBannerController::class, 'index']);
