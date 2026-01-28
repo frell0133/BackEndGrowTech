@@ -147,7 +147,7 @@ class UserProfileController extends Controller
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
 
-        $bucket = (string) config('services.supabase.bucket_photos', 'photos');
+        $bucket = (string) config('services.supabase.bucket_avatars', 'avatars');
         $oldPath = $user->avatar_path;
 
         $user->avatar = null;
