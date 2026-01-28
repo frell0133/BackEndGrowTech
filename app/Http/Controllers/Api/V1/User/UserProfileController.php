@@ -122,17 +122,25 @@ class UserProfileController extends Controller
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
 
+        // ✅ terima dua kemungkinan nama field dari FE: avatar_url atau avatar
         $data = $request->validate([
             'avatar_path' => ['required','string'],
-            'avatar_url'  => ['required','string'],
+            'avatar_url'  => ['nullable','string'],
+            'avatar'      => ['nullable','string'],
         ]);
+
+        $publicUrl = $data['avatar_url'] ?? $data['avatar'] ?? null;
+        if (!$publicUrl) {
+            return $this->fail('avatar_url/avatar is required', 422);
+        }
 
         $oldPath = $user->avatar_path;
 
-        // ✅ SIMPAN KE KOLOM YANG ADA DI DB
+        // ✅ simpan ke DB
         $user->avatar_path = $data['avatar_path'];
-        $user->avatar      = $data['avatar_url'];  // ✅ ini kolomnya
+        $user->avatar      = $publicUrl;
         $user->save();
+        $user->refresh();
 
         // (opsional) hapus file lama
         if ($oldPath && $oldPath !== $data['avatar_path']) {
@@ -140,9 +148,17 @@ class UserProfileController extends Controller
             try { $supabase->deleteObjects($bucket, [$oldPath]); } catch (\Throwable $e) {}
         }
 
-        // ✅ biar FE gampang: kirim avatar_url juga
+        // ✅ balikin juga avatar_url agar FE gampang
         $payload = $user->toArray();
         $payload['avatar_url'] = $user->avatar;
+
+        // ✅ tambahan debug biar kamu yakin DB yang kepake apa
+        $payload['_debug'] = [
+            'db' => config('database.default'),
+            'host' => config('database.connections.'.config('database.default').'.host'),
+            'database' => config('database.connections.'.config('database.default').'.database'),
+            'user_id' => $user->id,
+        ];
 
         return $this->ok($payload, ['message' => 'Avatar berhasil diperbarui']);
     }
