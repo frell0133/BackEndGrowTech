@@ -7,6 +7,8 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
+use App\Services\SupabaseStorageService;
+use Illuminate\Support\Facades\DB;
 
 class UserProfileController extends Controller
 {
@@ -93,4 +95,70 @@ class UserProfileController extends Controller
 
         return $this->ok(['changed' => true], ['message' => 'Password berhasil diubah']);
     }
+    public function signAvatarUpload(Request $request, SupabaseStorageService $supabase)
+    {
+        $user = $request->user();
+        if (!$user) return $this->fail('Unauthenticated', 401);
+
+        $data = $request->validate([
+            'mime' => ['required','string','starts_with:image/'],
+        ]);
+
+        $bucket  = (string) config('services.supabase.bucket_avatars', 'avatars');
+        $expires = (int) config('services.supabase.sign_expires', 60);
+
+        $path = $supabase->buildUserAvatarPath($user->id, $data['mime']);
+        $signed = $supabase->createSignedUploadUrl($bucket, $path, $expires);
+
+        return $this->ok([
+            'path' => $signed['path'],
+            'signed_url' => $signed['signedUrl'],
+            'public_url' => $supabase->publicObjectUrl($bucket, $signed['path']),
+        ]);
+    }
+    
+    public function updateAvatar(Request $request, SupabaseStorageService $supabase)
+    {
+        $user = $request->user();
+        if (!$user) return $this->fail('Unauthenticated', 401);
+
+        $data = $request->validate([
+            'avatar_path' => ['required','string'],
+            'avatar_url'  => ['required','string'],
+        ]);
+
+        // optional: delete avatar lama di supabase
+        $oldPath = $user->avatar_path;
+
+        $user->avatar_path = $data['avatar_path'];
+        $user->avatar = $data['avatar_url']; 
+        $user->save();
+
+        if ($oldPath && $oldPath !== $data['avatar_path']) {
+            $bucket = (string) config('services.supabase.bucket_avatars', 'avatars');
+            try { $supabase->deleteObjects($bucket, [$oldPath]); } catch (\Throwable $e) { /* abaikan */ }
+        }
+
+        return $this->ok($user, ['message' => 'Avatar berhasil diperbarui']);
+    }
+
+    public function deleteAvatar(Request $request, SupabaseStorageService $supabase)
+    {
+        $user = $request->user();
+        if (!$user) return $this->fail('Unauthenticated', 401);
+
+        $bucket = (string) config('services.supabase.bucket_photos', 'photos');
+        $oldPath = $user->avatar_path;
+
+        $user->avatar = null;
+        $user->avatar_path = null;
+        $user->save();
+
+        if ($oldPath) {
+            try { $supabase->deleteObjects($bucket, [$oldPath]); } catch (\Throwable $e) { /* abaikan */ }
+        }
+
+        return $this->ok(['deleted' => true], ['message' => 'Avatar dihapus']);
+    }
+
 }

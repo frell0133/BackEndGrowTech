@@ -56,8 +56,11 @@ Route::prefix('v1')->group(function () {
             Route::get('me', [AuthController::class, 'me']);
 
             // profile
-            Route::patch('me/profile', [UserProfileController::class, 'showProfile']);
-            Route::get('me/profile', [UserProfileController::class, 'updateProfile']);
+            Route::get('me/profile', [UserProfileController::class, 'showProfile']);
+            Route::patch('me/profile', [UserProfileController::class, 'updateProfile']);
+            Route::post('me/avatar/sign', [UserProfileController::class, 'signAvatarUpload']);
+            Route::patch('me/avatar', [UserProfileController::class, 'updateAvatar']);
+            Route::delete('me/avatar', [UserProfileController::class, 'deleteAvatar']); // optional
 
             //password
             Route::patch('me/password', [UserProfileController::class, 'updatePassword']);

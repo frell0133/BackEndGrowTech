@@ -168,7 +168,7 @@ class SupabaseStorageService
         $file = now()->timestamp . '-' . \Illuminate\Support\Str::uuid() . '.' . $ext;
 
         return "admin/{$adminId}/settings/icons/{$file}";
-    }
+    }   
     /**
      * Build path for icon images.
      */
@@ -176,6 +176,18 @@ class SupabaseStorageService
     {
         $path = ltrim($path, '/');
         return $this->url . "/storage/v1/object/public/{$bucket}/{$path}";
+    }
+
+    public function buildUserAvatarPath(int|string $userId, string $mime): string
+    {
+        if (!str_starts_with($mime, 'image/')) {
+            throw new \InvalidArgumentException('Only image mime types are allowed');
+        }
+
+        $ext = explode('/', $mime)[1] ?? 'jpg';
+        $file = now()->timestamp . '-' . \Illuminate\Support\Str::uuid() . '.' . $ext;
+
+        return "users/{$userId}/avatar/{$file}";
     }
 
 }
