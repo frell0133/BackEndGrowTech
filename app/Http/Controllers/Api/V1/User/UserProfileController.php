@@ -127,19 +127,24 @@ class UserProfileController extends Controller
             'avatar_url'  => ['required','string'],
         ]);
 
-        // optional: delete avatar lama di supabase
         $oldPath = $user->avatar_path;
 
+        // ✅ SIMPAN KE KOLOM YANG ADA DI DB
         $user->avatar_path = $data['avatar_path'];
-        $user->avatar = $data['avatar_url']; 
+        $user->avatar      = $data['avatar_url'];  // ✅ ini kolomnya
         $user->save();
 
+        // (opsional) hapus file lama
         if ($oldPath && $oldPath !== $data['avatar_path']) {
             $bucket = (string) config('services.supabase.bucket_avatars', 'avatars');
-            try { $supabase->deleteObjects($bucket, [$oldPath]); } catch (\Throwable $e) { /* abaikan */ }
+            try { $supabase->deleteObjects($bucket, [$oldPath]); } catch (\Throwable $e) {}
         }
 
-        return $this->ok($user, ['message' => 'Avatar berhasil diperbarui']);
+        // ✅ biar FE gampang: kirim avatar_url juga
+        $payload = $user->toArray();
+        $payload['avatar_url'] = $user->avatar;
+
+        return $this->ok($payload, ['message' => 'Avatar berhasil diperbarui']);
     }
 
     public function deleteAvatar(Request $request, SupabaseStorageService $supabase)
