@@ -30,33 +30,33 @@ class SocialAuthController extends Controller
         try {
             $socialUser = Socialite::driver($provider)->stateless()->user();
 
-            $email = $socialUser->getEmail();
+            $email      = $socialUser->getEmail();
             $providerId = (string) $socialUser->getId();
 
-            /* =====================================================
-             | 1. Ambil nama user
-             ===================================================== */
+            // 1) Nama user
             $name = $socialUser->getName()
                 ?? $socialUser->getNickname()
                 ?? 'User';
 
-            /* =====================================================
-             | 2. Ambil avatar dari provider
-             ===================================================== */
+            // 2) Avatar dari provider (Google biasanya OK)
             $avatar = $socialUser->getAvatar();
 
-            // 🔥 Khusus Discord → pakai CDN resmi (lebih stabil & bisa size)
+            // ✅ Discord: build CDN URL dari raw payload kalau perlu
             if ($provider === 'discord') {
-                $avatarHash = $socialUser->getAvatar();
+                $raw = $socialUser->user ?? [];
 
-                if ($avatarHash && !Str::startsWith($avatarHash, ['http://', 'https://'])) {
-                    $avatar = "https://cdn.discordapp.com/avatars/{$providerId}/{$avatarHash}.png?size=256";
+                // Kalau getAvatar() sudah URL, biarkan.
+                // Kalau kosong, coba build sendiri
+                if (!$avatar && isset($raw['id'], $raw['avatar']) && $raw['avatar']) {
+                    $discordId = (string) $raw['id'];
+                    $hash      = (string) $raw['avatar'];
+                    $ext       = Str::startsWith($hash, 'a_') ? 'gif' : 'png';
+
+                    $avatar = "https://cdn.discordapp.com/avatars/{$discordId}/{$hash}.{$ext}?size=256";
                 }
             }
 
-            /* =====================================================
-             | 3. Cari user (provider_id > email)
-             ===================================================== */
+            // 3) Cari user (provider_id > email)
             $user = User::where('provider', $provider)
                 ->where('provider_id', $providerId)
                 ->first();
@@ -65,9 +65,7 @@ class SocialAuthController extends Controller
                 $user = User::where('email', $email)->first();
             }
 
-            /* =====================================================
-             | 4. CREATE USER BARU
-             ===================================================== */
+            // 4) Create user baru
             if (!$user) {
                 $user = User::create([
                     'name' => $name,
@@ -76,30 +74,22 @@ class SocialAuthController extends Controller
                     'role' => 'user',
                     'provider' => $provider,
                     'provider_id' => $providerId,
-                    'avatar' => $avatar, // ✅ avatar provider utk user baru
+                    'avatar' => $avatar,     // ✅ simpan avatar provider
+                    'avatar_path' => null,   // ✅ default
                 ]);
-            }
-            /* =====================================================
-             | 5. UPDATE USER EXISTING
-             ===================================================== */
-            else {
+            } else {
+                // 5) Update user existing
                 $update = [
                     'provider' => $provider,
                     'provider_id' => $providerId,
                     'name' => $name,
                 ];
 
-                /**
-                 * 🔐 PENTING:
-                 * Kalau user sudah upload avatar custom (Supabase),
-                 * biasanya avatar_path TERISI.
-                 * → Jangan override avatar mereka.
-                 */
+                // 🔐 Jangan override kalau user sudah upload avatar custom
                 if (empty($user->avatar_path)) {
                     $update['avatar'] = $avatar;
                 }
 
-                // update email kalau sebelumnya dummy
                 if ($email && $user->email !== $email) {
                     $update['email'] = $email;
                 }
@@ -107,14 +97,10 @@ class SocialAuthController extends Controller
                 $user->update($update);
             }
 
-            /* =====================================================
-             | 6. Buat token Sanctum
-             ===================================================== */
+            // 6) Token Sanctum
             $token = $user->createToken('api-token-social')->plainTextToken;
 
-            /* =====================================================
-             | 7. Redirect ke FE
-             ===================================================== */
+            // 7) Redirect ke FE
             $frontendDefault = rtrim(
                 env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production.up.railway.app'),
                 '/'
@@ -125,7 +111,6 @@ class SocialAuthController extends Controller
                 '/'
             );
 
-            // Google kadang rewel domain → pakai LOCAL kalau perlu
             $frontend = $provider === 'google'
                 ? $frontendLocal
                 : $frontendDefault;

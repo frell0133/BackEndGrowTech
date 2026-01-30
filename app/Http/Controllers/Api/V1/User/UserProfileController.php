@@ -8,7 +8,6 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use App\Services\SupabaseStorageService;
-use Illuminate\Support\Facades\DB;
 
 class UserProfileController extends Controller
 {
@@ -17,16 +16,26 @@ class UserProfileController extends Controller
     /**
      * GET /api/v1/auth/me/profile
      * Menampilkan profil user yang sedang login.
+     * ✅ Selalu return avatar_url (Supabase > Provider > null)
      */
-    public function showProfile(Request $request)
+    public function showProfile(Request $request, SupabaseStorageService $supabase)
     {
         $user = $request->user();
+        if (!$user) return $this->fail('Unauthenticated', 401);
 
-        if (!$user) {
-            return $this->fail('Unauthenticated', 401);
+        $bucket = (string) config('services.supabase.bucket_avatars', 'avatars');
+
+        $avatarUrl = null;
+        if (!empty($user->avatar_path)) {
+            $avatarUrl = $supabase->publicObjectUrl($bucket, $user->avatar_path);
+        } elseif (!empty($user->avatar)) {
+            $avatarUrl = $user->avatar; // URL dari Google/Discord
         }
 
-        return $this->ok($user);
+        $payload = $user->toArray();
+        $payload['avatar_url'] = $avatarUrl;
+
+        return $this->ok($payload);
     }
 
     /**
@@ -36,65 +45,54 @@ class UserProfileController extends Controller
     public function updateProfile(Request $request)
     {
         $user = $request->user();
-
-        if (!$user) {
-            return $this->fail('Unauthenticated', 401);
-        }
+        if (!$user) return $this->fail('Unauthenticated', 401);
 
         $validated = $request->validate([
             'full_name' => ['nullable', 'string', 'max:150'],
             'address'   => ['nullable', 'string', 'max:1000'],
         ]);
 
-        // update yang dikirim saja
         $user->update($validated);
 
-        return $this->ok($user, ['message' => 'Profil berhasil diperbarui']);
+        return $this->ok($user->fresh(), ['message' => 'Profil berhasil diperbarui']);
     }
 
     /**
      * PATCH /api/v1/auth/me/password
-     * Update password user:
-     * - wajib current_password
-     * - password baru min 8 char + confirmed (butuh password_confirmation)
+     * Update password user
      */
     public function updatePassword(Request $request)
     {
         $user = $request->user();
-
-        if (!$user) {
-            return $this->fail('Unauthenticated', 401);
-        }
+        if (!$user) return $this->fail('Unauthenticated', 401);
 
         $data = $request->validate([
             'current_password' => ['required', 'string'],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
         ]);
 
-        // 1) validasi password lama
         if (!Hash::check($data['current_password'], $user->password)) {
             throw ValidationException::withMessages([
                 'current_password' => ['Password lama salah.'],
             ]);
         }
 
-        // 2) optional: cegah password baru sama dengan password lama
         if (Hash::check($data['password'], $user->password)) {
             throw ValidationException::withMessages([
                 'password' => ['Password baru tidak boleh sama dengan password lama.'],
             ]);
         }
 
-        // 3) simpan password baru (di User casts() sudah 'hashed', jadi auto hash)
         $user->password = $data['password'];
         $user->save();
 
-        // 4) OPTIONAL (lebih aman): logout semua token setelah ganti password
-        // Kalau kamu ingin user otomatis logout dari semua device:
-        //  $user->tokens()->delete();
-
         return $this->ok(['changed' => true], ['message' => 'Password berhasil diubah']);
     }
+
+    /**
+     * POST /api/v1/auth/me/avatar/sign
+     * Minta signed upload URL untuk Supabase Storage
+     */
     public function signAvatarUpload(Request $request, SupabaseStorageService $supabase)
     {
         $user = $request->user();
@@ -107,7 +105,7 @@ class UserProfileController extends Controller
         $bucket  = (string) config('services.supabase.bucket_avatars', 'avatars');
         $expires = (int) config('services.supabase.sign_expires', 60);
 
-        $path = $supabase->buildUserAvatarPath($user->id, $data['mime']);
+        $path   = $supabase->buildUserAvatarPath($user->id, $data['mime']);
         $signed = $supabase->createSignedUploadUrl($bucket, $path, $expires);
 
         return $this->ok([
@@ -116,13 +114,16 @@ class UserProfileController extends Controller
             'public_url' => $supabase->publicObjectUrl($bucket, $signed['path']),
         ]);
     }
-    
+
+    /**
+     * PATCH /api/v1/auth/me/avatar
+     * Simpan avatar_path + avatar(public url) ke DB, hapus file lama opsional
+     */
     public function updateAvatar(Request $request, SupabaseStorageService $supabase)
     {
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
 
-        // ✅ terima dua kemungkinan nama field dari FE: avatar_url atau avatar
         $data = $request->validate([
             'avatar_path' => ['required','string'],
             'avatar_url'  => ['nullable','string'],
@@ -136,39 +137,38 @@ class UserProfileController extends Controller
 
         $oldPath = $user->avatar_path;
 
-        // ✅ simpan ke DB
         $user->avatar_path = $data['avatar_path'];
         $user->avatar      = $publicUrl;
         $user->save();
         $user->refresh();
 
-        // (opsional) hapus file lama
+        // hapus file lama (opsional)
         if ($oldPath && $oldPath !== $data['avatar_path']) {
             $bucket = (string) config('services.supabase.bucket_avatars', 'avatars');
             try { $supabase->deleteObjects($bucket, [$oldPath]); } catch (\Throwable $e) {}
         }
 
-        // ✅ balikin juga avatar_url agar FE gampang
-        $payload = $user->toArray();
-        $payload['avatar_url'] = $user->avatar;
+        // ✅ return avatar_url final supaya FE gampang
+        $bucket = (string) config('services.supabase.bucket_avatars', 'avatars');
+        $avatarUrl = !empty($user->avatar_path)
+            ? $supabase->publicObjectUrl($bucket, $user->avatar_path)
+            : ($user->avatar ?: null);
 
-        // ✅ tambahan debug biar kamu yakin DB yang kepake apa
-        $payload['_debug'] = [
-            'db' => config('database.default'),
-            'host' => config('database.connections.'.config('database.default').'.host'),
-            'database' => config('database.connections.'.config('database.default').'.database'),
-            'user_id' => $user->id,
-        ];
+        $payload = $user->toArray();
+        $payload['avatar_url'] = $avatarUrl;
 
         return $this->ok($payload, ['message' => 'Avatar berhasil diperbarui']);
     }
 
+    /**
+     * DELETE /api/v1/auth/me/avatar
+     */
     public function deleteAvatar(Request $request, SupabaseStorageService $supabase)
     {
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
 
-        $bucket = (string) config('services.supabase.bucket_avatars', 'avatars');
+        $bucket  = (string) config('services.supabase.bucket_avatars', 'avatars');
         $oldPath = $user->avatar_path;
 
         $user->avatar = null;
@@ -176,10 +176,9 @@ class UserProfileController extends Controller
         $user->save();
 
         if ($oldPath) {
-            try { $supabase->deleteObjects($bucket, [$oldPath]); } catch (\Throwable $e) { /* abaikan */ }
+            try { $supabase->deleteObjects($bucket, [$oldPath]); } catch (\Throwable $e) {}
         }
 
         return $this->ok(['deleted' => true], ['message' => 'Avatar dihapus']);
     }
-
 }
