@@ -31,43 +31,104 @@ class SocialAuthController extends Controller
             $socialUser = Socialite::driver($provider)->stateless()->user();
 
             $email = $socialUser->getEmail();
-            $providerId = $socialUser->getId();
+            $providerId = (string) $socialUser->getId();
 
-            // Identity utama: provider + provider_id
+            /* =====================================================
+             | 1. Ambil nama user
+             ===================================================== */
+            $name = $socialUser->getName()
+                ?? $socialUser->getNickname()
+                ?? 'User';
+
+            /* =====================================================
+             | 2. Ambil avatar dari provider
+             ===================================================== */
+            $avatar = $socialUser->getAvatar();
+
+            // 🔥 Khusus Discord → pakai CDN resmi (lebih stabil & bisa size)
+            if ($provider === 'discord') {
+                $avatarHash = $socialUser->getAvatar();
+
+                if ($avatarHash && !Str::startsWith($avatarHash, ['http://', 'https://'])) {
+                    $avatar = "https://cdn.discordapp.com/avatars/{$providerId}/{$avatarHash}.png?size=256";
+                }
+            }
+
+            /* =====================================================
+             | 3. Cari user (provider_id > email)
+             ===================================================== */
             $user = User::where('provider', $provider)
                 ->where('provider_id', $providerId)
                 ->first();
 
-            // Fallback kalau ada email
             if (!$user && $email) {
                 $user = User::where('email', $email)->first();
             }
 
+            /* =====================================================
+             | 4. CREATE USER BARU
+             ===================================================== */
             if (!$user) {
                 $user = User::create([
-                    'name' => $socialUser->getName() ?? $socialUser->getNickname() ?? 'User',
-                    'email' => $email ?? (Str::uuid()->toString() . '@' . $provider . '.local'),
+                    'name' => $name,
+                    'email' => $email ?? (Str::uuid() . "@{$provider}.local"),
                     'password' => Hash::make(Str::random(32)),
                     'role' => 'user',
                     'provider' => $provider,
                     'provider_id' => $providerId,
-                    'avatar' => $socialUser->getAvatar(),
-                ]);
-            } else {
-                $user->update([
-                    'provider' => $provider,
-                    'provider_id' => $providerId,
-                    'avatar' => $socialUser->getAvatar(),
+                    'avatar' => $avatar, // ✅ avatar provider utk user baru
                 ]);
             }
+            /* =====================================================
+             | 5. UPDATE USER EXISTING
+             ===================================================== */
+            else {
+                $update = [
+                    'provider' => $provider,
+                    'provider_id' => $providerId,
+                    'name' => $name,
+                ];
 
+                /**
+                 * 🔐 PENTING:
+                 * Kalau user sudah upload avatar custom (Supabase),
+                 * biasanya avatar_path TERISI.
+                 * → Jangan override avatar mereka.
+                 */
+                if (empty($user->avatar_path)) {
+                    $update['avatar'] = $avatar;
+                }
+
+                // update email kalau sebelumnya dummy
+                if ($email && $user->email !== $email) {
+                    $update['email'] = $email;
+                }
+
+                $user->update($update);
+            }
+
+            /* =====================================================
+             | 6. Buat token Sanctum
+             ===================================================== */
             $token = $user->createToken('api-token-social')->plainTextToken;
 
-            // ✅ Google sering harus balik ke localhost/public domain, bukan IP 10.x
-            $frontendDefault = rtrim(env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production.up.railway.app/'), '/');
-            $frontendLocal = rtrim(env('FRONTEND_URL_LOCAL', 'https://frontendgrowtechtesting1-production.up.railway.app/'), '/');
+            /* =====================================================
+             | 7. Redirect ke FE
+             ===================================================== */
+            $frontendDefault = rtrim(
+                env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production.up.railway.app'),
+                '/'
+            );
 
-            $frontend = $provider === 'google' ? $frontendLocal : $frontendDefault;
+            $frontendLocal = rtrim(
+                env('FRONTEND_URL_LOCAL', $frontendDefault),
+                '/'
+            );
+
+            // Google kadang rewel domain → pakai LOCAL kalau perlu
+            $frontend = $provider === 'google'
+                ? $frontendLocal
+                : $frontendDefault;
 
             return redirect($frontend . '/auth/callback?token=' . urlencode($token));
         } catch (Throwable $e) {
