@@ -16,8 +16,7 @@ class PaymentGatewaySeeder extends Seeder
                 'is_active' => true,
                 'config' => [
                     'environment' => 'sandbox',
-                    'server_key' => env('MIDTRANS_SERVER_KEY', 'CHANGE_ME'),
-                    'client_key' => env('MIDTRANS_CLIENT_KEY', 'CHANGE_ME'),
+                    'server_key' => env('MIDTRANS_SERVERKEY', 'CHANGE_ME'),
                     'merchant_id' => env('MIDTRANS_MERCHANT_ID', 'CHANGE_ME'),
                 ],
             ]

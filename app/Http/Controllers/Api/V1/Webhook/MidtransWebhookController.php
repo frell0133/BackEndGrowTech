@@ -14,8 +14,9 @@ class MidtransWebhookController extends Controller
     public function handle(Request $request, LedgerService $ledger)
     {
         $payload = $request->all();
-
-        $serverKey = (string) (config('services.midtrans.server_key') ?? env('MIDTRANS_SERVER_KEY', ''));
+        Log::info('MIDTRANS WEBHOOK HIT RAW', $request->all());
+  
+        $serverKey = (string) (config('services.midtrans.server_key') ?? env('MIDTRANS_SERVERKEY', ''));
         if ($serverKey === '') {
             return response()->json([
                 'success' => false,
@@ -139,13 +140,5 @@ class MidtransWebhookController extends Controller
             return response()->json(['success' => true]);
         }
 
-        Log::info('Midtrans webhook unhandled status', [
-            'order_id' => $orderId,
-            'transaction_status' => $transactionStatus,
-            'fraud_status' => $fraudStatus,
-        ]);
-
-        return response()->json(['success' => true]);
-        
     }
 }

@@ -147,8 +147,6 @@ Route::prefix('v1')->group(function () {
         // Wallet (User)
         Route::get('wallet/summary', [UserWalletController::class, 'summary']);
         Route::get('wallet/ledger', [UserWalletController::class, 'ledger']);
-
-        // 🔥 TOPUP QRIS (INIT: Snap / Simulate)
         Route::post('wallet/topups/init', [UserTopupController::class, 'init'])
             ->middleware('throttle:20,1');
 
@@ -169,24 +167,17 @@ Route::prefix('v1')->group(function () {
         Route::post('upload/sign', [SupabaseUploadController::class, 'sign']);
     });
 
-    // =========================
-    // 4) WEBHOOKS (PUBLIC)  ✅ FIXED ORDER
-    // =========================
-
-    // ✅ 4.1 MIDTRANS WEBHOOK (REAL) — HARUS DI ATAS stub {gateway_code}
-    Route::post('webhooks/payments/midtrans', [MidtransWebhookController::class, 'handle']);
-
-    // ✅ 4.2 Stub gateway lain (jangan sampai nangkep "midtrans")
-    Route::post('webhooks/payments/{gateway_code}', fn (string $gateway_code) => response()->json([
-        'success' => true,
-        'data' => ['received' => true, 'todo' => true, 'gateway' => $gateway_code],
-        'meta' => (object)[],
-        'error' => null,
-    ]))->where('gateway_code', '^(?!midtrans$).+');
-
-    // ✅ 4.3 SIMULATE: mark topup as PAID (DEV ONLY)
-    // Controller akan block di production + saat MIDTRANS_SIMULATE=false
-    Route::post('topups/{orderId}/simulate-pay', [SimulateTopupController::class, 'pay']);
+        // =========================
+        // 4) WEBHOOKS (PUBLIC)  ✅ FIXED ORDER
+        // =========================
+        Route::post('webhooks/payments/midtrans', [MidtransWebhookController::class, 'handle']);
+        Route::post('webhooks/payments/{gateway_code}', fn (string $gateway_code) => response()->json([
+            'success' => true,
+            'data' => ['received' => true, 'todo' => true, 'gateway' => $gateway_code],
+            'meta' => (object)[],
+            'error' => null,
+        ]))->where('gateway_code', '^(?!midtrans$).+');
+        Route::post('topups/{orderId}/simulate-pay', [SimulateTopupController::class, 'pay']);
 
     // =========================
     // 5) ADMIN AREA (AUTH + ROLE)
