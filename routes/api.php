@@ -31,7 +31,7 @@ use App\Http\Controllers\Api\V1\Admin\AdminFaqController;
 use App\Http\Controllers\Api\V1\Admin\AdminBannerController;
 use App\Http\Controllers\Api\V1\Admin\AdminSiteSettingController;
 use App\Http\Controllers\Api\V1\Admin\PaymentGatewayController;
-
+use App\Http\Controllers\Api\V1\Auth\AuthPasswordController;
 use App\Http\Controllers\Api\V1\Content\ContentController;
 
 use App\Http\Controllers\Api\SupabaseUploadController;
@@ -103,13 +103,8 @@ Route::prefix('v1')->group(function () {
             'success' => true, 'data' => ['todo' => true], 'meta' => (object)[], 'error' => null
         ]));
 
-        Route::post('password/forgot', fn () => response()->json([
-            'success' => true, 'data' => ['todo' => true], 'meta' => (object)[], 'error' => null
-        ]));
-
-        Route::post('password/reset', fn () => response()->json([
-            'success' => true, 'data' => ['todo' => true], 'meta' => (object)[], 'error' => null
-        ]));
+        Route::post('password/forgot', [AuthPasswordController::class, 'forgot']);
+        Route::post('password/reset', [AuthPasswordController::class, 'reset']);
     });
 
     // =========================
