@@ -9,46 +9,71 @@ use Illuminate\Http\Request;
 
 class SimulateTopupController extends Controller
 {
-    public function simulatePay(string $orderId, Request $request, LedgerService $ledger)
+    public function pay(string $orderId, Request $request, LedgerService $ledger)
     {
-        $simulate = filter_var(env('MIDTRANS_SIMULATE', true), FILTER_VALIDATE_BOOL);
+        // ✅ HARD BLOCK di production
+        if (app()->environment('production')) {
+            return response()->json([
+                'success' => false,
+                'data' => null,
+                'meta' => (object)[],
+                'error' => ['message' => 'Simulate endpoint disabled in production.'],
+            ], 403);
+        }
+
+        // ✅ Feature flag MIDTRANS_SIMULATE harus true
+        $simulate = (bool) (config('services.midtrans.simulate') ?? env('MIDTRANS_SIMULATE', false));
         if (!$simulate) {
-            return response()->json(['success' => false, 'error' => ['message' => 'Simulation disabled']], 403);
+            return response()->json([
+                'success' => false,
+                'data' => null,
+                'meta' => (object)[],
+                'error' => ['message' => 'Simulate is disabled (MIDTRANS_SIMULATE=false).'],
+            ], 403);
         }
 
         $topup = WalletTopup::where('order_id', $orderId)->first();
         if (!$topup) {
-            return response()->json(['success' => false, 'error' => ['message' => 'Topup not found']], 404);
+            return response()->json([
+                'success' => false,
+                'data' => null,
+                'meta' => (object)[],
+                'error' => ['message' => 'Topup not found.'],
+            ], 404);
         }
 
-        // idempotent
         if ($topup->posted_to_ledger_at) {
-            return response()->json(['success' => true, 'data' => ['status' => $topup->status]], 200);
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'message' => 'Already posted to ledger.',
+                    'order_id' => $topup->order_id,
+                    'status' => $topup->status,
+                ],
+                'meta' => (object)[],
+                'error' => null,
+            ]);
         }
 
-        // post ke ledger
+        // ✅ tandai paid + post ledger
         $ledger->topup(
-            $topup->user_id,
+            (int) $topup->user_id,
             (int) $topup->amount,
-            $topup->order_id,
-            "SIMULATED Topup order_id={$topup->order_id}"
+            (string) $topup->order_id,
+            "Topup SIMULATE order_id={$topup->order_id}"
         );
 
-        $topup->update([
-            'status' => 'paid',
-            'posted_to_ledger_at' => now(),
-            'raw_callback' => array_merge($topup->raw_callback ?? [], [
-                'simulated' => true,
-                'transaction_status' => 'settlement',
-            ]),
-        ]);
+        $topup->status = 'paid';
+        $topup->posted_to_ledger_at = now();
+        $topup->save();
 
         return response()->json([
             'success' => true,
             'data' => [
+                'message' => 'Simulated payment applied and posted to ledger.',
                 'order_id' => $topup->order_id,
-                'status' => 'paid',
             ],
+            'meta' => (object)[],
             'error' => null,
         ]);
     }

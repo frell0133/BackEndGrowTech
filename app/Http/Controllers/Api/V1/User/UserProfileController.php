@@ -29,13 +29,20 @@ class UserProfileController extends Controller
         if (!empty($user->avatar_path)) {
             $avatarUrl = $supabase->publicObjectUrl($bucket, $user->avatar_path);
         } elseif (!empty($user->avatar)) {
-            $avatarUrl = $user->avatar; // URL dari Google/Discord
+            $avatarUrl = $user->avatar; // OAuth (Google/Discord)
         }
 
-        $payload = $user->toArray();
-        $payload['avatar_url'] = $avatarUrl;
-
-        return $this->ok($payload);
+        return $this->ok([
+            'id'         => $user->id,
+            'name'       => $user->name,
+            'email'      => $user->email,
+            'role'       => $user->role,
+            'avatar'     => $user->avatar,      // 🔥 PASTIKAN TERKIRIM
+            'avatar_url' => $avatarUrl,         // 🔥 URL FINAL
+            'avatar_path'=> $user->avatar_path, // optional
+            'full_name'  => $user->full_name,
+            'address'    => $user->address,
+        ]);
     }
 
     /**

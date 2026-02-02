@@ -9,39 +9,45 @@ class MidtransService
 {
     public function createSnapTransaction(array $payload): array
     {
-        $simulate = filter_var(env('MIDTRANS_SIMULATE', true), FILTER_VALIDATE_BOOL);
-        $serverKey = (string) env('MIDTRANS_SERVER_KEY', '');
+        $simulate = (bool) config('services.midtrans.simulate', false);
 
-        // kalau simulate atau server key kosong → return dummy
-        if ($simulate || $serverKey === '') {
+        if ($simulate) {
+            $fake = 'SIM-' . \Illuminate\Support\Str::uuid();
             return [
                 'mode' => 'simulate',
-                'token' => 'SIMULATED-' . Str::upper(Str::random(18)),
-                'redirect_url' => rtrim((string) env('FRONTEND_URL', 'http://localhost:3000'), '/') . '/topup/simulated',
+                'ok' => true,
+                'status' => 201,
+                'token' => $fake,
+                'redirect_url' => "https://app.sandbox.midtrans.com/snap/v4/redirection/{$fake}",
+                'body' => [
+                    'token' => $fake,
+                    'redirect_url' => "https://app.sandbox.midtrans.com/snap/v4/redirection/{$fake}",
+                ],
             ];
         }
 
-        $snapUrl = (string) env('MIDTRANS_SNAP_URL', 'https://app.sandbox.midtrans.com/snap/v1/transactions');
+        $serverKey = (string) config('services.midtrans.server_key');
+        $url       = (string) config('services.midtrans.snap_url', 'https://app.sandbox.midtrans.com/snap/v1/transactions');
 
-        $res = Http::withBasicAuth($serverKey, '')
+        $res = \Illuminate\Support\Facades\Http::withBasicAuth($serverKey, '')
             ->acceptJson()
-            ->post($snapUrl, $payload);
+            ->asJson()
+            ->post($url, $payload);
 
-        if (!$res->ok()) {
-            return [
-                'mode' => 'real',
-                'error' => true,
-                'status' => $res->status(),
-                'body' => $res->json(),
-            ];
-        }
+        $status = $res->status();
+        $body   = $res->json() ?? [];
 
-        $json = $res->json();
+        $ok = in_array($status, [200, 201], true);
 
         return [
             'mode' => 'real',
-            'token' => $json['token'] ?? null,
-            'redirect_url' => $json['redirect_url'] ?? null,
+            'ok' => $ok,
+            'status' => $status,
+            'body' => $body,
+            'token' => $body['token'] ?? null,
+            'redirect_url' => $body['redirect_url'] ?? null,
+            'error' => !$ok,
         ];
     }
+
 }

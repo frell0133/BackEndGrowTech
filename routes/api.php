@@ -94,7 +94,7 @@ Route::prefix('v1')->group(function () {
             Route::patch('me/password', [UserProfileController::class, 'updatePassword']);
         });
 
-        // optional stubs (kalau belum dipakai, boleh tetap)
+        // optional stubs
         Route::post('verify-email/send', fn () => response()->json([
             'success' => true, 'data' => ['todo' => true], 'meta' => (object)[], 'error' => null
         ]));
@@ -149,7 +149,9 @@ Route::prefix('v1')->group(function () {
         Route::get('wallet/ledger', [UserWalletController::class, 'ledger']);
 
         // 🔥 TOPUP QRIS (INIT: Snap / Simulate)
-        Route::post('wallet/topups/init', [UserTopupController::class, 'init']);
+        Route::post('wallet/topups/init', [UserTopupController::class, 'init'])
+            ->middleware('throttle:20,1');
+
 
         // Referral (User)
         Route::get('referral', [UserReferralController::class, 'dashboard']);
@@ -168,22 +170,23 @@ Route::prefix('v1')->group(function () {
     });
 
     // =========================
-    // 4) WEBHOOKS (PUBLIC)
+    // 4) WEBHOOKS (PUBLIC)  ✅ FIXED ORDER
     // =========================
 
-    // stub (kalau masih mau dipakai untuk gateway lain)
-    Route::post('webhooks/payments/{gateway_code}', fn () => response()->json([
-        'success' => true,
-        'data' => ['received' => true, 'todo' => true],
-        'meta' => (object)[],
-        'error' => null,
-    ]));
-
-    // 🔥 MIDTRANS WEBHOOK (REAL)
+    // ✅ 4.1 MIDTRANS WEBHOOK (REAL) — HARUS DI ATAS stub {gateway_code}
     Route::post('webhooks/payments/midtrans', [MidtransWebhookController::class, 'handle']);
 
-    // 🔥 SIMULATE: mark topup as PAID (DEV ONLY)
-    Route::post('topups/{orderId}/simulate-pay', [SimulateTopupController::class, 'simulatePay']);
+    // ✅ 4.2 Stub gateway lain (jangan sampai nangkep "midtrans")
+    Route::post('webhooks/payments/{gateway_code}', fn (string $gateway_code) => response()->json([
+        'success' => true,
+        'data' => ['received' => true, 'todo' => true, 'gateway' => $gateway_code],
+        'meta' => (object)[],
+        'error' => null,
+    ]))->where('gateway_code', '^(?!midtrans$).+');
+
+    // ✅ 4.3 SIMULATE: mark topup as PAID (DEV ONLY)
+    // Controller akan block di production + saat MIDTRANS_SIMULATE=false
+    Route::post('topups/{orderId}/simulate-pay', [SimulateTopupController::class, 'pay']);
 
     // =========================
     // 5) ADMIN AREA (AUTH + ROLE)

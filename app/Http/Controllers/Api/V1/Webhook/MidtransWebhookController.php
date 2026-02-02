@@ -7,6 +7,7 @@ use App\Models\WalletTopup;
 use App\Services\LedgerService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class MidtransWebhookController extends Controller
 {
@@ -14,10 +15,12 @@ class MidtransWebhookController extends Controller
     {
         $payload = $request->all();
 
-        $serverKey = (string) env('MIDTRANS_SERVER_KEY', '');
+        $serverKey = (string) (config('services.midtrans.server_key') ?? env('MIDTRANS_SERVER_KEY', ''));
         if ($serverKey === '') {
-            // kalau key kosong, webhook real sebaiknya ditolak biar aman
-            return response()->json(['success' => false, 'error' => ['message' => 'Midtrans server key not configured']], 400);
+            return response()->json([
+                'success' => false,
+                'error' => ['message' => 'Midtrans server key not configured'],
+            ], 400);
         }
 
         $orderId     = (string) ($payload['order_id'] ?? '');
@@ -25,64 +28,122 @@ class MidtransWebhookController extends Controller
         $grossAmount = (string) ($payload['gross_amount'] ?? '');
         $signature   = (string) ($payload['signature_key'] ?? '');
 
+        // ✅ signature Midtrans: sha512(order_id + status_code + gross_amount + server_key)
         $expected = hash('sha512', $orderId . $statusCode . $grossAmount . $serverKey);
 
-        if (!$orderId || !$signature || !hash_equals($expected, $signature)) {
-            Log::warning('Midtrans webhook invalid signature', ['order_id' => $orderId]);
-            return response()->json(['success' => false, 'error' => ['message' => 'Invalid signature']], 401);
+        if ($orderId === '' || $signature === '' || !hash_equals($expected, $signature)) {
+            Log::warning('Midtrans webhook invalid signature', [
+                'order_id' => $orderId,
+                'status_code' => $statusCode,
+                'gross_amount' => $grossAmount,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => ['message' => 'Invalid signature'],
+            ], 401);
         }
 
         $topup = WalletTopup::where('order_id', $orderId)->first();
         if (!$topup) {
-            return response()->json(['success' => false, 'error' => ['message' => 'Topup not found']], 404);
+            return response()->json([
+                'success' => false,
+                'error' => ['message' => 'Topup not found'],
+            ], 404);
         }
 
-        $topup->update([
-            'external_id' => $payload['transaction_id'] ?? $topup->external_id,
-            'raw_callback' => $payload,
-        ]);
+        // ✅ guard: gross_amount harus match amount di DB
+        // Midtrans gross_amount biasanya "10000.00"
+        $grossInt = (int) round((float) $grossAmount);
+        if ($grossInt !== (int) $topup->amount) {
+            Log::warning('Midtrans gross_amount mismatch', [
+                'order_id' => $orderId,
+                'midtrans_gross_amount' => $grossAmount,
+                'db_amount' => $topup->amount,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => ['message' => 'Gross amount mismatch'],
+            ], 422);
+        }
+
+        // ✅ simpan callback + external_id
+        $topup->external_id = $payload['transaction_id'] ?? $topup->external_id;
+        $topup->raw_callback = $payload;
+        $topup->save();
 
         $transactionStatus = (string) ($payload['transaction_status'] ?? '');
         $fraudStatus       = (string) ($payload['fraud_status'] ?? '');
 
+        // ✅ paid rules:
         $isPaid = $transactionStatus === 'settlement'
             || ($transactionStatus === 'capture' && ($fraudStatus === 'accept' || $fraudStatus === ''));
 
+        // ✅ pending
         if ($transactionStatus === 'pending') {
-            $topup->update(['status' => 'pending']);
+            if ($topup->status !== 'pending') {
+                $topup->status = 'pending';
+                $topup->save();
+            }
             return response()->json(['success' => true]);
         }
 
-        if (in_array($transactionStatus, ['deny','cancel'], true)) {
-            $topup->update(['status' => 'failed']);
+        // ✅ failed
+        if (in_array($transactionStatus, ['deny', 'cancel'], true)) {
+            if ($topup->status !== 'failed') {
+                $topup->status = 'failed';
+                $topup->save();
+            }
             return response()->json(['success' => true]);
         }
 
+        // ✅ expired
         if ($transactionStatus === 'expire') {
-            $topup->update(['status' => 'expired']);
+            if ($topup->status !== 'expired') {
+                $topup->status = 'expired';
+                $topup->save();
+            }
             return response()->json(['success' => true]);
         }
 
+        // ✅ paid -> post ledger (idempotent + atomic)
         if ($isPaid) {
             if ($topup->posted_to_ledger_at) {
-                $topup->update(['status' => 'paid']);
+                if ($topup->status !== 'paid') {
+                    $topup->status = 'paid';
+                    $topup->save();
+                }
                 return response()->json(['success' => true]);
             }
 
-            $ledger->topup(
-                $topup->user_id,
-                (int) $topup->amount,
-                $topup->order_id,
-                "Topup Midtrans order_id={$topup->order_id}"
-            );
+            DB::transaction(function () use ($ledger, $topup, $payload) {
+                $topup = WalletTopup::whereKey($topup->id)->lockForUpdate()->first();
 
-            $topup->update([
-                'status' => 'paid',
-                'posted_to_ledger_at' => now(),
-            ]);
+                if ($topup->posted_to_ledger_at) {
+                    return;
+                }
+
+                $ledger->topup(
+                    (int) $topup->user_id,
+                    (int) $topup->amount,
+                    (string) $topup->order_id,
+                    "Topup Midtrans order_id={$topup->order_id}, tx_id=" . ($payload['transaction_id'] ?? '-')
+                );
+
+                $topup->status = 'paid';
+                $topup->posted_to_ledger_at = now();
+                $topup->save();
+            });
 
             return response()->json(['success' => true]);
         }
+
+        Log::info('Midtrans webhook unhandled status', [
+            'order_id' => $orderId,
+            'transaction_status' => $transactionStatus,
+            'fraud_status' => $fraudStatus,
+        ]);
 
         return response()->json(['success' => true]);
     }
