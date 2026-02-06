@@ -107,8 +107,12 @@ Route::prefix('v1')->group(function () {
             'success' => true, 'data' => ['todo' => true], 'meta' => (object)[], 'error' => null
         ]));
 
-        Route::post('password/forgot', [AuthPasswordController::class, 'forgot'])->middleware('throttle:5,1');
-        Route::post('password/reset', [AuthPasswordController::class, 'reset'])->middleware('throttle:5,1');
+
+        Route::post('password/forgot', [AuthPasswordController::class, 'forgot']);
+        Route::post('password/reset', [AuthPasswordController::class, 'reset']);
+
+        // Route::post('password/forgot', [AuthPasswordController::class, 'forgot'])->middleware('throttle:5,1');
+        // Route::post('password/reset', [AuthPasswordController::class, 'reset'])->middleware('throttle:5,1');
 
     });
 
