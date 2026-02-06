@@ -9,22 +9,47 @@ use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\DB;
 
 class AuthPasswordController extends Controller
 {
     use ApiResponse;
 
+
     public function forgot(Request $request)
     {
-        $data = $request->validate([
-            'email' => ['required','email'],
-        ]);
+        $request->validate(['email' => 'required|email']);
 
-        $status = Password::sendResetLink($data);
+        $user = \App\Models\User::where('email', $request->email)->first();
 
-        // jangan bocorin apakah email ada / tidak
+        if ($user) {
+            $token = Password::createToken($user);
+
+            $resetUrl = config('app.frontend_url') .
+                "/reset-password?token={$token}&email=" .
+                urlencode($user->email);
+
+            Http::withHeaders([
+                'api-key' => config('services.brevo.key'),
+                'Content-Type' => 'application/json',
+            ])->post('https://api.brevo.com/v3/smtp/email', [
+                'sender' => [
+                    'email' => config('services.brevo.sender'),
+                    'name' => 'GrowTech',
+                ],
+                'to' => [
+                    ['email' => $user->email],
+                ],
+                'subject' => 'Reset Password',
+                'htmlContent' => "
+                    <p>Klik link berikut:</p>
+                    <a href='{$resetUrl}'>Reset Password</a>
+                ",
+            ]);
+        }
+
         return $this->ok([
-            'status' => $status,
             'message' => 'Jika email terdaftar, link reset password akan dikirim.',
         ]);
     }
