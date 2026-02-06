@@ -16,12 +16,16 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        // ✅ Reset link diarahkan ke Next.js
         ResetPassword::createUrlUsing(function ($notifiable, string $token) {
-            $frontend = rtrim((string) env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production.up.railway.app'), '/');
+            $frontend = rtrim(config('app.frontend_url'), '/');
+
+            if (!$frontend) {
+                // fail-safe biar ketahuan kalau env kosong
+                throw new \Exception('FRONTEND_URL is not set');
+            }
+
             $email = urlencode($notifiable->getEmailForPasswordReset());
 
-            // halaman FE kamu:
             return "{$frontend}/reset-password?token={$token}&email={$email}";
         });
 
