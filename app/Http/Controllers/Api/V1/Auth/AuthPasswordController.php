@@ -10,7 +10,6 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\DB;
 
 class AuthPasswordController extends Controller
 {
@@ -26,27 +25,35 @@ class AuthPasswordController extends Controller
         if ($user) {
             $token = Password::createToken($user);
 
-            $resetUrl = config('app.frontend_url') .
-                "/reset-password?token={$token}&email=" .
-                urlencode($user->email);
+            $resetUrl = config('app.frontend_url')
+                . '/reset-password?token=' . $token
+                . '&email=' . urlencode($user->email);
 
-            Http::withHeaders([
+            $html = view('emails.reset-password', [
+                'resetUrl' => $resetUrl,
+            ])->render();
+
+            $response = Http::withHeaders([
                 'api-key' => config('services.brevo.key'),
                 'Content-Type' => 'application/json',
             ])->post('https://api.brevo.com/v3/smtp/email', [
                 'sender' => [
-                    'email' => config('services.brevo.sender'),
-                    'name' => 'GrowTech',
+                    'email' => config('services.brevo.sender_email'),
+                    'name' => config('services.brevo.sender_name'),
                 ],
                 'to' => [
                     ['email' => $user->email],
                 ],
                 'subject' => 'Reset Password',
-                'htmlContent' => "
-                    <p>Klik link berikut:</p>
-                    <a href='{$resetUrl}'>Reset Password</a>
-                ",
+                'htmlContent' => $html,
             ]);
+
+            if ($response->failed()) {
+                \Log::error('Brevo reset password failed', [
+                    'email' => $user->email,
+                    'response' => $response->body(),
+                ]);
+            }
         }
 
         return $this->ok([
