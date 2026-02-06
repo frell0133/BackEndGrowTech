@@ -15,18 +15,25 @@ class AuthPasswordController extends Controller
 {
     use ApiResponse;
 
-
+    /**
+     * Kirim link reset password (Brevo API)
+     */
     public function forgot(Request $request)
     {
-        $request->validate(['email' => 'required|email']);
+        $request->validate([
+            'email' => ['required', 'email'],
+        ]);
 
         $user = \App\Models\User::where('email', $request->email)->first();
 
+        // ❗ Jangan bocorkan apakah email ada atau tidak
         if ($user) {
             $token = Password::createToken($user);
 
-            $resetUrl = config('app.frontend_url')
-                . '/reset-password?token=' . $token
+            // ✅ SESUAI DENGAN STRUKTUR FE (app/reset-password/page.jsx)
+            $resetUrl = rtrim(config('app.frontend_url'), '/')
+                . '/reset-password'
+                . '?token=' . urlencode($token)
                 . '&email=' . urlencode($user->email);
 
             $html = view('emails.reset-password', [
@@ -61,12 +68,15 @@ class AuthPasswordController extends Controller
         ]);
     }
 
+    /**
+     * Proses reset password
+     */
     public function reset(Request $request)
     {
         $data = $request->validate([
-            'email' => ['required','email'],
-            'token' => ['required','string'],
-            'password' => ['required','string','min:8','confirmed'],
+            'email' => ['required', 'email'],
+            'token' => ['required', 'string'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
         ]);
 
         $status = Password::reset(
