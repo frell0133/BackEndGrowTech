@@ -1,6 +1,9 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Http\Request;
 
 use App\Http\Controllers\Api\V1\Auth\AuthController;
 use App\Http\Controllers\Api\V1\Auth\SocialAuthController;
@@ -316,5 +319,68 @@ Route::prefix('v1')->group(function () {
         ]);
     });
 
-    Route::post('dev/mail/test', [DevMailController::class, 'test']);
+    // Route::post('dev/mail/test', function (Request $request) {
+    //     $data = $request->validate([
+    //         'to' => ['required','email'],
+    //         'subject' => ['nullable','string','max:120'],
+    //         'message' => ['nullable','string','max:2000'],
+    //     ]);
+
+    //     $to = $data['to'];
+    //     $subject = $data['subject'] ?? 'Brevo SMTP Test - GrowTech Central';
+    //     $message = $data['message'] ?? 'Test email Brevo dari Laravel (Railway).';
+
+    //     try {
+    //         Mail::raw($message, function ($m) use ($to, $subject) {
+    //             $m->to($to)->subject($subject);
+    //         });
+
+    //         return response()->json([
+    //             'success' => true,
+    //             'data' => [
+    //                 'sent' => true,
+    //                 'to' => $to,
+    //                 'subject' => $subject,
+    //             ],
+    //             'meta' => (object)[],
+    //             'error' => null,
+    //         ]);
+    //     } catch (\Throwable $e) {
+    //         Log::error('DEV_MAIL_TEST_FAILED', [
+    //             'to' => $to,
+    //             'subject' => $subject,
+    //             'error_class' => get_class($e),
+    //             'error_message' => $e->getMessage(),
+    //         ]);
+
+    //         return response()->json([
+    //             'success' => false,
+    //             'data' => null,
+    //             'meta' => (object)[],
+    //             'error' => [
+    //                 'message' => $e->getMessage(),
+    //                 'class' => get_class($e),
+    //                 'hint' => 'Cek Railway Variables: MAIL_HOST/PORT/USERNAME/PASSWORD & MAIL_FROM_ADDRESS (verified sender).',
+    //             ],
+    //         ], 500);
+    //     }
+    // });
+    // Route::get('_debug/mail', function () {
+    //     return response()->json([
+    //         'mail_default' => config('mail.default'),
+
+    //         'smtp_host' => config('mail.mailers.smtp.host'),
+    //         'smtp_port' => config('mail.mailers.smtp.port'),
+    //         'smtp_scheme' => config('mail.mailers.smtp.scheme'),
+    //         'smtp_url' => config('mail.mailers.smtp.url'),
+
+    //         'smtp_username_set' => !empty(config('mail.mailers.smtp.username')),
+    //         'smtp_password_set' => !empty(config('mail.mailers.smtp.password')),
+
+    //         'from_address' => config('mail.from.address'),
+    //         'from_name' => config('mail.from.name'),
+    //         'app_env' => config('app.env'),
+    //     ]);
+    // });
+
 });

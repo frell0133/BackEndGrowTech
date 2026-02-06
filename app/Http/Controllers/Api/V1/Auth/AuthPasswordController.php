@@ -7,61 +7,57 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\ValidationException;
+use Illuminate\Auth\Events\PasswordReset;
+use Illuminate\Support\Str;
 
 class AuthPasswordController extends Controller
 {
     use ApiResponse;
 
-    // POST /api/v1/auth/password/forgot
     public function forgot(Request $request)
     {
         $data = $request->validate([
-            'email' => ['required', 'email'],
+            'email' => ['required','email'],
         ]);
 
         $status = Password::sendResetLink($data);
 
-        // NOTE: biar aman dari email enumeration, kamu bisa selalu return ok.
-        if ($status !== Password::RESET_LINK_SENT) {
-            // versi strict:
-            throw ValidationException::withMessages([
-                'email' => [__($status)],
-            ]);
-        }
-
-        return $this->ok(['message' => 'If the email exists, a reset link has been sent.']);
+        // jangan bocorin apakah email ada / tidak
+        return $this->ok([
+            'status' => $status,
+            'message' => 'Jika email terdaftar, link reset password akan dikirim.',
+        ]);
     }
 
-    // POST /api/v1/auth/password/reset
     public function reset(Request $request)
     {
         $data = $request->validate([
-            'token' => ['required'],
-            'email' => ['required', 'email'],
-            'password' => ['required', 'min:8', 'confirmed'],
+            'email' => ['required','email'],
+            'token' => ['required','string'],
+            'password' => ['required','string','min:8','confirmed'],
         ]);
 
         $status = Password::reset(
             $data,
-            function ($user, $password) {
+            function ($user) use ($data) {
                 $user->forceFill([
-                    'password' => Hash::make($password),
+                    'password' => Hash::make($data['password']),
+                    'remember_token' => Str::random(60),
                 ])->save();
 
-                // revoke sanctum tokens (recommended)
-                if (method_exists($user, 'tokens')) {
-                    $user->tokens()->delete();
-                }
+                event(new PasswordReset($user));
             }
         );
 
         if ($status !== Password::PASSWORD_RESET) {
-            throw ValidationException::withMessages([
-                'email' => [__($status)],
+            return $this->fail('Reset password gagal', 422, [
+                'status' => $status,
             ]);
         }
 
-        return $this->ok(['message' => 'Password reset successful']);
+        return $this->ok([
+            'status' => $status,
+            'message' => 'Password berhasil direset. Silakan login kembali.',
+        ]);
     }
 }
