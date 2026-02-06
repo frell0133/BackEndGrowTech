@@ -31,5 +31,15 @@ class AdminUserSeeder extends Seeder
                 'role' => 'user',
             ]
         );
+        User::updateOrCreate(
+            ['email' => 'yashabima2@gmail.com'],
+            [
+                'name' => 'Bima',
+                'full_name' => 'Bima Yasha',
+                'address' => 'Bandung',
+                'password' => Hash::make('BimaYasha12345!'),
+                'role' => 'user',
+            ]
+        );
     }
 }
