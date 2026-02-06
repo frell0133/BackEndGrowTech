@@ -327,5 +327,15 @@ Route::prefix('v1')->group(function () {
     ]);
 });
 
+Route::get('/api/v1/_debug/env', function () {
+    return response()->json([
+        'FRONTEND_URL_env' => env('FRONTEND_URL'),
+        'app_env' => config('app.env'),
+        'mail_host' => config('mail.mailers.smtp.host'),
+        'mail_port' => config('mail.mailers.smtp.port'),
+    ]);
+});
+
+
 
 });

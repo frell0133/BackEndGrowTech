@@ -115,7 +115,7 @@
         */
 
         'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
-        
-        'frontend_url' => env('FRONTEND_URL'),
+
+        'frontend_url' => env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production.up.railway.app'),
 
     ];
