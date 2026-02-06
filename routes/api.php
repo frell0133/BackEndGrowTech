@@ -35,6 +35,7 @@ use App\Http\Controllers\Api\V1\Auth\AuthPasswordController;
 use App\Http\Controllers\Api\V1\Content\ContentController;
 
 use App\Http\Controllers\Api\SupabaseUploadController;
+use App\Http\Controllers\Api\V1\Dev\DevMailController;
 
 // TOPUP QRIS (Midtrans / Simulate)
 use App\Http\Controllers\Api\V1\User\UserTopupController;
@@ -103,8 +104,9 @@ Route::prefix('v1')->group(function () {
             'success' => true, 'data' => ['todo' => true], 'meta' => (object)[], 'error' => null
         ]));
 
-        Route::post('password/forgot', [AuthPasswordController::class, 'forgot']);
-        Route::post('password/reset', [AuthPasswordController::class, 'reset']);
+        Route::post('password/forgot', [AuthPasswordController::class, 'forgot'])->middleware('throttle:5,1');
+        Route::post('password/reset', [AuthPasswordController::class, 'reset'])->middleware('throttle:5,1');
+
     });
 
     // =========================
@@ -313,4 +315,6 @@ Route::prefix('v1')->group(function () {
             'app_env' => config('app.env'),
         ]);
     });
+
+    Route::post('dev/mail/test', [DevMailController::class, 'test']);
 });
