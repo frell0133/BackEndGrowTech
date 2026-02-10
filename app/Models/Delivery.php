@@ -8,14 +8,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class Delivery extends Model
 {
     protected $fillable = [
-        'order_id',
-        'license_id',
-        'revealed_at',
-        'reveal_count',
+        'order_id','license_id',
+        'delivery_mode','emailed_at',
+        'revealed_at','reveal_count',
     ];
 
     protected $casts = [
         'revealed_at' => 'datetime',
+        'emailed_at' => 'datetime',
     ];
 
     public function order(): BelongsTo

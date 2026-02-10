@@ -1,14 +1,17 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Http\Request;
 
+// Controllers (Auth)
 use App\Http\Controllers\Api\V1\Auth\AuthController;
 use App\Http\Controllers\Api\V1\Auth\SocialAuthController;
+use App\Http\Controllers\Api\V1\Auth\AuthPasswordController;
 
+// Controllers (Public)
 use App\Http\Controllers\Api\V1\User\ProductController;
+use App\Http\Controllers\Api\V1\Content\ContentController;
+
+// Controllers (User)
 use App\Http\Controllers\Api\V1\User\UserOrderController;
 use App\Http\Controllers\Api\V1\User\UserDeliveryController;
 use App\Http\Controllers\Api\V1\User\UserWalletController;
@@ -16,7 +19,13 @@ use App\Http\Controllers\Api\V1\User\UserReferralController;
 use App\Http\Controllers\Api\V1\User\UserWithdrawController;
 use App\Http\Controllers\Api\V1\User\UserVoucherController;
 use App\Http\Controllers\Api\V1\User\UserProfileController;
+use App\Http\Controllers\Api\V1\User\UserTopupController;
 
+// Controllers (Webhook/Simulate)
+use App\Http\Controllers\Api\V1\Webhook\MidtransWebhookController;
+use App\Http\Controllers\Api\V1\Simulate\SimulateTopupController;
+
+// Controllers (Admin)
 use App\Http\Controllers\Api\V1\Admin\AdminUserController;
 use App\Http\Controllers\Api\V1\Admin\AdminProductController;
 use App\Http\Controllers\Api\V1\Admin\AdminLicenseController;
@@ -34,16 +43,13 @@ use App\Http\Controllers\Api\V1\Admin\AdminFaqController;
 use App\Http\Controllers\Api\V1\Admin\AdminBannerController;
 use App\Http\Controllers\Api\V1\Admin\AdminSiteSettingController;
 use App\Http\Controllers\Api\V1\Admin\PaymentGatewayController;
-use App\Http\Controllers\Api\V1\Auth\AuthPasswordController;
-use App\Http\Controllers\Api\V1\Content\ContentController;
 
+// NEW (Admin Category/Subcategory)
+use App\Http\Controllers\Api\V1\Admin\AdminCategoryController;
+use App\Http\Controllers\Api\V1\Admin\AdminSubCategoryController;
+
+// Upload sign (Supabase)
 use App\Http\Controllers\Api\SupabaseUploadController;
-use App\Http\Controllers\Api\V1\Dev\DevMailController;
-
-// TOPUP QRIS (Midtrans / Simulate)
-use App\Http\Controllers\Api\V1\User\UserTopupController;
-use App\Http\Controllers\Api\V1\Webhook\MidtransWebhookController;
-use App\Http\Controllers\Api\V1\Simulate\SimulateTopupController;
 
 Route::prefix('v1')->group(function () {
 
@@ -65,7 +71,7 @@ Route::prefix('v1')->group(function () {
     ]));
 
     // =========================
-    // 1) AUTH & SESSION
+    // 1) AUTH
     // =========================
     Route::prefix('auth')->group(function () {
 
@@ -73,7 +79,7 @@ Route::prefix('v1')->group(function () {
         Route::post('register', [AuthController::class, 'register']);
         Route::post('login', [AuthController::class, 'login']);
 
-        // social login (batasi provider biar aman)
+        // social login
         Route::get('{provider}/redirect', [SocialAuthController::class, 'redirect'])
             ->whereIn('provider', ['google', 'discord']);
 
@@ -98,22 +104,12 @@ Route::prefix('v1')->group(function () {
             Route::patch('me/password', [UserProfileController::class, 'updatePassword']);
         });
 
-        // optional stubs
-        Route::post('verify-email/send', fn () => response()->json([
-            'success' => true, 'data' => ['todo' => true], 'meta' => (object)[], 'error' => null
-        ]));
-
-        Route::post('verify-email/confirm', fn () => response()->json([
-            'success' => true, 'data' => ['todo' => true], 'meta' => (object)[], 'error' => null
-        ]));
-
-
+        // password reset
         Route::post('password/forgot', [AuthPasswordController::class, 'forgot']);
         Route::post('password/reset', [AuthPasswordController::class, 'reset']);
-
+        // (opsional throttle)
         // Route::post('password/forgot', [AuthPasswordController::class, 'forgot'])->middleware('throttle:5,1');
         // Route::post('password/reset', [AuthPasswordController::class, 'reset'])->middleware('throttle:5,1');
-
     });
 
     // =========================
@@ -121,6 +117,8 @@ Route::prefix('v1')->group(function () {
     // =========================
     Route::get('products', [ProductController::class, 'index']);
     Route::get('products/{product}', [ProductController::class, 'show']);
+
+    // (opsional) availability stub
     Route::get('products/{product}/availability', fn () => response()->json([
         'success' => true,
         'data' => ['available' => null, 'todo' => true],
@@ -129,7 +127,33 @@ Route::prefix('v1')->group(function () {
     ]));
 
     // =========================
-    // 3) USER AREA (AUTH)
+    // 3) CONTENT (PUBLIC)
+    // =========================
+    Route::prefix('content')->group(function () {
+        Route::get('settings', [ContentController::class, 'settings']);
+        Route::get('banners', [ContentController::class, 'banners']);
+        Route::get('popup', [ContentController::class, 'popup']);
+        Route::get('pages/{slug}', [ContentController::class, 'page']);
+        Route::get('faqs', [ContentController::class, 'faqs']);
+    });
+
+    // =========================
+    // 4) WEBHOOKS (PUBLIC)
+    // =========================
+    Route::post('webhooks/payments/midtrans', [MidtransWebhookController::class, 'handle']);
+
+    Route::post('webhooks/payments/{gateway_code}', fn (string $gateway_code) => response()->json([
+        'success' => true,
+        'data' => ['received' => true, 'todo' => true, 'gateway' => $gateway_code],
+        'meta' => (object)[],
+        'error' => null,
+    ]))->where('gateway_code', '^(?!midtrans$).+');
+
+    // Simulate topup pay (public)
+    Route::post('topups/{orderId}/simulate-pay', [SimulateTopupController::class, 'pay']);
+
+    // =========================
+    // 5) USER AREA (AUTH)
     // =========================
     Route::middleware('auth:sanctum')->group(function () {
 
@@ -146,14 +170,16 @@ Route::prefix('v1')->group(function () {
         // Delivery (User)
         Route::get('orders/{id}/delivery', [UserDeliveryController::class, 'info']);
         Route::post('orders/{id}/delivery/reveal', [UserDeliveryController::class, 'reveal']);
+        Route::post('orders/{id}/delivery/close', [UserDeliveryController::class, 'close']); // ✅ NEW (one-time close => email)
         Route::post('orders/{id}/delivery/resend', [UserDeliveryController::class, 'resend']);
 
         // Wallet (User)
         Route::get('wallet/summary', [UserWalletController::class, 'summary']);
         Route::get('wallet/ledger', [UserWalletController::class, 'ledger']);
+
+        // TOPUP QRIS init
         Route::post('wallet/topups/init', [UserTopupController::class, 'init'])
             ->middleware('throttle:20,1');
-
 
         // Referral (User)
         Route::get('referral', [UserReferralController::class, 'dashboard']);
@@ -171,22 +197,21 @@ Route::prefix('v1')->group(function () {
         Route::post('upload/sign', [SupabaseUploadController::class, 'sign']);
     });
 
-        // =========================
-        // 4) WEBHOOKS (PUBLIC)  ✅ FIXED ORDER
-        // =========================
-        Route::post('webhooks/payments/midtrans', [MidtransWebhookController::class, 'handle']);
-        Route::post('webhooks/payments/{gateway_code}', fn (string $gateway_code) => response()->json([
-            'success' => true,
-            'data' => ['received' => true, 'todo' => true, 'gateway' => $gateway_code],
-            'meta' => (object)[],
-            'error' => null,
-        ]))->where('gateway_code', '^(?!midtrans$).+');
-        Route::post('topups/{orderId}/simulate-pay', [SimulateTopupController::class, 'pay']);
-
     // =========================
-    // 5) ADMIN AREA (AUTH + ROLE)
+    // 6) ADMIN AREA (AUTH + ROLE)
     // =========================
     Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(function () {
+
+        // ====== Categories / Subcategories ======
+        Route::get('categories', [AdminCategoryController::class, 'index']);
+        Route::post('categories', [AdminCategoryController::class, 'store']);
+        Route::patch('categories/{id}', [AdminCategoryController::class, 'update']);
+        Route::delete('categories/{id}', [AdminCategoryController::class, 'destroy']);
+
+        Route::get('subcategories', [AdminSubCategoryController::class, 'index']);
+        Route::post('subcategories', [AdminSubCategoryController::class, 'store']);
+        Route::patch('subcategories/{id}', [AdminSubCategoryController::class, 'update']);
+        Route::delete('subcategories/{id}', [AdminSubCategoryController::class, 'destroy']);
 
         // Users
         Route::get('users', [AdminUserController::class, 'index']);
@@ -200,6 +225,7 @@ Route::prefix('v1')->group(function () {
         Route::post('users/{id}/restore', [AdminUserController::class, 'restore']);
 
         // Products (Admin CRUD)
+        Route::get('products', [AdminProductController::class, 'index']);
         Route::post('products', [AdminProductController::class, 'store']);
         Route::patch('products/{id}', [AdminProductController::class, 'update']);
         Route::delete('products/{id}', [AdminProductController::class, 'destroy']);
@@ -301,18 +327,7 @@ Route::prefix('v1')->group(function () {
     });
 
     // =========================
-    // 6) CONTENT (PUBLIC)
-    // =========================
-    Route::prefix('content')->group(function () {
-        Route::get('settings', [ContentController::class, 'settings']);
-        Route::get('banners', [ContentController::class, 'banners']);
-        Route::get('popup', [ContentController::class, 'popup']);
-        Route::get('pages/{slug}', [ContentController::class, 'page']);
-        Route::get('faqs', [ContentController::class, 'faqs']);
-    });
-
-    // =========================
-    // 7) DEBUG
+    // 7) DEBUG (DEV ONLY)
     // =========================
     Route::get('_debug/db', function () {
         return response()->json([
@@ -323,23 +338,21 @@ Route::prefix('v1')->group(function () {
         ]);
     });
 
-    Route::get('/api/v1/_debug/frontend', function () {
-    return response()->json([
-        'FRONTEND_URL_env' => env('FRONTEND_URL'),
-        'frontend_config' => config('app.frontend_url') ?? null,
-        'app_env' => config('app.env'),
-    ]);
-});
+    Route::get('_debug/frontend', function () {
+        return response()->json([
+            'FRONTEND_URL_env' => env('FRONTEND_URL'),
+            'frontend_config' => config('app.frontend_url') ?? null,
+            'app_env' => config('app.env'),
+        ]);
+    });
 
-Route::get('/api/v1/_debug/env', function () {
-    return response()->json([
-        'FRONTEND_URL_env' => env('FRONTEND_URL'),
-        'app_env' => config('app.env'),
-        'mail_host' => config('mail.mailers.smtp.host'),
-        'mail_port' => config('mail.mailers.smtp.port'),
-    ]);
-});
-
-
+    Route::get('_debug/env', function () {
+        return response()->json([
+            'FRONTEND_URL_env' => env('FRONTEND_URL'),
+            'app_env' => config('app.env'),
+            'mail_host' => config('mail.mailers.smtp.host'),
+            'mail_port' => config('mail.mailers.smtp.port'),
+        ]);
+    });
 
 });

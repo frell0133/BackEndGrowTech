@@ -56,4 +56,9 @@ class Order extends Model
             ->withPivot(['discount_amount'])
             ->withTimestamps();
     }
+    
+    public function deliveries(): HasMany
+    {
+        return $this->hasMany(\App\Models\Delivery::class);
+    }
 }
