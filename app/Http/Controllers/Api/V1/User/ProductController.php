@@ -23,7 +23,6 @@ class ProductController extends Controller
         $products = Product::query()
             ->with([
                 'category:id,name,slug',
-                // ✅ include logo subkategori
                 'subcategory:id,category_id,name,slug,provider,image_url,image_path'
             ])
             ->when($categoryId, fn ($qr) => $qr->where('category_id', $categoryId))
@@ -40,7 +39,6 @@ class ProductController extends Controller
 
     public function show(Product $product)
     {
-        // ✅ include logo subkategori juga
         $product->load([
             'category:id,name,slug',
             'subcategory:id,category_id,name,slug,provider,image_url,image_path'

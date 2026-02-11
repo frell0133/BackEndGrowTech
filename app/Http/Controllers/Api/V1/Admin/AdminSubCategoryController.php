@@ -4,105 +4,96 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\SubCategory;
-use Illuminate\Http\Request;
 use App\Services\SupabaseStorageService;
-
+use App\Support\ApiResponse;
+use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class AdminSubCategoryController extends Controller
 {
-    public function index(Request $request)
-    {
-        $q = trim((string) $request->query('q', ''));
+    use ApiResponse;
 
-        $data = SubCategory::query()
-            ->with('category:id,name,slug')
-            ->when($q !== '', function ($qq) use ($q) {
-                $qq->where('name', 'ilike', "%{$q}%")
-                   ->orWhere('slug', 'ilike', "%{$q}%");
-            })
+    /**
+     * GET /api/v1/admin/subcategories
+     */
+    public function index()
+    {
+        $data = SubCategory::with('category')
             ->orderBy('sort_order')
-            ->orderBy('id', 'desc')
+            ->latest('id')
             ->get();
 
-        return response()->json([
-            'success' => true,
-            'data' => $data,
-            'meta' => (object)[],
-            'error' => null,
-        ]);
+        return $this->ok($data);
     }
 
+    /**
+     * POST /api/v1/admin/subcategories
+     */
     public function store(Request $request)
     {
-        $v = $request->validate([
-            'category_id' => ['required','integer'],
-            'name'        => ['required','string','max:120'],
-            'slug'        => ['required','string','max:160'],
-            'provider'    => ['nullable','string','max:120'],
-            'image_path'  => ['nullable','string','max:255'],
-            'image_url'   => ['nullable','string'],
-            'is_active'   => ['nullable','boolean'],
-            'sort_order'  => ['nullable','integer'],
+        $validated = $request->validate([
+            'category_id' => ['required','integer','exists:categories,id'],
+            'name'        => ['required','string','max:255'],
+            'slug'        => [
+                'required','string','max:255',
+                Rule::unique('subcategories')->where(fn($q) => $q->where('category_id', $request->category_id)),
+            ],
+            'provider'    => ['nullable','string','max:255'],
+            'image_url'   => ['nullable','string','max:2000'],
+            'image_path'  => ['nullable','string','max:2000'],
+            'is_active'   => ['boolean'],
+            'sort_order'  => ['required','integer','min:1'],
         ]);
 
-        $sub = SubCategory::create([
-            'category_id' => $v['category_id'],
-            'name'        => $v['name'],
-            'slug'        => $v['slug'],
-            'provider'    => $v['provider'] ?? null,
-            'image_path'  => $v['image_path'] ?? null,
-            'image_url'   => $v['image_url'] ?? null,
-            'is_active'   => $v['is_active'] ?? true,
-            'sort_order'  => $v['sort_order'] ?? 1,
-        ]);
+        $sub = SubCategory::create($validated);
 
-        return response()->json([
-            'success' => true,
-            'data' => $sub->load('category:id,name,slug'),
-            'meta' => (object)[],
-            'error' => null,
-        ], 201);
+        return $this->ok($sub->load('category'), 201);
     }
 
-    public function update(Request $request, int $id)
+    /**
+     * PATCH /api/v1/admin/subcategories/{id}
+     */
+    public function update(Request $request, $id)
     {
         $sub = SubCategory::findOrFail($id);
 
-        $v = $request->validate([
-            'category_id' => ['sometimes','integer'],
-            'name'        => ['sometimes','string','max:120'],
-            'slug'        => ['sometimes','string','max:160'],
-            'provider'    => ['nullable','string','max:120'],
-            'image_path'  => ['nullable','string','max:255'],
-            'image_url'   => ['nullable','string'],
-            'is_active'   => ['nullable','boolean'],
-            'sort_order'  => ['nullable','integer'],
+        $validated = $request->validate([
+            'category_id' => ['sometimes','integer','exists:categories,id'],
+            'name'        => ['sometimes','string','max:255'],
+            'slug'        => [
+                'sometimes','string','max:255',
+                Rule::unique('subcategories')->ignore($sub->id)->where(function ($q) use ($request, $sub) {
+                    $catId = $request->input('category_id', $sub->category_id);
+                    return $q->where('category_id', $catId);
+                }),
+            ],
+            'provider'    => ['nullable','string','max:255'],
+            'image_url'   => ['nullable','string','max:2000'],
+            'image_path'  => ['nullable','string','max:2000'],
+            'is_active'   => ['boolean'],
+            'sort_order'  => ['sometimes','integer','min:1'],
         ]);
 
-        $sub->fill($v);
-        $sub->save();
+        $sub->update($validated);
 
-        return response()->json([
-            'success' => true,
-            'data' => $sub->load('category:id,name,slug'),
-            'meta' => (object)[],
-            'error' => null,
-        ]);
+        return $this->ok($sub->load('category'));
     }
 
-    public function destroy(int $id)
+    /**
+     * DELETE /api/v1/admin/subcategories/{id}
+     */
+    public function destroy($id)
     {
         $sub = SubCategory::findOrFail($id);
         $sub->delete();
 
-        return response()->json([
-            'success' => true,
-            'data' => ['deleted' => true],
-            'meta' => (object)[],
-            'error' => null,
-        ]);
+        return $this->ok(['deleted' => true]);
     }
-    
+
+    /**
+     * POST /api/v1/admin/subcategories/logo/sign
+     * body: { "mime": "image/jpeg" }
+     */
     public function signLogoUpload(Request $request, SupabaseStorageService $supabase)
     {
         $data = $request->validate([
@@ -112,17 +103,14 @@ class AdminSubCategoryController extends Controller
         $bucket  = (string) config('services.supabase.bucket_subcategories', 'subcategories');
         $expires = (int) config('services.supabase.sign_expires', 60);
 
-        // path untuk file logo
-        $path = $supabase->buildSubCategoryLogoPath($data['mime']);
-
-        // signed upload url (untuk PUT dari FE)
+        $path   = $supabase->buildSubCategoryLogoPath($data['mime']);
         $signed = $supabase->createSignedUploadUrl($bucket, $path, $expires);
 
         return $this->ok([
-            'path'       => $signed['path'],      // path object di bucket
-            'signed_url' => $signed['signedUrl'], // URL PUT
-            'public_url' => $supabase->publicObjectUrl($bucket, $signed['path']),
+            // ✅ FE enak
+            'path'      => $signed['path'],
+            'signedUrl' => $signed['signedUrl'],
+            'publicUrl' => $supabase->publicObjectUrl($bucket, $signed['path']),
         ]);
     }
-
 }

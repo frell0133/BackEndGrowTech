@@ -21,13 +21,43 @@ class SupabaseStorageService
     }
 
     /**
+     * Helper: pastikan mime image dan mapping ext yang aman.
+     */
+    private function assertImageMime(string $mime): void
+    {
+        if (!str_starts_with($mime, 'image/')) {
+            throw new \InvalidArgumentException('Only image mime types are allowed');
+        }
+    }
+
+    /**
+     * Helper: convert mime -> ext yang dipakai untuk file.
+     */
+    private function imageExtFromMime(string $mime, string $default = 'jpg'): string
+    {
+        $this->assertImageMime($mime);
+
+        // Normalisasi mime umum
+        return match ($mime) {
+            'image/jpeg', 'image/jpg' => 'jpg',
+            'image/png' => 'png',
+            'image/webp' => 'webp',
+            default => $default,
+        };
+    }
+
+    /**
      * Create signed upload URL for Supabase Storage.
-     * Supabase returns: {"url":"/object/upload/sign/<bucket>/<path>?token=...","token":"..."}
-     * We convert it into a FULL URL: https://<project>.supabase.co/storage/v1 + url
+     * Supabase bisa return:
+     *  - {"url":"/object/upload/sign/<bucket>/<path>?token=...","token":"..."}
+     *  - atau {"signedUrl":"...","path":"..."} (tergantung versi)
+     *
+     * Kita convert jadi FULL URL siap PUT.
      */
     public function createSignedUploadUrl(string $bucket, string $path, int $expiresInSeconds): array
     {
-        $endpoint = "{$this->url}/storage/v1/object/upload/sign/{$bucket}/" . ltrim($path, '/');
+        $path = ltrim($path, '/');
+        $endpoint = "{$this->url}/storage/v1/object/upload/sign/{$bucket}/{$path}";
 
         $res = Http::timeout(15)->withHeaders([
             'Authorization' => 'Bearer '.$this->key,
@@ -39,7 +69,6 @@ class SupabaseStorageService
 
         $json = $res->json();
 
-        // LOG (biar gampang debug)
         \Log::info('supabase_sign_upload_response', [
             'endpoint' => $endpoint,
             'status' => $res->status(),
@@ -51,33 +80,35 @@ class SupabaseStorageService
             throw new \RuntimeException("Supabase sign upload failed: {$res->status()} {$res->body()}");
         }
 
-        // Supabase sign upload balikin "url" (relative)
-        $relativeUrl = $json['url'] ?? null;
-        if (!$relativeUrl) {
-            throw new \RuntimeException('Supabase response missing url: '.$res->body());
+        // Handle berbagai format response
+        $signed = $json['signedUrl'] ?? $json['signedURL'] ?? null;
+
+        if (!$signed) {
+            // Supabase sign upload seringnya balikin "url" relatif
+            $relativeUrl = $json['url'] ?? null;
+            if (!$relativeUrl) {
+                throw new \RuntimeException('Supabase response missing signed upload url: '.$res->body());
+            }
+
+            $signed = str_starts_with($relativeUrl, 'http')
+                ? $relativeUrl
+                : $this->url . '/storage/v1' . $relativeUrl;
         }
 
-        // Jadikan FULL URL yang bisa langsung dipakai PUT
-        // relativeUrl biasanya mulai dengan /object/...
-        $signedUrl = str_starts_with($relativeUrl, 'http')
-            ? $relativeUrl
-            : $this->url . '/storage/v1' . $relativeUrl;
-
         return [
-            'signedUrl' => $signedUrl,
+            'signedUrl' => $signed,
             'path' => $path,
             'token' => $json['token'] ?? null,
         ];
     }
 
     /**
-     * Create signed download URL (kalau bucket private dan kamu mau generate link download sementara).
-     * Biasanya Supabase balikin {"signedURL":"..."} atau {"signedUrl":"..."} tergantung versi,
-     * tapi bisa juga balikin "url". Kita handle semua.
+     * Create signed download URL (kalau bucket private).
      */
     public function createSignedDownloadUrl(string $bucket, string $path, int $expiresInSeconds): string
     {
-        $endpoint = "{$this->url}/storage/v1/object/sign/{$bucket}/" . ltrim($path, '/');
+        $path = ltrim($path, '/');
+        $endpoint = "{$this->url}/storage/v1/object/sign/{$bucket}/{$path}";
 
         $res = Http::timeout(15)->withHeaders([
             'Authorization' => 'Bearer '.$this->key,
@@ -100,13 +131,11 @@ class SupabaseStorageService
             throw new \RuntimeException("Supabase sign download failed: {$res->status()} {$res->body()}");
         }
 
-        // Beberapa versi balikin signedURL/signedUrl, beberapa balikin url
         $signed = $json['signedURL'] ?? $json['signedUrl'] ?? $json['url'] ?? null;
         if (!$signed) {
             throw new \RuntimeException('Supabase response missing signed download url: '.$res->body());
         }
 
-        // Kalau relatif, jadikan full
         if (!str_starts_with($signed, 'http')) {
             $signed = $this->url . '/storage/v1' . $signed;
         }
@@ -116,7 +145,6 @@ class SupabaseStorageService
 
     /**
      * Delete objects by paths.
-     * Endpoint: POST /storage/v1/object/{bucket} with body {"prefixes":[...]}
      */
     public function deleteObjects(string $bucket, array $paths): void
     {
@@ -127,7 +155,7 @@ class SupabaseStorageService
             'apikey' => $this->key,
             'Content-Type' => 'application/json',
         ])->post($endpoint, [
-            'prefixes' => array_values(array_filter($paths)),
+            'prefixes' => array_values(array_filter(array_map(fn($p) => ltrim((string)$p, '/'), $paths))),
         ]);
 
         \Log::info('supabase_delete_response', [
@@ -142,35 +170,7 @@ class SupabaseStorageService
     }
 
     /**
-     * Build path for banner images.
-     */
-    public function buildBannerPath(int|string $adminId, string $mime): string
-    {
-        if (!str_starts_with($mime, 'image/')) {
-            throw new \InvalidArgumentException('Only image mime types are allowed');
-        }
-
-        $ext = explode('/', $mime)[1] ?? 'jpg';
-        $file = now()->timestamp . '-' . Str::uuid() . '.' . $ext;
-
-        return "admin/{$adminId}/banners/{$file}";
-    }
-    /**
-     * Build path for icon images.
-     */ 
-    public function buildSettingIconPath(int|string $adminId, string $mime): string
-    {
-        if (!str_starts_with($mime, 'image/')) {
-            throw new \InvalidArgumentException('Only image mime types are allowed');
-        }
-
-        $ext = explode('/', $mime)[1] ?? 'png';
-        $file = now()->timestamp . '-' . \Illuminate\Support\Str::uuid() . '.' . $ext;
-
-        return "admin/{$adminId}/settings/icons/{$file}";
-    }   
-    /**
-     * Build path for icon images.
+     * Public URL object.
      */
     public function publicObjectUrl(string $bucket, string $path): string
     {
@@ -178,29 +178,76 @@ class SupabaseStorageService
         return $this->url . "/storage/v1/object/public/{$bucket}/{$path}";
     }
 
+    /**
+     * Build path for banner images.
+     */
+    public function buildBannerPath(int|string $adminId, string $mime): string
+    {
+        $ext = $this->imageExtFromMime($mime, 'jpg');
+        $file = now()->timestamp . '-' . Str::uuid() . '.' . $ext;
+
+        return "admin/{$adminId}/banners/{$file}";
+    }
+
+    /**
+     * Build path for setting icon images.
+     */
+    public function buildSettingIconPath(int|string $adminId, string $mime): string
+    {
+        $ext = $this->imageExtFromMime($mime, 'png');
+        $file = now()->timestamp . '-' . Str::uuid() . '.' . $ext;
+
+        return "admin/{$adminId}/settings/icons/{$file}";
+    }
+
+    /**
+     * Build path for user avatar images.
+     */
     public function buildUserAvatarPath(int|string $userId, string $mime): string
     {
-        if (!str_starts_with($mime, 'image/')) {
-            throw new \InvalidArgumentException('Only image mime types are allowed');
-        }
-
-        $ext = explode('/', $mime)[1] ?? 'jpg';
-        $file = now()->timestamp . '-' . \Illuminate\Support\Str::uuid() . '.' . $ext;
+        $ext = $this->imageExtFromMime($mime, 'jpg');
+        $file = now()->timestamp . '-' . Str::uuid() . '.' . $ext;
 
         return "users/{$userId}/avatar/{$file}";
     }
 
+    // =========================================================
+    // ✅ TAMBAHAN BARU: SUBCATEGORIES (yang kamu minta)
+    // =========================================================
+
+    /**
+     * Build path for subcategory logo.
+     * Rapi: subcategories/logos/<timestamp>-<random>.<ext>
+     */
     public function buildSubCategoryLogoPath(string $mime): string
     {
-        $ext = match (true) {
-            str_contains($mime, 'png') => 'png',
-            str_contains($mime, 'webp') => 'webp',
-            str_contains($mime, 'jpg'),
-            str_contains($mime, 'jpeg') => 'jpg',
-            default => 'bin',
-        };
+        $ext = $this->imageExtFromMime($mime, 'jpg');
+        $file = now()->timestamp . '-' . Str::upper(Str::random(8)) . '.' . $ext;
 
-        return 'subcategories/' . uniqid('subcat_', true) . '.' . $ext;
+        return "subcategories/logos/{$file}";
     }
 
+    /**
+     * Helper lengkap buat flow subcategory:
+     * - tentukan bucket dari config (fallback 'subcategories')
+     * - generate path
+     * - sign upload
+     * - return signedUrl + publicUrl
+     *
+     * Balikan sudah cocok untuk FE:
+     * { path, signedUrl, publicUrl }
+     */
+    public function signSubCategoryLogoUpload(string $mime, int $expiresInSeconds = 60): array
+    {
+        $bucket = (string) config('services.supabase.bucket_subcategories', 'subcategories');
+        $path = $this->buildSubCategoryLogoPath($mime);
+
+        $signed = $this->createSignedUploadUrl($bucket, $path, $expiresInSeconds);
+
+        return [
+            'path' => $signed['path'],
+            'signedUrl' => $signed['signedUrl'],
+            'publicUrl' => $this->publicObjectUrl($bucket, $signed['path']),
+        ];
+    }
 }

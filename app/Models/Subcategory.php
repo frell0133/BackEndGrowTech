@@ -9,15 +9,16 @@ class SubCategory extends Model
     protected $table = 'subcategories';
 
     protected $fillable = [
-        'category_id',
-        'name',
-        'slug',
-        'provider',
-        'image_path',
-        'image_url',
-        'is_active',
-        'sort_order',
+    'category_id',
+    'name',
+    'slug',
+    'provider',
+    'image_url',
+    'image_path',
+    'is_active',
+    'sort_order',
     ];
+
 
     public function category()
     {
