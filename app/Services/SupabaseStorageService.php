@@ -190,4 +190,17 @@ class SupabaseStorageService
         return "users/{$userId}/avatar/{$file}";
     }
 
+    public function buildSubCategoryLogoPath(string $mime): string
+    {
+        $ext = match (true) {
+            str_contains($mime, 'png') => 'png',
+            str_contains($mime, 'webp') => 'webp',
+            str_contains($mime, 'jpg'),
+            str_contains($mime, 'jpeg') => 'jpg',
+            default => 'bin',
+        };
+
+        return 'subcategories/' . uniqid('subcat_', true) . '.' . $ext;
+    }
+
 }

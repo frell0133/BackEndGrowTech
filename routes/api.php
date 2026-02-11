@@ -212,7 +212,8 @@ Route::prefix('v1')->group(function () {
         Route::post('subcategories', [AdminSubCategoryController::class, 'store']);
         Route::patch('subcategories/{id}', [AdminSubCategoryController::class, 'update']);
         Route::delete('subcategories/{id}', [AdminSubCategoryController::class, 'destroy']);
-
+        Route::post('subcategories/logo/sign', [AdminSubCategoryController::class, 'signLogoUpload']);
+        
         // Users
         Route::get('users', [AdminUserController::class, 'index']);
         Route::get('users/{id}', [AdminUserController::class, 'show']);

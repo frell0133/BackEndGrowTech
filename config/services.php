@@ -45,6 +45,7 @@ return [
         'service_role_key' => env('SUPABASE_SERVICE_ROLE_KEY'),
         'bucket_banners' => env('SUPABASE_BUCKET_BANNERS', 'banners'),
         'bucket_photos' => env('SUPABASE_BUCKET_PHOTOS', 'photos'),
+        'bucket_subcategories' => env('SUPABASE_BUCKET_SUBCATEGORIES', 'subcategories'),
         'sign_expires' => (int) env('SUPABASE_SIGN_EXPIRES', 60),
         'download_expires' => (int) env('SUPABASE_DOWNLOAD_EXPIRES', 600),
         'public_banners_base' => env('SUPABASE_PUBLIC_BANNERS_BASE'),

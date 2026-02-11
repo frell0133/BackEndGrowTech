@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api\V1\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\SubCategory;
 use Illuminate\Http\Request;
+use App\Services\SupabaseStorageService;
+
 
 class AdminSubCategoryController extends Controller
 {
@@ -100,4 +102,27 @@ class AdminSubCategoryController extends Controller
             'error' => null,
         ]);
     }
+    
+    public function signLogoUpload(Request $request, SupabaseStorageService $supabase)
+    {
+        $data = $request->validate([
+            'mime' => ['required','string','starts_with:image/'],
+        ]);
+
+        $bucket  = (string) config('services.supabase.bucket_subcategories', 'subcategories');
+        $expires = (int) config('services.supabase.sign_expires', 60);
+
+        // path untuk file logo
+        $path = $supabase->buildSubCategoryLogoPath($data['mime']);
+
+        // signed upload url (untuk PUT dari FE)
+        $signed = $supabase->createSignedUploadUrl($bucket, $path, $expires);
+
+        return $this->ok([
+            'path'       => $signed['path'],      // path object di bucket
+            'signed_url' => $signed['signedUrl'], // URL PUT
+            'public_url' => $supabase->publicObjectUrl($bucket, $signed['path']),
+        ]);
+    }
+
 }
