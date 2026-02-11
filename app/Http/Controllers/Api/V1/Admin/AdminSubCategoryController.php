@@ -4,8 +4,14 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use App\Http\Controllers\Controller;
+use App\Models\SubCategory;
+use App\Services\SupabaseStorageService;
+use App\Support\ApiResponse;
+use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
-class SupabaseStorageService
+class AdminSubCategoryController extends Controller
 {
     private string $url;
     private string $key;
