@@ -1,9 +1,7 @@
 <?php
 
-namespace App\Services;
+namespace App\Http\Controllers\Api\V1\Admin;
 
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Str;
 use App\Http\Controllers\Controller;
 use App\Models\SubCategory;
 use App\Services\SupabaseStorageService;
@@ -13,109 +11,93 @@ use Illuminate\Validation\Rule;
 
 class AdminSubCategoryController extends Controller
 {
-    private string $url;
-    private string $key;
+    use ApiResponse;
 
-    public function __construct()
+    public function index()
     {
-        $this->url = rtrim((string) config('services.supabase.url'), '/');
-        $this->key = (string) config('services.supabase.service_role_key');
+        $data = SubCategory::with('category')
+            ->orderBy('sort_order')
+            ->latest('id')
+            ->get();
 
-        if (!$this->url || !$this->key) {
-            throw new \RuntimeException('Supabase config missing: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY');
-        }
+        return $this->ok($data);
     }
 
-    private function assertImageMime(string $mime): void
+    public function store(Request $request)
     {
-        if (!str_starts_with($mime, 'image/')) {
-            throw new \InvalidArgumentException('Only image mime types are allowed');
-        }
+        $validated = $request->validate([
+            'category_id' => ['required','integer','exists:categories,id'],
+            'name'        => ['required','string','max:255'],
+            'slug'        => [
+                'required','string','max:255',
+                Rule::unique('subcategories')->where(fn($q) => $q->where('category_id', $request->category_id)),
+            ],
+            'provider'    => ['nullable','string','max:255'],
+            'image_url'   => ['nullable','string','max:2000'],
+            'image_path'  => ['nullable','string','max:2000'],
+            'is_active'   => ['boolean'],
+            'sort_order'  => ['required','integer','min:1'],
+        ]);
+
+        $sub = SubCategory::create($validated);
+
+        return $this->ok($sub->load('category'), 201);
     }
 
-    private function imageExtFromMime(string $mime, string $default = 'jpg'): string
+    public function update(Request $request, $id)
     {
-        $this->assertImageMime($mime);
+        $sub = SubCategory::findOrFail($id);
 
-        return match ($mime) {
-            'image/jpeg', 'image/jpg' => 'jpg',
-            'image/png' => 'png',
-            'image/webp' => 'webp',
-            default => $default,
-        };
+        $validated = $request->validate([
+            'category_id' => ['sometimes','integer','exists:categories,id'],
+            'name'        => ['sometimes','string','max:255'],
+            'slug'        => [
+                'sometimes','string','max:255',
+                Rule::unique('subcategories')->ignore($sub->id)->where(function ($q) use ($request, $sub) {
+                    $catId = $request->input('category_id', $sub->category_id);
+                    return $q->where('category_id', $catId);
+                }),
+            ],
+            'provider'    => ['nullable','string','max:255'],
+            'image_url'   => ['nullable','string','max:2000'],
+            'image_path'  => ['nullable','string','max:2000'],
+            'is_active'   => ['boolean'],
+            'sort_order'  => ['sometimes','integer','min:1'],
+        ]);
+
+        $sub->update($validated);
+
+        return $this->ok($sub->load('category'));
+    }
+
+    public function destroy($id)
+    {
+        $sub = SubCategory::findOrFail($id);
+        $sub->delete();
+
+        return $this->ok(['deleted' => true]);
     }
 
     /**
-     * Create signed upload URL for Supabase Storage.
-     * Handle response bentuk:
-     * - {"url":"/object/upload/sign/<bucket>/<path>?token=...","token":"..."}
-     * - atau {"signedUrl":"...","path":"..."}
+     * POST /api/v1/admin/subcategories/logo/sign
+     * body: { "mime": "image/jpeg" }
      */
-    public function createSignedUploadUrl(string $bucket, string $path, int $expiresInSeconds): array
+    public function signLogoUpload(Request $request, SupabaseStorageService $supabase)
     {
-        $path = ltrim($path, '/');
-        $endpoint = "{$this->url}/storage/v1/object/upload/sign/{$bucket}/{$path}";
-
-        $res = Http::timeout(15)->withHeaders([
-            'Authorization' => 'Bearer '.$this->key,
-            'apikey' => $this->key,
-            'Content-Type' => 'application/json',
-        ])->post($endpoint, [
-            'expiresIn' => $expiresInSeconds,
+        $data = $request->validate([
+            'mime' => ['required','string','starts_with:image/'],
         ]);
 
-        $json = $res->json();
+        $bucket  = (string) config('services.supabase.bucket_subcategories', 'subcategories');
+        $expires = (int) config('services.supabase.sign_expires', 60);
 
-        \Log::info('supabase_sign_upload_response', [
-            'endpoint' => $endpoint,
-            'status' => $res->status(),
-            'body' => $res->body(),
-            'json' => $json,
+        $path   = $supabase->buildSubCategoryLogoPath($data['mime']);
+        $signed = $supabase->createSignedUploadUrl($bucket, $path, $expires);
+
+        return $this->ok([
+            'path'      => $signed['path'],
+            'signedUrl' => $signed['signedUrl'],
+            'publicUrl' => $supabase->publicObjectUrl($bucket, $signed['path']),
         ]);
-
-        if (!$res->successful()) {
-            throw new \RuntimeException("Supabase sign upload failed: {$res->status()} {$res->body()}");
-        }
-
-        // Versi baru bisa kasih signedUrl langsung
-        $signed = $json['signedUrl'] ?? $json['signedURL'] ?? null;
-
-        if (!$signed) {
-            // Versi lama sering kasih "url" relatif
-            $relativeUrl = $json['url'] ?? null;
-            if (!$relativeUrl) {
-                throw new \RuntimeException('Supabase response missing url/signedUrl: '.$res->body());
-            }
-
-            $signed = str_starts_with($relativeUrl, 'http')
-                ? $relativeUrl
-                : $this->url . '/storage/v1' . $relativeUrl;
-        }
-
-        return [
-            'signedUrl' => $signed,
-            'path' => $path,
-            'token' => $json['token'] ?? null,
-        ];
     }
-
-    public function publicObjectUrl(string $bucket, string $path): string
-    {
-        $path = ltrim($path, '/');
-        return $this->url . "/storage/v1/object/public/{$bucket}/{$path}";
-    }
-
-    /**
-     * Build path logo subcategory yang rapi & aman.
-     * hasil: subcategories/logos/<timestamp>-<random>.<ext>
-     */
-    public function buildSubCategoryLogoPath(string $mime): string
-    {
-        $ext  = $this->imageExtFromMime($mime, 'jpg');
-        $name = now()->timestamp . '-' . Str::upper(Str::random(8)) . '.' . $ext;
-
-        return "subcategories/logos/{$name}";
-    }
-
-    // (fungsi lain kamu seperti buildBannerPath, buildUserAvatarPath, deleteObjects, dll boleh tetap)
 }
