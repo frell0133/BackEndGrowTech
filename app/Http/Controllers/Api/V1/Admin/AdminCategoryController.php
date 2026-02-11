@@ -29,13 +29,23 @@ class AdminCategoryController extends Controller
     {
         $v = $request->validate([
             'name' => ['required','string','max:120'],
-            'slug' => ['nullable','string','max:120','unique:categories,slug'],
+            'slug' => ['nullable','string','max:120'],
             'redirect_link' => ['nullable','string','max:500'],
             'is_active' => ['nullable','boolean'],
             'sort_order' => ['nullable','integer'],
         ]);
 
-        $v['slug'] = $v['slug'] ?? Str::slug($v['name']);
+        $baseSlug = $v['slug'] ? Str::slug($v['slug']) : Str::slug($v['name']);
+        $slug = $baseSlug;
+
+        // bikin slug unik kalau sudah ada
+        $i = 2;
+        while (Category::where('slug', $slug)->exists()) {
+            $slug = $baseSlug . '-' . $i;
+            $i++;
+        }
+
+        $v['slug'] = $slug;
         $v['is_active'] = $v['is_active'] ?? true;
         $v['sort_order'] = $v['sort_order'] ?? 0;
 
