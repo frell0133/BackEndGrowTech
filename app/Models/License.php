@@ -2,26 +2,29 @@
 
 namespace App\Models;
 
-use App\Enums\LicenseStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class License extends Model
 {
     protected $fillable = [
         'product_id',
         'license_key',
-        'metadata',
-        'file_path',
+        'data_other',
+        'note',
+        'fingerprint',
         'status',
-        'used_at',
+        'taken_by',
+        'taken_at',
+        'reserved_order_id',
+        'reserved_at',
+        'delivered_at',
     ];
 
     protected $casts = [
-        'metadata' => 'array',
-        'used_at' => 'datetime',
-        'status' => LicenseStatus::class,
+        'taken_at' => 'datetime',
+        'reserved_at' => 'datetime',
+        'delivered_at' => 'datetime',
     ];
 
     public function product(): BelongsTo
@@ -29,8 +32,8 @@ class License extends Model
         return $this->belongsTo(Product::class);
     }
 
-    public function delivery(): HasOne
+    public function taker(): BelongsTo
     {
-        return $this->hasOne(Delivery::class);
+        return $this->belongsTo(User::class, 'taken_by');
     }
 }

@@ -107,9 +107,6 @@ Route::prefix('v1')->group(function () {
         // password reset
         Route::post('password/forgot', [AuthPasswordController::class, 'forgot']);
         Route::post('password/reset', [AuthPasswordController::class, 'reset']);
-        // (opsional throttle)
-        // Route::post('password/forgot', [AuthPasswordController::class, 'forgot'])->middleware('throttle:5,1');
-        // Route::post('password/reset', [AuthPasswordController::class, 'reset'])->middleware('throttle:5,1');
     });
 
     // =========================
@@ -213,7 +210,7 @@ Route::prefix('v1')->group(function () {
         Route::patch('subcategories/{id}', [AdminSubCategoryController::class, 'update']);
         Route::delete('subcategories/{id}', [AdminSubCategoryController::class, 'destroy']);
         Route::post('subcategories/logo/sign', [AdminSubCategoryController::class, 'signLogoUpload']);
-        
+
         // Users
         Route::get('users', [AdminUserController::class, 'index']);
         Route::get('users/{id}', [AdminUserController::class, 'show']);
@@ -232,13 +229,17 @@ Route::prefix('v1')->group(function () {
         Route::delete('products/{id}', [AdminProductController::class, 'destroy']);
         Route::post('products/{id}/publish', [AdminProductController::class, 'publish']);
 
-        // Licenses / Inventory
+        // =========================
+        // Licenses / Inventory (Stock)
+        // =========================
         Route::get('products/{id}/licenses', [AdminLicenseController::class, 'index']);
         Route::get('products/{id}/licenses/summary', [AdminLicenseController::class, 'summary']);
         Route::post('products/{id}/licenses', [AdminLicenseController::class, 'store']);
         Route::post('products/{id}/licenses/upload', [AdminLicenseController::class, 'upload']);
+
         Route::post('licenses/check-duplicates', [AdminLicenseController::class, 'checkDuplicates']);
         Route::post('products/{id}/take-stock', [AdminLicenseController::class, 'takeStock']);
+
         Route::get('stock/proofs', [AdminLicenseController::class, 'proofList']);
         Route::get('stock/proofs/{proof_id}', [AdminLicenseController::class, 'proofDownload']);
 
