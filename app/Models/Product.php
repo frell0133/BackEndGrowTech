@@ -33,14 +33,15 @@ class Product extends Model
         return $this->hasMany(Order::class);
     }
 
-        public function category(): BelongsTo
+    public function subcategory()
     {
-        return $this->belongsTo(Category::class);
+        return $this->belongsTo(\App\Models\SubCategory::class, 'subcategory_id');
     }
 
-    public function subcategory(): BelongsTo
+    public function category()
     {
-        return $this->belongsTo(Subcategory::class, 'subcategory_id');
+        return $this->belongsTo(\App\Models\Category::class, 'category_id');
     }
+
     
 }

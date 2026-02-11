@@ -21,11 +21,17 @@ class AdminProductController extends Controller
         $data = Product::query()
             ->with([
                 'category:id,name,slug',
-                'subcategory:id,category_id,name,slug,provider'
+                // ✅ include logo subkategori
+                'subcategory:id,category_id,name,slug,provider,image_url,image_path'
             ])
             ->when($categoryId, fn($qq) => $qq->where('category_id', $categoryId))
             ->when($subcategoryId, fn($qq) => $qq->where('subcategory_id', $subcategoryId))
-            ->when($q, fn($qq) => $qq->where('name','ilike',"%{$q}%")->orWhere('slug','ilike',"%{$q}%"))
+            ->when($q, function ($qq) use ($q) {
+                $qq->where(function ($w) use ($q) {
+                    $w->where('name','ilike',"%{$q}%")
+                      ->orWhere('slug','ilike',"%{$q}%");
+                });
+            })
             ->orderBy('id','desc')
             ->get();
 
@@ -52,7 +58,12 @@ class AdminProductController extends Controller
         $v['is_published'] = $v['is_published'] ?? false;
 
         $p = Product::create($v);
-        return $this->ok($p->load('category:id,name,slug','subcategory:id,name,slug,provider'));
+
+        // ✅ include logo subkategori saat return
+        return $this->ok($p->load(
+            'category:id,name,slug',
+            'subcategory:id,category_id,name,slug,provider,image_url,image_path'
+        ));
     }
 
     public function update(Request $request, $id)
@@ -73,8 +84,18 @@ class AdminProductController extends Controller
             'is_published' => ['sometimes','boolean'],
         ]);
 
+        // optional: auto slug kalau name diubah tapi slug tidak dikirim
+        if (array_key_exists('name', $v) && !array_key_exists('slug', $v)) {
+            $v['slug'] = Str::slug($v['name']);
+        }
+
         $p->fill($v)->save();
-        return $this->ok($p->load('category:id,name,slug','subcategory:id,name,slug,provider'));
+
+        // ✅ include logo subkategori saat return
+        return $this->ok($p->load(
+            'category:id,name,slug',
+            'subcategory:id,category_id,name,slug,provider,image_url,image_path'
+        ));
     }
 
     public function destroy($id)

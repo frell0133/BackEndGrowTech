@@ -3,26 +3,29 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class Subcategory extends Model
+class SubCategory extends Model
 {
+    protected $table = 'subcategories';
+
     protected $fillable = [
-        'category_id','name','slug','provider','is_active','sort_order'
+        'category_id',
+        'name',
+        'slug',
+        'provider',
+        'image_path',
+        'image_url',
+        'is_active',
+        'sort_order',
     ];
 
-    protected $casts = [
-        'is_active' => 'boolean',
-    ];
-
-    public function category(): BelongsTo
+    public function category()
     {
-        return $this->belongsTo(Category::class);
+        return $this->belongsTo(Category::class, 'category_id');
     }
 
-    public function products(): HasMany
+    public function products()
     {
-        return $this->hasMany(Product::class);
+        return $this->hasMany(Product::class, 'subcategory_id');
     }
 }
