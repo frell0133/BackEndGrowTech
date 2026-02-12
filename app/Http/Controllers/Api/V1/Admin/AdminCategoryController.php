@@ -38,7 +38,6 @@ class AdminCategoryController extends Controller
         $baseSlug = $v['slug'] ? Str::slug($v['slug']) : Str::slug($v['name']);
         $slug = $baseSlug;
 
-        // bikin slug unik kalau sudah ada
         $i = 2;
         while (Category::where('slug', $slug)->exists()) {
             $slug = $baseSlug . '-' . $i;
