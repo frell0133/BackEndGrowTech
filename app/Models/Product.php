@@ -4,23 +4,30 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use App\Models\Category;
-use App\Models\Subcategory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Product extends Model
 {
     protected $fillable = [
+        'subcategory_id',
+        'category_id',
         'name',
+        'slug',
         'type',
         'description',
         'tier_pricing',
+        'duration_days',
+        'is_active',
+        'is_published',
+        'price',
     ];
 
     protected $casts = [
         'tier_pricing' => 'array',
         'is_active' => 'boolean',
         'is_published' => 'boolean',
+        'duration_days' => 'integer',
+        'price' => 'integer',
     ];
 
     public function licenses(): HasMany
@@ -33,15 +40,13 @@ class Product extends Model
         return $this->hasMany(Order::class);
     }
 
-    public function subcategory()
+    public function subcategory(): BelongsTo
     {
-        return $this->belongsTo(\App\Models\SubCategory::class, 'subcategory_id');
+        return $this->belongsTo(SubCategory::class, 'subcategory_id');
     }
 
-    public function category()
+    public function category(): BelongsTo
     {
-        return $this->belongsTo(\App\Models\Category::class, 'category_id');
+        return $this->belongsTo(Category::class, 'category_id');
     }
-
-    
 }
