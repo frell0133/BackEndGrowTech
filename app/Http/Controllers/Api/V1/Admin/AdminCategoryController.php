@@ -35,7 +35,7 @@ class AdminCategoryController extends Controller
             'sort_order' => ['nullable','integer'],
         ]);
 
-        $baseSlug = $v['slug'] ? Str::slug($v['slug']) : Str::slug($v['name']);
+        $baseSlug = Str::slug($v['slug'] ?? $v['name']); // ✅ FIX
         $slug = $baseSlug;
 
         $i = 2;
