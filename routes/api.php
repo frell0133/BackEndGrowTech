@@ -242,6 +242,8 @@ Route::prefix('v1')->group(function () {
 
         Route::get('stock/proofs', [AdminLicenseController::class, 'proofList']);
         Route::get('stock/proofs/{proof_id}', [AdminLicenseController::class, 'proofDownload']);
+        Route::get('stock/proofs/{proof_id}/json', [AdminLicenseController::class, 'proofDownloadJson']);
+        Route::get('stock/proofs/{proof_id}/csv', [AdminLicenseController::class, 'proofDownloadCsv']);
 
         // Orders (Admin)
         Route::get('orders', [AdminOrderController::class, 'index']);

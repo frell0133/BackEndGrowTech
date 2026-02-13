@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Support\Str;
 
 class Voucher extends Model
 {
@@ -31,5 +32,16 @@ class Voucher extends Model
         return $this->belongsToMany(Order::class, 'order_vouchers')
             ->withPivot(['discount_amount'])
             ->withTimestamps();
+    }
+    
+    protected static function booted(): void
+    {
+        static::creating(function ($voucher) {
+            if (!empty($voucher->code)) return;
+
+            do {
+                $voucher->code = 'PROMO-' . Str::upper(Str::random(8)); // contoh: PROMO-8KDJ2LQA
+            } while (static::where('code', $voucher->code)->exists());
+        });
     }
 }

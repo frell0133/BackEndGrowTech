@@ -64,6 +64,24 @@ class AdminLicenseController extends Controller
         return $p;
     }
 
+    private function proofTxtPath(string $proofId): string
+    {
+        return "stock_proofs/{$proofId}.txt";
+    }
+
+    private function proofJsonPath(string $proofId): string
+    {
+        return "stock_proofs/{$proofId}.json";
+    }
+
+    private function ensureProofDir(): void
+    {
+        // local disk will create dirs automatically on put, but safe to keep
+        if (!Storage::disk('local')->exists('stock_proofs')) {
+            Storage::disk('local')->makeDirectory('stock_proofs');
+        }
+    }
+
     // =========================
     // 1) LIST LICENSES (per product)
     // GET /api/v1/admin/products/{id}/licenses?status=available&q=...&per_page=50
@@ -262,7 +280,7 @@ class AdminLicenseController extends Controller
     // =========================
     // 6) TAKE STOCK (inti UI kamu)
     // POST /api/v1/admin/products/{id}/take-stock
-    // body: { qty: 10 }
+    // body: { qty: 10, format?: "json|txt|both" }
     // =========================
     public function takeStock(Request $request, int $id)
     {
@@ -270,12 +288,16 @@ class AdminLicenseController extends Controller
 
         $v = $request->validate([
             'qty' => ['required','integer','min:1','max:500'],
+            'format' => ['nullable','in:json,txt,both'],
         ]);
 
         $qty = (int) $v['qty'];
+        $format = $v['format'] ?? 'both'; // default paling fleksibel
         $actorId = optional($request->user())->id;
 
-        return DB::transaction(function () use ($product, $qty, $actorId) {
+        $this->ensureProofDir();
+
+        return DB::transaction(function () use ($product, $qty, $actorId, $format) {
 
             // Lock biar aman dari double take
             $stocks = License::query()
@@ -297,31 +319,55 @@ class AdminLicenseController extends Controller
                 $s->save();
             }
 
-            // generate proof file (txt) — no extra package
             $proofId = 'proof_' . now()->format('Ymd_His') . '_' . Str::random(8);
-            $path = "stock_proofs/{$proofId}.txt";
 
-            $contentLines = [];
-            $contentLines[] = "PROOF ID: {$proofId}";
-            $contentLines[] = "PRODUCT ID: {$product->id}";
-            $contentLines[] = "PRODUCT NAME: {$product->name}";
-            $contentLines[] = "TAKEN AT: " . now()->toDateTimeString();
-            $contentLines[] = "TAKEN BY: " . ($actorId ?? 'system');
-            $contentLines[] = "QTY: " . $stocks->count();
-            $contentLines[] = "----------------------------------------";
-            foreach ($stocks as $s) {
-                // 1 baris sesuai input awal
-                $line = $s->license_key;
-                if ($s->data_other) $line .= ":" . $s->data_other;
-                if ($s->note) $line .= ":" . $s->note;
-                $contentLines[] = $line;
+            // ====== JSON payload (source of truth) ======
+            $payload = [
+                'proof_id' => $proofId,
+                'product' => [
+                    'id' => $product->id,
+                    'name' => $product->name,
+                ],
+                'taken_at' => now()->toISOString(),
+                'taken_by' => $actorId,
+                'requested_qty' => $qty,
+                'taken_qty' => $stocks->count(),
+                'items' => $stocks->map(fn($s) => [
+                    'id' => $s->id,
+                    'license_key' => $s->license_key,
+                    'data_other' => $s->data_other,
+                    'note' => $s->note,
+                    'fingerprint' => $s->fingerprint,
+                ])->values()->all(),
+            ];
+
+            $jsonPath = $this->proofJsonPath($proofId);
+            $txtPath  = $this->proofTxtPath($proofId);
+
+            if ($format === 'json' || $format === 'both') {
+                Storage::disk('local')->put($jsonPath, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
             }
-            $contentLines[] = "----------------------------------------";
-            $content = implode("\n", $contentLines);
 
-            Storage::disk('local')->put($path, $content);
+            if ($format === 'txt' || $format === 'both') {
+                // kompatibel dengan format lama kamu
+                $contentLines = [];
+                $contentLines[] = "PROOF ID: {$proofId}";
+                $contentLines[] = "PRODUCT ID: {$product->id}";
+                $contentLines[] = "PRODUCT NAME: {$product->name}";
+                $contentLines[] = "TAKEN AT: " . now()->toDateTimeString();
+                $contentLines[] = "TAKEN BY: " . ($actorId ?? 'system');
+                $contentLines[] = "QTY: " . $stocks->count();
+                $contentLines[] = "----------------------------------------";
+                foreach ($stocks as $s) {
+                    $line = $s->license_key;
+                    if ($s->data_other) $line .= ":" . $s->data_other;
+                    if ($s->note) $line .= ":" . $s->note;
+                    $contentLines[] = $line;
+                }
+                $contentLines[] = "----------------------------------------";
+                Storage::disk('local')->put($txtPath, implode("\n", $contentLines));
+            }
 
-            // Kembalikan payload utk FE (modal “Stock Terambil”)
             return $this->ok([
                 'product_id' => $product->id,
                 'requested_qty' => $qty,
@@ -329,7 +375,8 @@ class AdminLicenseController extends Controller
                 'message' => $stocks->count() >= $qty ? 'Stock Terambil' : 'Stock Terambil Sebagian',
                 'proof' => [
                     'proof_id' => $proofId,
-                    'path' => $path,
+                    'json_path' => ($format === 'json' || $format === 'both') ? $jsonPath : null,
+                    'txt_path'  => ($format === 'txt' || $format === 'both') ? $txtPath : null,
                 ],
                 'items' => $stocks->map(fn($s) => [
                     'id' => $s->id,
@@ -345,39 +392,123 @@ class AdminLicenseController extends Controller
     // =========================
     // 7) PROOF LIST
     // GET /api/v1/admin/stock/proofs
+    // list proof (json preferred). File name base is proof_id.
     // =========================
     public function proofList()
     {
+        $this->ensureProofDir();
+
         $files = Storage::disk('local')->files('stock_proofs');
 
-        $items = collect($files)
-            ->filter(fn($f) => str_ends_with($f, '.txt'))
-            ->map(function ($f) {
-                return [
-                    'proof_id' => basename($f, '.txt'),
-                    'path' => $f,
-                    'updated_at' => Storage::disk('local')->lastModified($f),
-                    'size' => Storage::disk('local')->size($f),
+        // group by proof_id
+        $map = [];
+
+        foreach ($files as $f) {
+            if (!str_ends_with($f, '.txt') && !str_ends_with($f, '.json')) continue;
+
+            $ext = pathinfo($f, PATHINFO_EXTENSION);
+            $proofId = basename($f, '.' . $ext);
+
+            if (!isset($map[$proofId])) {
+                $map[$proofId] = [
+                    'proof_id' => $proofId,
+                    'json_path' => null,
+                    'txt_path' => null,
+                    'updated_at' => 0,
+                    'size' => 0,
                 ];
-            })
+            }
+
+            if ($ext === 'json') $map[$proofId]['json_path'] = $f;
+            if ($ext === 'txt')  $map[$proofId]['txt_path']  = $f;
+
+            $lm = Storage::disk('local')->lastModified($f);
+            $map[$proofId]['updated_at'] = max($map[$proofId]['updated_at'], $lm);
+            $map[$proofId]['size'] += Storage::disk('local')->size($f);
+        }
+
+        $items = collect(array_values($map))
             ->sortByDesc('updated_at')
-            ->values();
+            ->values()
+            ->map(function ($x) {
+                return [
+                    'proof_id' => $x['proof_id'],
+                    'json_path' => $x['json_path'],
+                    'txt_path' => $x['txt_path'],
+                    'updated_at' => $x['updated_at'],
+                    'size' => $x['size'],
+                ];
+            });
 
         return $this->ok($items);
     }
 
     // =========================
-    // 8) PROOF DOWNLOAD
+    // 8) PROOF DOWNLOAD (TXT lama)
     // GET /api/v1/admin/stock/proofs/{proof_id}
     // =========================
     public function proofDownload(string $proof_id)
     {
-        $path = "stock_proofs/{$proof_id}.txt";
+        $path = $this->proofTxtPath($proof_id);
 
         if (!Storage::disk('local')->exists($path)) {
             return $this->fail('Proof tidak ditemukan', 404);
         }
 
         return Storage::disk('local')->download($path, "{$proof_id}.txt");
+    }
+
+    // =========================
+    // 9) PROOF DOWNLOAD JSON
+    // GET /api/v1/admin/stock/proofs/{proof_id}/json
+    // =========================
+    public function proofDownloadJson(string $proof_id)
+    {
+        $path = $this->proofJsonPath($proof_id);
+
+        if (!Storage::disk('local')->exists($path)) {
+            return $this->fail('Proof tidak ditemukan', 404);
+        }
+
+        return Storage::disk('local')->download($path, "{$proof_id}.json");
+    }
+
+    // =========================
+    // 10) PROOF DOWNLOAD CSV (dari JSON, paling fleksibel)
+    // GET /api/v1/admin/stock/proofs/{proof_id}/csv
+    // =========================
+    public function proofDownloadCsv(string $proof_id)
+    {
+        $path = $this->proofJsonPath($proof_id);
+
+        if (!Storage::disk('local')->exists($path)) {
+            return $this->fail('Proof JSON tidak ditemukan (coba generate format both/json).', 404);
+        }
+
+        $payload = json_decode(Storage::disk('local')->get($path), true);
+        $items = $payload['items'] ?? [];
+
+        $out = fopen('php://temp', 'r+');
+        // Header CSV (silakan tambah kolom kalau perlu)
+        fputcsv($out, ['id', 'license_key', 'data_other', 'note', 'fingerprint']);
+
+        foreach ($items as $row) {
+            fputcsv($out, [
+                $row['id'] ?? '',
+                $row['license_key'] ?? '',
+                $row['data_other'] ?? '',
+                $row['note'] ?? '',
+                $row['fingerprint'] ?? '',
+            ]);
+        }
+
+        rewind($out);
+        $csv = stream_get_contents($out);
+        fclose($out);
+
+        return response($csv, 200, [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => "attachment; filename=\"{$proof_id}.csv\"",
+        ]);
     }
 }
