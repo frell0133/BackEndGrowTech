@@ -5,21 +5,26 @@ namespace App\Http\Controllers\Api\V1\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Referral;
 use App\Models\User;
+use App\Models\ReferralTransaction;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class AdminReferralController extends Controller
 {
     use ApiResponse;
 
     /**
+     * ============================
+     * A) RELATION LIST (attach)
+     * ============================
      * GET /api/v1/admin/referrals
      *
      * Query:
      * - q=search email/name/referral_code (user atau referrer)
-     * - user_id=filter by referred user
-     * - referrer_id=filter by referrer
-     * - date_from=YYYY-MM-DD (filter attached_at/created_at)
+     * - user_id=filter by referred user (yang pakai kode)
+     * - referrer_id=filter by referrer (pemilik kode)
+     * - date_from=YYYY-MM-DD (filter locked_at/created_at)
      * - date_to=YYYY-MM-DD
      * - per_page=20
      */
@@ -42,21 +47,22 @@ class AdminReferralController extends Controller
             $query->where('user_id', (int) $userId);
         }
 
+        // IMPORTANT: di tabel kamu field nya "referred_by" bukan "referrer_id"
         if ($referrerId) {
-            $query->where('referrer_id', (int) $referrerId);
+            $query->where('referred_by', (int) $referrerId);
         }
 
-        // kalau tabel referral kamu pakai attached_at, pakai itu. kalau tidak ada, pakai created_at.
+        // Filter tanggal: pakai locked_at kalau ada, fallback created_at
         if ($dateFrom) {
             $query->where(function ($qr) use ($dateFrom) {
-                $qr->whereDate('attached_at', '>=', $dateFrom)
+                $qr->whereDate('locked_at', '>=', $dateFrom)
                    ->orWhereDate('created_at', '>=', $dateFrom);
             });
         }
 
         if ($dateTo) {
             $query->where(function ($qr) use ($dateTo) {
-                $qr->whereDate('attached_at', '<=', $dateTo)
+                $qr->whereDate('locked_at', '<=', $dateTo)
                    ->orWhereDate('created_at', '<=', $dateTo);
             });
         }
@@ -77,27 +83,147 @@ class AdminReferralController extends Controller
             });
         }
 
-        $data = $query
-            ->latest('id')
-            ->paginate($perPage);
+        $data = $query->latest('id')->paginate($perPage);
 
         return $this->ok($data);
     }
 
     /**
+     * ============================
+     * B) MONITORING (mockup)
+     * ============================
+     * GET /api/v1/admin/referrals/monitoring
+     *
+     * Query:
+     * - q=search referrer name/email/referral_code
+     * - per_page=20
+     */
+    public function monitoring(Request $request)
+    {
+        $perPage = (int) $request->query('per_page', 20);
+        $q = trim((string) $request->query('q', ''));
+
+        // agregasi per referrer dari referral_transactions
+        $base = ReferralTransaction::query()
+            ->select([
+                'referrer_id',
+                DB::raw('COUNT(*)::int as total_referral'),
+                DB::raw("SUM(CASE WHEN status='valid' THEN 1 ELSE 0 END)::int as valid"),
+                DB::raw("SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END)::int as pending"),
+                DB::raw("SUM(CASE WHEN status='invalid' THEN 1 ELSE 0 END)::int as invalid"),
+                DB::raw('COALESCE(SUM(commission_amount),0)::int as total_komisi'),
+            ])
+            ->groupBy('referrer_id');
+
+        $query = DB::query()->fromSub($base, 'agg')
+            ->join('users as u', 'u.id', '=', 'agg.referrer_id')
+            ->select([
+                'u.id',
+                'u.name',
+                'u.email',
+                'u.referral_code',
+                'agg.total_referral',
+                'agg.valid',
+                'agg.pending',
+                'agg.invalid',
+                'agg.total_komisi',
+            ])
+            ->orderByDesc('agg.total_referral');
+
+        if ($q !== '') {
+            $query->where(function ($w) use ($q) {
+                $w->where('u.name', 'ilike', "%{$q}%")
+                  ->orWhere('u.email', 'ilike', "%{$q}%")
+                  ->orWhere('u.referral_code', 'ilike', "%{$q}%");
+            });
+        }
+
+        return $this->ok($query->paginate($perPage));
+    }
+
+    /**
+     * ============================
+     * C) DETAIL (mockup)
+     * ============================
+     * GET /api/v1/admin/referrals/{referrer_id}/detail
+     *
+     * Query:
+     * - status=valid|pending|invalid
+     * - q=search buyer name/email
+     * - per_page=20
+     */
+    public function detail(Request $request, int $referrer_id)
+    {
+        $perPage = (int) $request->query('per_page', 20);
+        $status = $request->query('status');
+        $q = trim((string) $request->query('q', ''));
+
+        $referrer = User::query()->find($referrer_id);
+        if (!$referrer) return $this->fail('User not found', 404);
+
+        $summary = ReferralTransaction::query()
+            ->where('referrer_id', $referrer->id)
+            ->select([
+                DB::raw('COUNT(*)::int as total'),
+                DB::raw("SUM(CASE WHEN status='valid' THEN 1 ELSE 0 END)::int as valid"),
+                DB::raw("SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END)::int as pending"),
+                DB::raw("SUM(CASE WHEN status='invalid' THEN 1 ELSE 0 END)::int as invalid"),
+                DB::raw('COALESCE(SUM(commission_amount),0)::int as total_komisi'),
+            ])->first();
+
+        $tx = ReferralTransaction::query()
+            ->where('referrer_id', $referrer->id)
+            ->with(['user:id,name,email']);
+
+        if ($status) $tx->where('status', $status);
+
+        if ($q !== '') {
+            $tx->whereHas('user', function ($u) use ($q) {
+                $u->where('name', 'ilike', "%{$q}%")
+                  ->orWhere('email', 'ilike', "%{$q}%");
+            });
+        }
+
+        $items = $tx->latest('id')->paginate($perPage);
+
+        // map agar sesuai mockup table: Nama, Email, Status, Komisi, Tanggal
+        $itemsArr = $items->toArray();
+        $itemsArr['data'] = collect($items->items())->map(function ($row) {
+            return [
+                'name' => $row->user?->name,
+                'email' => $row->user?->email,
+                'status' => $row->status,
+                'komisi' => (int) $row->commission_amount,
+                'tanggal' => optional($row->occurred_at ?: $row->created_at)->toDateString(),
+            ];
+        })->values();
+
+        return $this->ok([
+            'referrer' => [
+                'id' => $referrer->id,
+                'name' => $referrer->name,
+                'email' => $referrer->email,
+                'referral_code' => $referrer->referral_code,
+            ],
+            'summary' => [
+                'total' => (int) ($summary->total ?? 0),
+                'valid' => (int) ($summary->valid ?? 0),
+                'pending' => (int) ($summary->pending ?? 0),
+                'invalid' => (int) ($summary->invalid ?? 0),
+                'total_komisi' => (int) ($summary->total_komisi ?? 0),
+            ],
+            'items' => $itemsArr,
+        ]);
+    }
+
+    /**
      * POST /api/v1/admin/referrals/{user_id}/force-unlock
      * Reset referral untuk user yang sudah attach (bisa attach ulang).
-     *
-     * Default behavior:
-     * - delete row referral user tsb (paling bersih)
-     * - alternatif: set referrer_id null + unlock flag
      */
     public function forceUnlock(Request $request, string $user_id)
     {
         $user = User::query()->find($user_id);
-        if (!$user) {
-            return $this->fail('User not found', 404);
-        }
+        if (!$user) return $this->fail('User not found', 404);
 
         $ref = Referral::query()->where('user_id', $user->id)->first();
 
@@ -108,7 +234,6 @@ class AdminReferralController extends Controller
             ]);
         }
 
-        // MODE PALING AMAN: hapus record referral supaya user bisa attach lagi
         $ref->delete();
 
         return $this->ok([

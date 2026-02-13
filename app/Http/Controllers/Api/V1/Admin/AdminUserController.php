@@ -227,4 +227,77 @@ class AdminUserController extends Controller
             }),
         ]);
     }
+
+        /**
+     * GET /admin/users/{id}/referral-stats
+     * Detail transaksi referral untuk halaman "Detail Referral - {User}"
+     * Query:
+     * - status=valid|pending|invalid
+     * - q=search buyer name/email
+     * - per_page=1..100
+     */
+    public function referralStats(Request $request, string $id)
+    {
+        $user = User::query()->find($id);
+        if (!$user) return $this->fail('User tidak ditemukan', 404);
+
+        $perPage = (int) $request->query('per_page', 20);
+        $perPage = max(1, min(100, $perPage));
+
+        $status = $request->query('status'); // valid|pending|invalid
+        $q = trim((string) $request->query('q', ''));
+
+        // Summary cards
+        $summary = \App\Models\ReferralTransaction::query()
+            ->where('referrer_id', $user->id)
+            ->selectRaw('COUNT(*)::int as total')
+            ->selectRaw("SUM(CASE WHEN status='valid' THEN 1 ELSE 0 END)::int as valid")
+            ->selectRaw("SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END)::int as pending")
+            ->selectRaw("SUM(CASE WHEN status='invalid' THEN 1 ELSE 0 END)::int as invalid")
+            ->selectRaw('COALESCE(SUM(commission_amount),0)::int as total_komisi')
+            ->first();
+
+        // Table rows
+        $tx = \App\Models\ReferralTransaction::query()
+            ->where('referrer_id', $user->id)
+            ->with(['user:id,name,email']);
+
+        if ($status) $tx->where('status', $status);
+
+        if ($q !== '') {
+            $tx->whereHas('user', function ($u) use ($q) {
+                $u->where('name', 'ilike', "%{$q}%")
+                ->orWhere('email', 'ilike', "%{$q}%");
+            });
+        }
+
+        $rows = $tx->orderByDesc('id')->paginate($perPage);
+
+        $rowsArr = $rows->toArray();
+        $rowsArr['data'] = collect($rows->items())->map(function ($row) {
+            return [
+                'name' => $row->user?->name,
+                'email' => $row->user?->email,
+                'status' => $row->status,
+                'komisi' => (int) $row->commission_amount,
+                'tanggal' => optional($row->occurred_at ?: $row->created_at)->toDateString(),
+                'order_id' => $row->order_id,
+                'discount_amount' => (int) $row->discount_amount,
+                'order_amount' => (int) $row->order_amount,
+            ];
+        })->values();
+
+        return $this->ok([
+            'referrer' => $user->only(['id','name','email','referral_code','created_at']),
+            'summary' => [
+                'total' => (int) ($summary->total ?? 0),
+                'valid' => (int) ($summary->valid ?? 0),
+                'pending' => (int) ($summary->pending ?? 0),
+                'invalid' => (int) ($summary->invalid ?? 0),
+                'total_komisi' => (int) ($summary->total_komisi ?? 0),
+            ],
+            'items' => $rowsArr,
+        ]);
+    }
+
 }
