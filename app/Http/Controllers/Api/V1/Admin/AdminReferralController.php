@@ -103,8 +103,8 @@ class AdminReferralController extends Controller
         $perPage = (int) $request->query('per_page', 20);
         $q = trim((string) $request->query('q', ''));
 
-        // agregasi per referrer dari referral_transactions
-        $base = ReferralTransaction::query()
+        // 1) agregasi transaksi referral (kalau ada)
+        $txAgg = ReferralTransaction::query()
             ->select([
                 'referrer_id',
                 DB::raw('COUNT(*)::int as total_referral'),
@@ -115,31 +115,44 @@ class AdminReferralController extends Controller
             ])
             ->groupBy('referrer_id');
 
-        $query = DB::query()->fromSub($base, 'agg')
-            ->join('users as u', 'u.id', '=', 'agg.referrer_id')
+        // 2) basis daftar referrer dari referrals (attach)
+        $referrerBase = Referral::query()
+            ->whereNotNull('referred_by')
+            ->select('referred_by as referrer_id')
+            ->distinct();
+
+        // 3) join users + left join txAgg agar yang belum punya transaksi tetap tampil (nilai 0)
+        $query = DB::query()
+            ->fromSub($referrerBase, 'rb')
+            ->join('users as u', 'u.id', '=', 'rb.referrer_id')
+            ->leftJoinSub($txAgg, 'agg', function ($join) {
+                $join->on('agg.referrer_id', '=', 'u.id');
+            })
             ->select([
                 'u.id',
                 'u.name',
                 'u.email',
                 'u.referral_code',
-                'agg.total_referral',
-                'agg.valid',
-                'agg.pending',
-                'agg.invalid',
-                'agg.total_komisi',
+                DB::raw('COALESCE(agg.total_referral,0)::int as total_referral'),
+                DB::raw('COALESCE(agg.valid,0)::int as valid'),
+                DB::raw('COALESCE(agg.pending,0)::int as pending'),
+                DB::raw('COALESCE(agg.invalid,0)::int as invalid'),
+                DB::raw('COALESCE(agg.total_komisi,0)::int as total_komisi'),
             ])
-            ->orderByDesc('agg.total_referral');
+            ->orderByDesc('total_referral')
+            ->orderByDesc('u.id');
 
         if ($q !== '') {
             $query->where(function ($w) use ($q) {
                 $w->where('u.name', 'ilike', "%{$q}%")
-                  ->orWhere('u.email', 'ilike', "%{$q}%")
-                  ->orWhere('u.referral_code', 'ilike', "%{$q}%");
+                ->orWhere('u.email', 'ilike', "%{$q}%")
+                ->orWhere('u.referral_code', 'ilike', "%{$q}%");
             });
         }
 
         return $this->ok($query->paginate($perPage));
     }
+
 
     /**
      * ============================
