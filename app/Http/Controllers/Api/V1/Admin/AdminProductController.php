@@ -100,6 +100,22 @@ class AdminProductController extends Controller
         ));
     }
 
+    public function publish(Request $request, $id)
+    {
+        $p = Product::find($id);
+        if (!$p) return $this->fail('Product not found', 404);
+
+        $v = $request->validate([
+            'is_published' => ['required','boolean']
+        ]);
+
+        $p->update([
+            'is_published' => $v['is_published']
+        ]);
+
+        return $this->ok($p);
+    }
+
     public function destroy($id)
     {
         $p = Product::find($id);
