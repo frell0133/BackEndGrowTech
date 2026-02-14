@@ -105,30 +105,12 @@ class AdminProductController extends Controller
         $p = Product::find($id);
         if (!$p) return $this->fail('Product not found', 404);
 
-        try {
-            DB::transaction(function () use ($p) {
-                // Opsional: kalau kamu punya relasi, bisa cek dulu
-                // misal: if ($p->licenses()->exists()) throw new \RuntimeException("Has licenses");
+        $p->update([
+            'is_active' => false,
+            'is_published' => false,
+        ]);
 
-                $p->delete();
-            });
-
-            return $this->ok(['deleted' => true]);
-        } catch (QueryException $e) {
-            // PostgreSQL FK violation = 23503
-            if (($e->errorInfo[0] ?? null) === '23503') {
-                return $this->fail(
-                    'Product tidak bisa dihapus karena masih dipakai oleh data lain (mis. order/license). Hapus/lepaskan relasinya dulu.',
-                    409,
-                    ['sqlstate' => $e->errorInfo[0] ?? null]
-                );
-            }
-
-            // lainnya
-            return $this->fail('Delete failed', 500, [
-                'sqlstate' => $e->errorInfo[0] ?? null,
-                'message' => $e->getMessage(),
-            ]);
-        }
+        return $this->ok(['deleted' => false, 'deactivated' => true]);
     }
+
 }
