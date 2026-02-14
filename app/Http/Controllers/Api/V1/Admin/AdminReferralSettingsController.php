@@ -23,6 +23,10 @@ class AdminReferralSettingsController extends Controller
         $data = $request->validate([
             'enabled' => ['nullable','boolean'],
 
+            'campaign_name' => ['nullable','string','max:100'],
+            'starts_at' => ['nullable','date'],
+            'ends_at' => ['nullable','date','after_or_equal:starts_at'],
+
             'discount_type' => ['nullable','in:percent,fixed'],
             'discount_value' => ['nullable','integer','min:0'],
             'discount_max_amount' => ['nullable','integer','min:0'],
@@ -30,7 +34,8 @@ class AdminReferralSettingsController extends Controller
 
             'commission_type' => ['nullable','in:percent,fixed'],
             'commission_value' => ['nullable','integer','min:0'],
-
+            'max_commission_total_per_referrer' => ['nullable','integer','min:0'],
+            
             'max_uses_per_referrer' => ['nullable','integer','min:0'],
             'max_uses_per_user' => ['nullable','integer','min:0'],
 

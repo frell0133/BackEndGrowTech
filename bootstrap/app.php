@@ -27,6 +27,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // Alias middleware custom
         $middleware->alias([
             'role' => \App\Http\Middleware\RoleMiddleware::class,
+            'referral.attach.guard' => \App\Http\Middleware\ReferralAttachGuard::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
@@ -49,3 +50,4 @@ return Application::configure(basePath: dirname(__DIR__))
         });
     })
     ->create();
+    

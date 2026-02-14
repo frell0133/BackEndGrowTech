@@ -43,6 +43,8 @@ use App\Http\Controllers\Api\V1\Admin\AdminFaqController;
 use App\Http\Controllers\Api\V1\Admin\AdminBannerController;
 use App\Http\Controllers\Api\V1\Admin\AdminSiteSettingController;
 use App\Http\Controllers\Api\V1\Admin\PaymentGatewayController;
+use App\Http\Controllers\Api\V1\Admin\AdminReferralSettingsController;
+
 
 // NEW (Admin Category/Subcategory)
 use App\Http\Controllers\Api\V1\Admin\AdminCategoryController;
@@ -180,7 +182,8 @@ Route::prefix('v1')->group(function () {
 
         // Referral (User)
         Route::get('referral', [UserReferralController::class, 'dashboard']);
-        Route::post('referral/attach', [UserReferralController::class, 'attach']);
+        Route::post('referral/attach', [UserReferralController::class, 'attach'])->middleware('referral.attach.guard');
+        Route::post('referral/preview-discount', [UserReferralController::class, 'previewDiscount']);
 
         // Withdraw (User)
         Route::post('withdraws', [UserWithdrawController::class, 'store']);
@@ -273,6 +276,11 @@ Route::prefix('v1')->group(function () {
         // Referrals (Admin)
         Route::get('referrals', [AdminReferralController::class, 'index']);
         Route::post('referrals/{user_id}/force-unlock', [AdminReferralController::class, 'forceUnlock']);
+        Route::get('referrals/monitoring', [AdminReferralController::class, 'monitoring']);
+        Route::get('referrals/{referrer_id}/detail', [AdminReferralController::class, 'detail']);
+
+        Route::get('referral-settings', [AdminReferralSettingsController::class, 'show']);
+        Route::put('referral-settings', [AdminReferralSettingsController::class, 'update']);
 
         // Withdraws (Admin)
         Route::get('withdraws', [AdminWithdrawController::class, 'index']);
