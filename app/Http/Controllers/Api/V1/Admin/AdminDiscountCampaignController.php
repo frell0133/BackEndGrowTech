@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use App\Models\DiscountCampaign;
 use App\Models\DiscountCampaignTarget;
-use App\Models\Subcategory;
+use App\Models\SubCategory;
 use App\Http\Resources\DiscountCampaignResource;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -24,13 +24,12 @@ class AdminDiscountCampaignController extends Controller
         $q = $request->query('q');
 
         $paginator = DiscountCampaign::query()
-            ->with(['targets']) // ambil target untuk mapping subcategory
+            ->with(['targets'])
             ->when($q, fn($qq) => $qq->where('name', 'like', "%{$q}%"))
             ->orderByDesc('priority')
             ->orderByDesc('id')
             ->paginate((int) $request->query('per_page', 20));
 
-        // resolve subcategory + category untuk masing-masing campaign (agar FE bisa tampil kategori/subkategori)
         $items = collect($paginator->items());
 
         $subIds = $items->flatMap(function ($c) {
@@ -39,7 +38,8 @@ class AdminDiscountCampaignController extends Controller
                 ->pluck('target_id');
         })->unique()->values();
 
-        $subMap = Subcategory::query()
+        // ✅ FIX: SubCategory (bukan Subcategory)
+        $subMap = SubCategory::query()
             ->with('category:id,name')
             ->whereIn('id', $subIds)
             ->get()
@@ -51,11 +51,11 @@ class AdminDiscountCampaignController extends Controller
             $c->resolved_subcategory = $subTarget ? ($subMap[(int)$subTarget->target_id] ?? null) : null;
         });
 
-        // replace paginator items with modified objects
         $paginator->setCollection($items);
 
         return $this->ok([
-            'data' => DiscountCampaignResource::collection($paginator),
+            // ✅ lebih aman: koleksi dari paginator (biar meta resource ga double)
+            'data' => DiscountCampaignResource::collection($paginator->getCollection()),
             'pagination' => [
                 'current_page' => $paginator->currentPage(),
                 'per_page' => $paginator->perPage(),
@@ -69,10 +69,10 @@ class AdminDiscountCampaignController extends Controller
     {
         $campaign = DiscountCampaign::with(['targets'])->findOrFail($id);
 
-        // resolve subcategory + category (untuk FE edit)
         $subTarget = $campaign->targets->firstWhere('target_type', 'subcategory');
         if ($subTarget) {
-            $campaign->resolved_subcategory = Subcategory::with('category:id,name')
+            // ✅ FIX: SubCategory
+            $campaign->resolved_subcategory = SubCategory::with('category:id,name')
                 ->find((int) $subTarget->target_id);
         } else {
             $campaign->resolved_subcategory = null;
@@ -81,10 +81,6 @@ class AdminDiscountCampaignController extends Controller
         return $this->ok(new DiscountCampaignResource($campaign));
     }
 
-    /**
-     * POST /api/v1/admin/discount-campaigns
-     * NOTE: Untuk FE kamu, kita tambahin opsi langsung kirim subcategory_id sebagai target utama
-     */
     public function store(Request $request)
     {
         $v = $request->validate([
@@ -107,7 +103,6 @@ class AdminDiscountCampaignController extends Controller
             'usage_limit_total' => ['nullable','integer','min:1'],
             'usage_limit_per_user' => ['nullable','integer','min:1'],
 
-            // FE tabel kamu fokus ke subcategory
             'subcategory_id' => ['nullable','integer','min:1'],
         ]);
 
@@ -120,7 +115,6 @@ class AdminDiscountCampaignController extends Controller
 
         $campaign = DiscountCampaign::create($v);
 
-        // kalau FE kirim subcategory_id, langsung bikin target-nya
         if ($subcategoryId) {
             DiscountCampaignTarget::firstOrCreate([
                 'campaign_id' => $campaign->id,
@@ -131,10 +125,9 @@ class AdminDiscountCampaignController extends Controller
 
         $campaign->load('targets');
 
-        // resolve for resource
         $subTarget = $campaign->targets->firstWhere('target_type', 'subcategory');
         $campaign->resolved_subcategory = $subTarget
-            ? Subcategory::with('category:id,name')->find((int)$subTarget->target_id)
+            ? SubCategory::with('category:id,name')->find((int)$subTarget->target_id) // ✅ FIX
             : null;
 
         return $this->ok(new DiscountCampaignResource($campaign));
@@ -164,7 +157,6 @@ class AdminDiscountCampaignController extends Controller
             'usage_limit_total' => ['sometimes','nullable','integer','min:1'],
             'usage_limit_per_user' => ['sometimes','nullable','integer','min:1'],
 
-            // update target subcategory utama via field ini (biar FE gampang)
             'subcategory_id' => ['sometimes','nullable','integer','min:1'],
         ]);
 
@@ -178,9 +170,7 @@ class AdminDiscountCampaignController extends Controller
 
         $campaign->update($v);
 
-        // kalau FE mengirim subcategory_id, kita set target subcategory menjadi 1 saja
         if ($hasSubKey) {
-            // hapus semua subcategory target lama
             DiscountCampaignTarget::query()
                 ->where('campaign_id', $campaign->id)
                 ->where('target_type', 'subcategory')
@@ -199,7 +189,7 @@ class AdminDiscountCampaignController extends Controller
 
         $subTarget = $campaign->targets->firstWhere('target_type', 'subcategory');
         $campaign->resolved_subcategory = $subTarget
-            ? Subcategory::with('category:id,name')->find((int)$subTarget->target_id)
+            ? SubCategory::with('category:id,name')->find((int)$subTarget->target_id) // ✅ FIX
             : null;
 
         return $this->ok(new DiscountCampaignResource($campaign));
@@ -212,10 +202,6 @@ class AdminDiscountCampaignController extends Controller
         return $this->ok(['deleted' => true]);
     }
 
-    /**
-     * Endpoint lama addTargets/removeTargets boleh tetap ada
-     * untuk kebutuhan advanced (multi target).
-     */
     public function addTargets(Request $request, int $id)
     {
         $campaign = DiscountCampaign::findOrFail($id);
@@ -234,9 +220,7 @@ class AdminDiscountCampaignController extends Controller
             ]);
         }
 
-        $campaign->load('targets');
-
-        return $this->ok($campaign);
+        return $this->ok($campaign->fresh('targets'));
     }
 
     public function removeTargets(Request $request, int $id)
