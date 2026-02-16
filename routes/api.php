@@ -44,7 +44,7 @@ use App\Http\Controllers\Api\V1\Admin\AdminBannerController;
 use App\Http\Controllers\Api\V1\Admin\AdminSiteSettingController;
 use App\Http\Controllers\Api\V1\Admin\PaymentGatewayController;
 use App\Http\Controllers\Api\V1\Admin\AdminReferralSettingsController;
-
+use App\Http\Controllers\Api\V1\Admin\AdminDiscountCampaignController;
 
 // NEW (Admin Category/Subcategory)
 use App\Http\Controllers\Api\V1\Admin\AdminCategoryController;
@@ -336,6 +336,16 @@ Route::prefix('v1')->group(function () {
         Route::post('faqs', [AdminFaqController::class, 'store']);
         Route::patch('faqs/{id}', [AdminFaqController::class, 'update']);
         Route::delete('faqs/{id}', [AdminFaqController::class, 'destroy']);
+
+        Route::get('discount-campaigns', [AdminDiscountCampaignController::class, 'index']);
+        Route::post('discount-campaigns', [AdminDiscountCampaignController::class, 'store']);
+        Route::get('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'show']);
+        Route::patch('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'update']);
+        Route::delete('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'destroy']);
+
+        Route::post('discount-campaigns/{id}/targets', [AdminDiscountCampaignController::class, 'addTargets']);
+        Route::delete('discount-campaigns/{id}/targets', [AdminDiscountCampaignController::class, 'removeTargets']);
+
     });
 
     // =========================
