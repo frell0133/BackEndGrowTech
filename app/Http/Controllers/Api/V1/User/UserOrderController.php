@@ -140,7 +140,7 @@ class UserOrderController extends Controller
                 'payment_gateway_code' => null,
             ]);
 
-            // attach voucher ke pivot (sesuai opsi A: simpan pemakaian, order amount tetap sudah dihitung)
+            // attach voucher ke pivot
             if ($voucher) {
                 $order->vouchers()->syncWithoutDetaching([
                     $voucher->id => ['discount_amount' => (float) $discountTotal],
@@ -183,141 +183,202 @@ class UserOrderController extends Controller
 
         // kalau sudah paid/fulfilled/refunded, jangan bayar lagi
         $status = (string) ($order->status?->value ?? $order->status);
-        if (in_array($status, [OrderStatus::PAID->value, OrderStatus::FULFILLED->value, OrderStatus::REFUNDED->value], true)) {
+        if (in_array($status, [
+            OrderStatus::PAID->value,
+            OrderStatus::FULFILLED->value,
+            OrderStatus::REFUNDED->value
+        ], true)) {
             return $this->fail('Order sudah diproses pembayaran', 409);
         }
 
         // ===== WALLET PAYMENT =====
         if ($v['method'] === 'wallet') {
-            return DB::transaction(function () use ($order, $user, $ledger, $fulfillment) {
+            try {
+                return DB::transaction(function () use ($order, $user, $ledger, $fulfillment) {
 
-                // 1) debit saldo user -> credit system revenue
-                // amount decimal, ledger pakai int -> pakai pembulatan rupiah
-                $amountInt = (int) round((float) $order->amount);
-                $ledger->purchase((int) $user->id, $amountInt, 'PAY ORDER ' . $order->invoice_number);
+                    // lock order supaya tidak double bayar (idempotent)
+                    $locked = Order::query()
+                        ->where('id', (int) $order->id)
+                        ->lockForUpdate()
+                        ->first();
 
-                // 2) payment record
-                $payment = $order->payment;
-                if (!$payment) {
-                    $payment = Payment::create([
-                        'order_id' => (int) $order->id,
-                        'gateway_code' => 'wallet',
-                        'external_id' => null,
-                        'amount' => (float) $order->amount,
-                        'status' => PaymentStatus::PAID->value,
-                        'raw_callback' => ['method' => 'wallet'],
+                    $curStatus = (string) ($locked->status?->value ?? $locked->status);
+
+                    if (in_array($curStatus, [
+                        OrderStatus::PAID->value,
+                        OrderStatus::FULFILLED->value,
+                    ], true)) {
+                        return $this->ok([
+                            'method' => 'wallet',
+                            'already_paid' => true,
+                            'order' => $locked->fresh()->load(['product','payment','vouchers','deliveries.license']),
+                        ]);
+                    }
+
+                    // debit saldo user
+                    $amountInt = (int) round((float) $locked->amount);
+                    if ($amountInt <= 0) {
+                        return $this->fail('Amount invalid', 422);
+                    }
+
+                    // LedgerService::purchase biasanya akan throw ValidationException kalau saldo kurang
+                    $ledger->purchase((int) $user->id, $amountInt, 'PAY ORDER ' . $locked->invoice_number);
+
+                    // payment record
+                    $payment = $locked->payment;
+                    if (!$payment) {
+                        $payment = Payment::create([
+                            'order_id' => (int) $locked->id,
+                            'gateway_code' => 'wallet',
+                            'external_id' => null,
+                            'amount' => (float) $locked->amount,
+                            'status' => PaymentStatus::PAID->value,
+                            'raw_callback' => ['method' => 'wallet'],
+                        ]);
+                    } else {
+                        $payment->update([
+                            'gateway_code' => 'wallet',
+                            'status' => PaymentStatus::PAID->value,
+                            'raw_callback' => array_merge((array) ($payment->raw_callback ?? []), ['method' => 'wallet']),
+                        ]);
+                    }
+
+                    // order paid
+                    $locked->update([
+                        'status' => OrderStatus::PAID->value,
+                        'payment_gateway_code' => 'wallet',
                     ]);
-                } else {
-                    $payment->update([
-                        'gateway_code' => 'wallet',
-                        'status' => PaymentStatus::PAID->value,
-                        'raw_callback' => array_merge((array) ($payment->raw_callback ?? []), ['method' => 'wallet']),
+
+                    // fulfill (ambil license & buat deliveries)
+                    $res = $fulfillment->fulfillPaidOrder($locked->fresh());
+
+                    if (!($res['ok'] ?? false)) {
+                        // rollback: biar debit wallet ikut batal jika fulfillment gagal
+                        throw new \RuntimeException($res['message'] ?? 'Fulfillment failed');
+                    }
+
+                    // order fulfilled
+                    $locked->update([
+                        'status' => OrderStatus::FULFILLED->value,
                     ]);
-                }
 
-                // 3) order paid
-                $order->update([
-                    'status' => OrderStatus::PAID->value,
-                    'payment_gateway_code' => 'wallet',
-                ]);
+                    return $this->ok([
+                        'method' => 'wallet',
+                        'payment' => $payment->fresh(),
+                        'order' => $locked->fresh()->load(['product','vouchers','deliveries.license','payment']),
+                        'fulfillment' => $res,
+                    ]);
+                });
 
-                // 4) fulfill (ambil license & buat deliveries)
-                $res = $fulfillment->fulfillPaidOrder($order->fresh());
-
-                if (!($res['ok'] ?? false)) {
-                    // kalau fulfill gagal, kamu bisa pilih mau rollback atau tandai failed
-                    // kita rollback dengan throw supaya transaksi batal
-                    throw new \RuntimeException($res['message'] ?? 'Fulfillment failed');
-                }
-
-                // 5) order fulfilled
-                $order->update([
-                    'status' => OrderStatus::FULFILLED->value,
-                ]);
-
-                return $this->ok([
-                    'method' => 'wallet',
-                    'payment' => $payment->fresh(),
-                    'order' => $order->fresh()->load(['product', 'vouchers', 'deliveries.license']),
-                    'fulfillment' => $res,
-                ]);
-            });
+            } catch (\Illuminate\Validation\ValidationException $e) {
+                // saldo tidak cukup biasanya masuk sini
+                return $this->fail('Validation failed', 422, $e->errors());
+            } catch (\Throwable $e) {
+                return $this->fail('Wallet payment failed', 500, $e->getMessage());
+            }
         }
 
         // ===== MIDTRANS PAYMENT =====
-        // buat/reuse payment pending
-        $payment = $order->payment;
-        if (!$payment) {
-            $payment = Payment::create([
-                'order_id' => (int) $order->id,
-                'gateway_code' => 'midtrans',
-                'external_id' => (string) $order->invoice_number, // order_id midtrans
-                'amount' => (float) $order->amount,
-                'status' => PaymentStatus::INITIATED->value,
-                'raw_callback' => null,
-            ]);
+        try {
+            return DB::transaction(function () use ($order, $user, $midtrans) {
+
+                // lock order biar idempotent
+                $locked = Order::query()
+                    ->where('id', (int) $order->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                // buat/reuse payment pending
+                $payment = $locked->payment;
+                if (!$payment) {
+                    $payment = Payment::create([
+                        'order_id' => (int) $locked->id,
+                        'gateway_code' => 'midtrans',
+                        'external_id' => (string) $locked->invoice_number, // order_id midtrans
+                        'amount' => (float) $locked->amount,
+                        'status' => PaymentStatus::INITIATED->value,
+                        'raw_callback' => null,
+                    ]);
+                }
+
+                $payload = [
+                    'transaction_details' => [
+                        'order_id' => (string) $locked->invoice_number,
+                        'gross_amount' => (int) round((float) $locked->amount),
+                    ],
+                    'item_details' => [
+                        [
+                            'id' => (string) $locked->product_id,
+                            'price' => (int) round((float) $locked->amount),
+                            'quantity' => (int) ($locked->qty ?? 1),
+                            'name' => mb_substr((string) ($locked->product?->name ?? 'Product'), 0, 50),
+                        ],
+                    ],
+                    'customer_details' => [
+                        'first_name' => (string) ($user->name ?? 'Customer'),
+                        'email' => (string) ($user->email ?? 'customer@example.com'),
+                    ],
+                ];
+
+                $snap = $midtrans->createSnapTransaction($payload);
+
+                // kalau service kamu return structure lain, ini aman karena kita cek token/redirect_url juga
+                $ok = (bool) ($snap['ok'] ?? false);
+                if (!$ok) {
+                    // fallback: kalau service kamu tidak ada 'ok' tapi ada token
+                    if (!empty($snap['token']) || !empty($snap['redirect_url'])) {
+                        $ok = true;
+                    }
+                }
+
+                if (!$ok) {
+                    $payment->update([
+                        'status' => PaymentStatus::FAILED->value,
+                        'raw_callback' => $snap,
+                    ]);
+                    return $this->fail('Gagal membuat pembayaran Midtrans', 422, $snap);
+                }
+
+                // update order & payment -> pending
+                $locked->update([
+                    'status' => OrderStatus::PENDING->value,
+                    'payment_gateway_code' => 'midtrans',
+                ]);
+
+                $payment->update([
+                    'status' => PaymentStatus::PENDING->value,
+                    'raw_callback' => $snap,
+                ]);
+
+                return $this->ok([
+                    'method' => 'midtrans',
+                    'order' => $locked->fresh()->load(['product', 'vouchers', 'payment']),
+                    'payment' => $payment->fresh(),
+                    'snap' => [
+                        'mode' => $snap['mode'] ?? null,
+                        'token' => $snap['token'] ?? null,
+                        'redirect_url' => $snap['redirect_url'] ?? null,
+                    ],
+                ]);
+            });
+
+        } catch (\Throwable $e) {
+            return $this->fail('Midtrans payment init failed', 500, $e->getMessage());
         }
-
-        $payload = [
-            'transaction_details' => [
-                'order_id' => (string) $order->invoice_number,
-                'gross_amount' => (int) round((float) $order->amount),
-            ],
-            'item_details' => [
-                [
-                    'id' => (string) $order->product_id,
-                    'price' => (int) round((float) $order->amount),
-                    'quantity' => 1,
-                    'name' => mb_substr((string) ($order->product?->name ?? 'Product'), 0, 50),
-                ],
-            ],
-            'customer_details' => [
-                'first_name' => (string) ($user->name ?? 'Customer'),
-                'email' => (string) ($user->email ?? 'customer@example.com'),
-            ],
-        ];
-
-        $snap = $midtrans->createSnapTransaction($payload);
-
-        if (!($snap['ok'] ?? false)) {
-            $payment->update([
-                'status' => PaymentStatus::FAILED->value,
-                'raw_callback' => $snap,
-            ]);
-            return $this->fail('Gagal membuat pembayaran Midtrans', 422, $snap);
-        }
-
-        // update order & payment
-        $order->update([
-            'status' => OrderStatus::PENDING->value,
-            'payment_gateway_code' => 'midtrans',
-        ]);
-
-        $payment->update([
-            'status' => PaymentStatus::PENDING->value,
-            'raw_callback' => $snap,
-        ]);
-
-        return $this->ok([
-            'method' => 'midtrans',
-            'order' => $order->fresh()->load(['product', 'vouchers', 'payment']),
-            'payment' => $payment->fresh(),
-            'snap' => [
-                'mode' => $snap['mode'] ?? null,
-                'token' => $snap['token'] ?? null,
-                'redirect_url' => $snap['redirect_url'] ?? null,
-            ],
-        ]);
     }
 
     /**
      * GET /api/v1/orders/{id}/payments
+     * (AMAN: hanya order milik user)
      */
-    public function paymentStatus(string $id)
+    public function paymentStatus(Request $request, string $id)
     {
+        $user = $request->user();
+
         $order = Order::query()
             ->with(['payment', 'product', 'vouchers'])
             ->where('id', (int) $id)
+            ->where('user_id', (int) $user->id)
             ->first();
 
         if (!$order) {
@@ -330,11 +391,14 @@ class UserOrderController extends Controller
             'order_id' => (int) $order->id,
             'invoice_number' => (string) $order->invoice_number,
             'order_status' => $status,
+            'amount' => (string) $order->amount,
             'payment' => $order->payment,
         ]);
     }
 
-    // (opsional) biar route lain ga error kalau dipanggil FE
+    /**
+     * GET /api/v1/orders
+     */
     public function index(Request $request)
     {
         $user = $request->user();
@@ -348,6 +412,9 @@ class UserOrderController extends Controller
         return $this->ok($data);
     }
 
+    /**
+     * GET /api/v1/orders/{id}
+     */
     public function show(Request $request, string $id)
     {
         $user = $request->user();
@@ -363,6 +430,9 @@ class UserOrderController extends Controller
         return $this->ok($order);
     }
 
+    /**
+     * POST /api/v1/orders/{id}/cancel
+     */
     public function cancel(Request $request, string $id)
     {
         $user = $request->user();
@@ -387,5 +457,4 @@ class UserOrderController extends Controller
             'order' => $order->fresh(),
         ]);
     }
-    
 }
