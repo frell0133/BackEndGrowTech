@@ -45,7 +45,7 @@ class MidtransWebhookController extends Controller
         }
 
         // ===== 2) server key =====
-        $serverKey = (string) config('services.midtrans.server_key', env('MIDTRANS_SERVER_KEY', ''));
+        $serverKey = (string) config('services.midtrans.server_key', env('MIDTRANS_SERVERKEY', ''));
         if ($serverKey === '') {
             Log::error('MIDTRANS WEBHOOK SERVER KEY EMPTY', ['order_id' => $orderId]);
             return response()->json(['success' => true, 'ignored' => true, 'message' => 'Server key not configured (ignored)'], 200);
@@ -334,3 +334,4 @@ class MidtransWebhookController extends Controller
         }
     }
 }
+    
