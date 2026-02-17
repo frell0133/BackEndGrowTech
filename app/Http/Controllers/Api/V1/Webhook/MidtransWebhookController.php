@@ -2,21 +2,23 @@
 
 namespace App\Http\Controllers\Api\V1\Webhook;
 
+use App\Enums\OrderStatus;
+use App\Enums\PaymentStatus;
 use App\Http\Controllers\Controller;
+use App\Models\Order;
+use App\Models\Payment;
 use App\Models\WalletTopup;
 use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
 use App\Services\LedgerService;
+use App\Services\OrderFulfillmentService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
-// === ADJUST (kalau model order kamu beda) ===
-use App\Models\Order; // pastikan model Order ada
-
 class MidtransWebhookController extends Controller
 {
-    public function handle(Request $request, LedgerService $ledger)
+    public function handle(Request $request, LedgerService $ledger, OrderFulfillmentService $fulfillment)
     {
         $payload = $request->all();
 
@@ -27,27 +29,29 @@ class MidtransWebhookController extends Controller
         ]);
 
         // ===== 1) ambil field penting =====
-        $orderId       = (string) ($payload['order_id'] ?? '');
-        $statusCode    = (string) ($payload['status_code'] ?? '');
-        $grossAmount   = (string) ($payload['gross_amount'] ?? '');
-        $signatureKey  = (string) ($payload['signature_key'] ?? '');
-        $transactionStatus = (string) ($payload['transaction_status'] ?? '');
-        $fraudStatus       = (string) ($payload['fraud_status'] ?? '');
-        $paymentType       = (string) ($payload['payment_type'] ?? '');
+        $orderId            = (string) ($payload['order_id'] ?? '');
+        $statusCode         = (string) ($payload['status_code'] ?? '');
+        $grossAmount        = (string) ($payload['gross_amount'] ?? '');
+        $signatureKey       = (string) ($payload['signature_key'] ?? '');
+        $transactionStatus  = (string) ($payload['transaction_status'] ?? '');
+        $fraudStatus        = (string) ($payload['fraud_status'] ?? '');
+        $paymentType        = (string) ($payload['payment_type'] ?? '');
+        $transactionId      = (string) ($payload['transaction_id'] ?? '');
+        $settlementTime     = (string) ($payload['settlement_time'] ?? '');
 
         if ($orderId === '' || $statusCode === '' || $grossAmount === '' || $signatureKey === '') {
             Log::warning('MIDTRANS WEBHOOK INVALID PAYLOAD', ['payload' => $payload]);
             return response()->json(['success' => true, 'ignored' => true, 'message' => 'Invalid payload (ignored)'], 200);
         }
 
-        // ===== 3) server key =====
+        // ===== 2) server key =====
         $serverKey = (string) config('services.midtrans.server_key', env('MIDTRANS_SERVER_KEY', ''));
         if ($serverKey === '') {
             Log::error('MIDTRANS WEBHOOK SERVER KEY EMPTY', ['order_id' => $orderId]);
             return response()->json(['success' => true, 'ignored' => true, 'message' => 'Server key not configured (ignored)'], 200);
         }
 
-        // ===== 4) verify signature =====
+        // ===== 3) verify signature =====
         $expected = hash('sha512', $orderId . $statusCode . $grossAmount . $serverKey);
         if (!hash_equals($expected, $signatureKey)) {
             Log::warning('MIDTRANS WEBHOOK INVALID SIGNATURE', [
@@ -58,12 +62,13 @@ class MidtransWebhookController extends Controller
             return response()->json(['success' => true, 'ignored' => true, 'message' => 'Invalid signature (ignored)'], 200);
         }
 
-        // ===== 5) status paid? =====
+        // ===== 4) paid? =====
         $isPaid =
             ($transactionStatus === 'settlement') ||
             ($transactionStatus === 'capture' && $fraudStatus === 'accept');
 
-        $mappedStatus = match ($transactionStatus) {
+        // map ke status internal (string)
+        $mapped = match ($transactionStatus) {
             'settlement' => 'paid',
             'capture'    => $isPaid ? 'paid' : 'pending',
             'pending'    => 'pending',
@@ -77,19 +82,18 @@ class MidtransWebhookController extends Controller
 
         /**
          * ==========================================================
-         * A) HANDLE TOPUP (existing logic)
+         * A) TOPUP
          * ==========================================================
          */
         $topup = WalletTopup::where('order_id', $orderId)->first();
-
         if ($topup) {
             try {
-                DB::transaction(function () use ($topup, $payload, $mappedStatus, $isPaid, $orderId, $ledger) {
+                DB::transaction(function () use ($topup, $payload, $mapped, $isPaid, $orderId, $ledger) {
 
                     $lockedTopup = WalletTopup::where('id', $topup->id)->lockForUpdate()->first();
 
                     if (in_array($lockedTopup->status, ['paid', 'success', 'completed'], true)) {
-                        Log::info('MIDTRANS WEBHOOK DUPLICATE TOPUP (ALREADY PAID)', [
+                        Log::info('MIDTRANS DUPLICATE TOPUP (ALREADY PAID)', [
                             'order_id' => $orderId,
                             'status' => $lockedTopup->status,
                         ]);
@@ -97,12 +101,10 @@ class MidtransWebhookController extends Controller
                     }
 
                     $lockedTopup->midtrans_payload = $payload;
-                    $lockedTopup->status = $mappedStatus;
+                    $lockedTopup->status = $mapped;
                     $lockedTopup->save();
 
-                    if (!$isPaid || $mappedStatus !== 'paid') {
-                        return;
-                    }
+                    if (!$isPaid || $mapped !== 'paid') return;
 
                     $userId = (int) $lockedTopup->user_id;
                     $amount = (int) $lockedTopup->amount;
@@ -144,21 +146,16 @@ class MidtransWebhookController extends Controller
 
         /**
          * ==========================================================
-         * B) HANDLE ORDER PRODUCT + REFERRAL COMMISSION
+         * B) ORDER PRODUCT + REFERRAL + FULFILL
          * ==========================================================
-         *
-         * Kalau bukan topup, kita coba cari Order.
-         * ADJUST: sesuaikan kolom pencarian order kamu.
-         * - Jika order kamu punya kolom "order_id" string (midtrans order id), gunakan itu.
-         * - Jika order kamu pakai "code" / "invoice" / "order_number", sesuaikan.
          */
         $order = Order::query()
-            // === ADJUST 1: ganti 'order_id' jika kolommu beda ===
-            ->where('order_id', $orderId)
+            ->where('invoice_number', $orderId)
+            ->with('payment')
             ->first();
 
         if (!$order) {
-            Log::warning('MIDTRANS WEBHOOK NO MATCH TOPUP/ORDER (IGNORED)', [
+            Log::warning('MIDTRANS NO MATCH TOPUP/ORDER (IGNORED)', [
                 'order_id' => $orderId,
                 'transaction_status' => $transactionStatus,
                 'payment_type' => $paymentType,
@@ -167,112 +164,162 @@ class MidtransWebhookController extends Controller
         }
 
         try {
-            DB::transaction(function () use ($order, $payload, $mappedStatus, $isPaid, $orderId, $ledger) {
-
-                // lock order biar idempotent
+            DB::transaction(function () use (
+                $order,
+                $payload,
+                $mapped,
+                $isPaid,
+                $orderId,
+                $ledger,
+                $fulfillment,
+                $transactionStatus,
+                $paymentType,
+                $transactionId,
+                $settlementTime
+            ) {
                 $lockedOrder = Order::query()->where('id', $order->id)->lockForUpdate()->first();
 
-                // === ADJUST 2: status field order kamu (paid/completed) ===
-                if (in_array($lockedOrder->status, ['paid', 'completed', 'success'], true)) {
-                    Log::info('MIDTRANS WEBHOOK DUPLICATE ORDER (ALREADY PAID)', [
-                        'order_id' => $orderId,
-                        'status' => $lockedOrder->status,
+                $current = $lockedOrder->status?->value ?? (string)$lockedOrder->status;
+
+                // idempotent: kalau sudah paid/fulfilled/refunded, stop
+                if (in_array($current, [OrderStatus::PAID->value, OrderStatus::FULFILLED->value, OrderStatus::REFUNDED->value], true)) {
+                    Log::info('MIDTRANS DUPLICATE ORDER (ALREADY FINAL)', [
+                        'midtrans_order_id' => $orderId,
+                        'status' => $current,
                     ]);
                     return;
                 }
 
-                // simpan payload kalau kamu punya kolom json
+                // map ke enum order status
+                $newOrderStatus = match ($mapped) {
+                    'paid' => OrderStatus::PAID->value,
+                    'pending' => OrderStatus::PENDING->value,
+                    'failed' => OrderStatus::FAILED->value,
+                    'expired' => OrderStatus::EXPIRED->value,
+                    'refunded' => OrderStatus::REFUNDED->value,
+                    default => OrderStatus::PENDING->value,
+                };
+
+                // update order
+                $lockedOrder->payment_gateway_code = 'midtrans';
+                $lockedOrder->status = $newOrderStatus;
                 if (property_exists($lockedOrder, 'midtrans_payload')) {
                     $lockedOrder->midtrans_payload = $payload;
                 }
-
-                // map status ke order (sesuaikan)
-                // === ADJUST 3: status mapping order kamu ===
-                $lockedOrder->status = $mappedStatus === 'paid' ? 'paid' : $mappedStatus;
                 $lockedOrder->save();
 
-                // jika belum paid, selesai
-                if (!$isPaid || $mappedStatus !== 'paid') {
-                    // kalau punya referral_transactions pending, biarkan tetap pending
+                // update/ensure payment
+                $payment = $lockedOrder->payment;
+                $paymentStatus = match ($mapped) {
+                    'paid' => PaymentStatus::PAID->value,
+                    'pending' => PaymentStatus::PENDING->value,
+                    'failed' => PaymentStatus::FAILED->value,
+                    'expired' => PaymentStatus::EXPIRED->value,
+                    'refunded' => PaymentStatus::REFUNDED->value,
+                    default => PaymentStatus::PENDING->value,
+                };
+
+                if (!$payment) {
+                    $payment = Payment::create([
+                        'order_id' => (int) $lockedOrder->id,
+                        'gateway_code' => 'midtrans',
+                        'external_id' => $orderId,
+                        'amount' => (float) ($lockedOrder->amount ?? 0),
+                        'status' => $paymentStatus,
+                        'raw_callback' => $payload,
+                    ]);
+                } else {
+                    $payment->update([
+                        'gateway_code' => 'midtrans',
+                        'external_id' => $payment->external_id ?: $orderId,
+                        'status' => $paymentStatus,
+                        'raw_callback' => $payload,
+                    ]);
+                }
+
+                // kalau belum paid, stop
+                if (!$isPaid || $mapped !== 'paid') {
                     return;
                 }
 
                 /**
-                 * REFERRAL:
-                 * Kita set referral_transactions yang order_id = order->id menjadi valid
-                 * lalu hitung komisi untuk referrer dan catat ke ledger/wallet.
+                 * REFERRAL COMMISSION
                  */
                 $tx = ReferralTransaction::query()
                     ->where('order_id', $lockedOrder->id)
                     ->lockForUpdate()
                     ->first();
 
-                if (!$tx) {
-                    // order ini bukan order referral, aman skip
+                if ($tx && $tx->status !== 'valid') {
+                    $settings = ReferralSetting::current();
+
+                    if (!$settings->enabled) {
+                        $tx->status = 'invalid';
+                        $tx->occurred_at = now();
+                        $tx->save();
+                    } else {
+                        // pakai amount yang benar
+                        $orderAmount = (int) round((float) ($lockedOrder->amount ?? 0));
+
+                        $commission = 0;
+                        if ($settings->commission_type === 'fixed') {
+                            $commission = (int) $settings->commission_value;
+                        } else {
+                            $commission = (int) floor($orderAmount * ((int) $settings->commission_value) / 100);
+                        }
+                        $commission = max(0, $commission);
+
+                        $tx->status = 'valid';
+                        $tx->order_amount = $orderAmount;
+                        $tx->commission_amount = $commission;
+                        $tx->occurred_at = now();
+                        $tx->save();
+
+                        if ($commission > 0) {
+                            DB::table('wallets')
+                                ->where('user_id', (int) $tx->referrer_id)
+                                ->increment('balance', $commission);
+
+                            $ledger->topup(
+                                userId: (int) $tx->referrer_id,
+                                amount: (int) $commission,
+                                reference: 'REFERRAL:' . $lockedOrder->id,
+                                meta: [
+                                    'type' => 'referral_commission',
+                                    'order_id' => $lockedOrder->id,
+                                    'buyer_user_id' => $tx->user_id,
+                                    'midtrans_order_id' => $orderId,
+                                    'transaction_status' => $transactionStatus,
+                                    'payment_type' => $paymentType,
+                                    'transaction_id' => $transactionId,
+                                    'settlement_time' => $settlementTime,
+                                ]
+                            );
+                        }
+                    }
+                }
+
+                /**
+                 * FULFILL (ambil license & buat delivery)
+                 */
+                $res = $fulfillment->fulfillPaidOrder($lockedOrder->fresh());
+
+                if (!($res['ok'] ?? false)) {
+                    Log::error('FULFILLMENT FAILED AFTER PAID', [
+                        'order_db_id' => $lockedOrder->id,
+                        'invoice_number' => $lockedOrder->invoice_number,
+                        'message' => $res['message'] ?? null,
+                    ]);
                     return;
                 }
 
-                // kalau sudah valid, skip (idempotent)
-                if ($tx->status === 'valid') {
-                    return;
-                }
+                // tandai fulfilled (enum)
+                $lockedOrder->status = OrderStatus::FULFILLED->value;
+                $lockedOrder->save();
 
-                $settings = ReferralSetting::current();
-
-                // Kalau referral dimatikan admin, kita tandai invalid (atau biarkan, pilih salah satu)
-                if (!$settings->enabled) {
-                    $tx->status = 'invalid';
-                    $tx->occurred_at = now();
-                    $tx->save();
-                    return;
-                }
-
-                // === ADJUST 4: ambil total order amount yang benar ===
-                // ganti sesuai kolom order kamu: total_amount / grand_total / amount
-                $orderAmount = (int) ($lockedOrder->total_amount ?? 0);
-
-                // hitung komisi
-                $commission = 0;
-                if ($settings->commission_type === 'fixed') {
-                    $commission = (int) $settings->commission_value;
-                } else {
-                    // percent
-                    $commission = (int) floor($orderAmount * ((int) $settings->commission_value) / 100);
-                }
-
-                // update tx jadi valid
-                $tx->status = 'valid';
-                $tx->order_amount = $orderAmount;
-                $tx->commission_amount = max(0, $commission);
-                $tx->occurred_at = now();
-                $tx->save();
-
-                // credit komisi ke wallet referrer + ledger
-                if ($commission > 0) {
-                    DB::table('wallets')->where('user_id', (int)$tx->referrer_id)->increment('balance', $commission);
-
-                    // kalau LedgerService kamu belum punya method referralCommission,
-                    // pakai method generic yang kamu punya (contoh: topup/credit).
-                    // Aku pakai "topup" sebagai fallback.
-                    $ledger->topup(
-                        userId: (int) $tx->referrer_id,
-                        amount: (int) $commission,
-                        reference: 'REFERRAL:' . $lockedOrder->id,
-                        meta: [
-                            'type' => 'referral_commission',
-                            'order_id' => $lockedOrder->id,
-                            'buyer_user_id' => $tx->user_id,
-                            'midtrans_order_id' => $orderId,
-                        ]
-                    );
-                }
-
-                Log::info('MIDTRANS ORDER PAID -> REFERRAL VALID + COMMISSION CREDITED', [
+                Log::info('MIDTRANS ORDER PAID -> FULFILLED', [
                     'midtrans_order_id' => $orderId,
                     'order_db_id' => $lockedOrder->id,
-                    'referrer_id' => $tx->referrer_id,
-                    'buyer_user_id' => $tx->user_id,
-                    'commission' => $commission,
                 ]);
             });
 
@@ -283,7 +330,6 @@ class MidtransWebhookController extends Controller
                 'order_id' => $orderId,
                 'err' => $e->getMessage(),
             ]);
-
             return response()->json(['success' => true, 'ignored' => true, 'message' => 'Order internal error (ignored)'], 200);
         }
     }
