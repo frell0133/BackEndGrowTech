@@ -92,38 +92,40 @@ class MidtransWebhookController extends Controller
 
                     $lockedTopup = WalletTopup::where('id', $topup->id)->lockForUpdate()->first();
 
-                    if (in_array($lockedTopup->status, ['paid', 'success', 'completed'], true)) {
-                        Log::info('MIDTRANS DUPLICATE TOPUP (ALREADY PAID)', [
+                    // idempotent: kalau sudah paid jangan dobel posting
+                    if (in_array($lockedTopup->status, ['paid', 'success', 'completed'], true) || $lockedTopup->posted_to_ledger_at) {
+                        Log::info('MIDTRANS DUPLICATE TOPUP (ALREADY POSTED)', [
                             'order_id' => $orderId,
                             'status' => $lockedTopup->status,
+                            'posted_to_ledger_at' => $lockedTopup->posted_to_ledger_at,
                         ]);
                         return;
                     }
 
-                    $lockedTopup->midtrans_payload = $payload;
+                    // simpan callback ke kolom yang benar
+                    $lockedTopup->raw_callback = $payload;
+                    $lockedTopup->external_id = $payload['transaction_id'] ?? null;
                     $lockedTopup->status = $mapped;
                     $lockedTopup->save();
 
-                    if (!$isPaid || $mapped !== 'paid') return;
+                    // belum paid → stop
+                    if (!$isPaid || $mapped !== 'paid') {
+                        return;
+                    }
 
                     $userId = (int) $lockedTopup->user_id;
                     $amount = (int) $lockedTopup->amount;
 
-                    DB::table('wallets')->where('user_id', $userId)->increment('balance', $amount);
-
+                    // ✅ posting ledger + update wallet balance via LedgerService
                     $ledger->topup(
-                        userId: $userId,
-                        amount: $amount,
-                        reference: $lockedTopup->order_id,
-                        meta: [
-                            'provider' => 'midtrans',
-                            'transaction_status' => $payload['transaction_status'] ?? null,
-                            'payment_type' => $payload['payment_type'] ?? null,
-                            'transaction_id' => $payload['transaction_id'] ?? null,
-                        ]
+                        $userId,
+                        $amount,
+                        $lockedTopup->order_id,  // idempotency key
+                        'Topup via Midtrans'
                     );
 
                     $lockedTopup->status = 'paid';
+                    $lockedTopup->posted_to_ledger_at = now();
                     $lockedTopup->save();
 
                     Log::info('MIDTRANS TOPUP PAID -> WALLET CREDITED', [
@@ -134,7 +136,6 @@ class MidtransWebhookController extends Controller
                 });
 
                 return response()->json(['success' => true, 'message' => 'OK (topup)'], 200);
-
             } catch (\Throwable $e) {
                 Log::error('MIDTRANS TOPUP WEBHOOK ERROR', [
                     'order_id' => $orderId,
@@ -143,6 +144,7 @@ class MidtransWebhookController extends Controller
                 return response()->json(['success' => true, 'ignored' => true, 'message' => 'Topup internal error (ignored)'], 200);
             }
         }
+
 
         /**
          * ==========================================================
