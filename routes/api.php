@@ -20,6 +20,7 @@ use App\Http\Controllers\Api\V1\User\UserWithdrawController;
 use App\Http\Controllers\Api\V1\User\UserVoucherController;
 use App\Http\Controllers\Api\V1\User\UserProfileController;
 use App\Http\Controllers\Api\V1\User\UserTopupController;
+use App\Http\Controllers\Api\V1\User\UserCartController;
 
 // Controllers (Webhook/Simulate)
 use App\Http\Controllers\Api\V1\Webhook\MidtransWebhookController;
@@ -45,10 +46,14 @@ use App\Http\Controllers\Api\V1\Admin\AdminSiteSettingController;
 use App\Http\Controllers\Api\V1\Admin\PaymentGatewayController;
 use App\Http\Controllers\Api\V1\Admin\AdminReferralSettingsController;
 use App\Http\Controllers\Api\V1\Admin\AdminDiscountCampaignController;
-
-// NEW (Admin Category/Subcategory)
 use App\Http\Controllers\Api\V1\Admin\AdminCategoryController;
 use App\Http\Controllers\Api\V1\Admin\AdminSubCategoryController;
+
+// Public 
+use App\Http\Controllers\Api\V1\Public\CategoryController as PublicCategoryController;
+use App\Http\Controllers\Api\V1\Public\SubcategoryController as PublicSubcategoryController;
+
+
 
 // Upload sign (Supabase)
 use App\Http\Controllers\Api\SupabaseUploadController;
@@ -104,6 +109,12 @@ Route::prefix('v1')->group(function () {
 
             // password
             Route::patch('me/password', [UserProfileController::class, 'updatePassword']);
+
+            // Cart
+            Route::get('cart', [UserCartController::class, 'show']);
+            Route::post('cart/items', [UserCartController::class, 'add']);
+            Route::patch('cart/items/{id}', [UserCartController::class, 'update']);
+            Route::delete('cart/items/{id}', [UserCartController::class, 'remove']);
         });
 
         // password reset

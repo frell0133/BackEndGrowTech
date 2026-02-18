@@ -93,6 +93,11 @@ class User extends Authenticatable
         return $this->hasMany(AuditLog::class);
     }
 
+    public function cart()
+    {
+        return $this->hasOne(\App\Models\Cart::class);
+    }
+
     protected static function booted(): void
     {
         static::creating(function ($user) {
