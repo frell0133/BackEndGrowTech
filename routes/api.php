@@ -49,11 +49,9 @@ use App\Http\Controllers\Api\V1\Admin\AdminDiscountCampaignController;
 use App\Http\Controllers\Api\V1\Admin\AdminCategoryController;
 use App\Http\Controllers\Api\V1\Admin\AdminSubCategoryController;
 
-// Public 
+// Controllers (Public Catalog)
 use App\Http\Controllers\Api\V1\Public\CategoryController as PublicCategoryController;
 use App\Http\Controllers\Api\V1\Public\SubcategoryController as PublicSubcategoryController;
-
-
 
 // Upload sign (Supabase)
 use App\Http\Controllers\Api\SupabaseUploadController;
@@ -78,7 +76,37 @@ Route::prefix('v1')->group(function () {
     ]));
 
     // =========================
-    // 1) AUTH
+    // 1) PUBLIC CATALOG (UMUM)
+    // =========================
+
+    // Categories/Subcategories (PUBLIC)
+    Route::get('categories', [PublicCategoryController::class, 'index']);
+    Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories']);
+    Route::get('subcategories', [PublicSubcategoryController::class, 'index']);
+
+    // Products (PUBLIC)
+    Route::get('products', [ProductController::class, 'index']);
+    Route::get('products/{product}', [ProductController::class, 'show']);
+
+    // (optional) availability stub
+    Route::get('products/{product}/availability', fn () => response()->json([
+        'success' => true,
+        'data' => ['available' => null, 'todo' => true],
+        'meta' => (object)[],
+        'error' => null,
+    ]));
+
+    // Content (PUBLIC)
+    Route::prefix('content')->group(function () {
+        Route::get('settings', [ContentController::class, 'settings']);
+        Route::get('banners', [ContentController::class, 'banners']);
+        Route::get('popup', [ContentController::class, 'popup']);
+        Route::get('pages/{slug}', [ContentController::class, 'page']);
+        Route::get('faqs', [ContentController::class, 'faqs']);
+    });
+
+    // =========================
+    // 2) AUTH
     // =========================
     Route::prefix('auth')->group(function () {
 
@@ -93,7 +121,11 @@ Route::prefix('v1')->group(function () {
         Route::get('{provider}/callback', [SocialAuthController::class, 'callback'])
             ->whereIn('provider', ['google', 'discord']);
 
-        // authenticated
+        // password reset (PUBLIC)
+        Route::post('password/forgot', [AuthPasswordController::class, 'forgot']);
+        Route::post('password/reset', [AuthPasswordController::class, 'reset']);
+
+        // authenticated auth endpoints
         Route::middleware('auth:sanctum')->group(function () {
             Route::post('logout', [AuthController::class, 'logout']);
             Route::get('me', [AuthController::class, 'me']);
@@ -109,46 +141,11 @@ Route::prefix('v1')->group(function () {
 
             // password
             Route::patch('me/password', [UserProfileController::class, 'updatePassword']);
-
-            // Cart
-            Route::get('cart', [UserCartController::class, 'show']);
-            Route::post('cart/items', [UserCartController::class, 'add']);
-            Route::patch('cart/items/{id}', [UserCartController::class, 'update']);
-            Route::delete('cart/items/{id}', [UserCartController::class, 'remove']);
         });
-
-        // password reset
-        Route::post('password/forgot', [AuthPasswordController::class, 'forgot']);
-        Route::post('password/reset', [AuthPasswordController::class, 'reset']);
     });
 
     // =========================
-    // 2) PRODUCTS (PUBLIC)
-    // =========================
-    Route::get('products', [ProductController::class, 'index']);
-    Route::get('products/{product}', [ProductController::class, 'show']);
-
-    // (opsional) availability stub
-    Route::get('products/{product}/availability', fn () => response()->json([
-        'success' => true,
-        'data' => ['available' => null, 'todo' => true],
-        'meta' => (object)[],
-        'error' => null,
-    ]));
-
-    // =========================
-    // 3) CONTENT (PUBLIC)
-    // =========================
-    Route::prefix('content')->group(function () {
-        Route::get('settings', [ContentController::class, 'settings']);
-        Route::get('banners', [ContentController::class, 'banners']);
-        Route::get('popup', [ContentController::class, 'popup']);
-        Route::get('pages/{slug}', [ContentController::class, 'page']);
-        Route::get('faqs', [ContentController::class, 'faqs']);
-    });
-
-    // =========================
-    // 4) WEBHOOKS (PUBLIC)
+    // 3) WEBHOOKS (PUBLIC)
     // =========================
     Route::post('webhooks/payments/midtrans', [MidtransWebhookController::class, 'handle']);
 
@@ -159,13 +156,18 @@ Route::prefix('v1')->group(function () {
         'error' => null,
     ]))->where('gateway_code', '^(?!midtrans$).+');
 
-    // Simulate topup pay (public)
+    // Simulate topup pay (PUBLIC)
     Route::post('topups/{orderId}/simulate-pay', [SimulateTopupController::class, 'pay']);
 
     // =========================
-    // 5) USER AREA (AUTH)
+    // 4) USER AREA (AUTH)
     // =========================
     Route::middleware('auth:sanctum')->group(function () {
+
+        Route::get('cart', [UserCartController::class, 'show']);
+        Route::post('cart/items', [UserCartController::class, 'add']);
+        Route::patch('cart/items/{id}', [UserCartController::class, 'update']);
+        Route::delete('cart/items/{id}', [UserCartController::class, 'remove']);
 
         // Orders (User)
         Route::post('orders', [UserOrderController::class, 'store']);
@@ -209,7 +211,7 @@ Route::prefix('v1')->group(function () {
     });
 
     // =========================
-    // 6) ADMIN AREA (AUTH + ROLE)
+    // 5) ADMIN AREA (AUTH + ROLE)
     // =========================
     Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(function () {
 
@@ -348,19 +350,18 @@ Route::prefix('v1')->group(function () {
         Route::patch('faqs/{id}', [AdminFaqController::class, 'update']);
         Route::delete('faqs/{id}', [AdminFaqController::class, 'destroy']);
 
+        // Discount campaigns
         Route::get('discount-campaigns', [AdminDiscountCampaignController::class, 'index']);
         Route::post('discount-campaigns', [AdminDiscountCampaignController::class, 'store']);
         Route::get('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'show']);
         Route::patch('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'update']);
         Route::delete('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'destroy']);
-
         Route::post('discount-campaigns/{id}/targets', [AdminDiscountCampaignController::class, 'addTargets']);
         Route::delete('discount-campaigns/{id}/targets', [AdminDiscountCampaignController::class, 'removeTargets']);
-
     });
 
     // =========================
-    // 7) DEBUG (DEV ONLY)
+    // 6) DEBUG (DEV ONLY)
     // =========================
     Route::get('_debug/db', function () {
         return response()->json([
