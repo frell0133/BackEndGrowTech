@@ -78,7 +78,6 @@ Route::prefix('v1')->group(function () {
     // =========================
     // 1) PUBLIC CATALOG (UMUM)
     // =========================
-
     // Categories/Subcategories (PUBLIC)
     Route::get('categories', [PublicCategoryController::class, 'index']);
     Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories']);
@@ -137,7 +136,7 @@ Route::prefix('v1')->group(function () {
             // avatar (supabase)
             Route::post('me/avatar/sign', [UserProfileController::class, 'signAvatarUpload']);
             Route::patch('me/avatar', [UserProfileController::class, 'updateAvatar']);
-            Route::delete('me/avatar', [UserProfileController::class, 'deleteAvatar']); // optional
+            Route::delete('me/avatar', [UserProfileController::class, 'deleteAvatar']);
 
             // password
             Route::patch('me/password', [UserProfileController::class, 'updatePassword']);
@@ -164,6 +163,21 @@ Route::prefix('v1')->group(function () {
     // =========================
     Route::middleware('auth:sanctum')->group(function () {
 
+        /**
+         * USER CATALOG (ALIAS)
+         * Ini cuma alias supaya "kelihatan" ada di user area.
+         * Fungsinya sama dengan public catalog.
+         */
+        Route::prefix('catalog')->group(function () {
+            Route::get('categories', [PublicCategoryController::class, 'index']);
+            Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories']);
+            Route::get('subcategories', [PublicSubcategoryController::class, 'index']);
+
+            Route::get('products', [ProductController::class, 'index']);
+            Route::get('products/{product}', [ProductController::class, 'show']);
+        });
+
+        // Cart
         Route::get('cart', [UserCartController::class, 'show']);
         Route::post('cart/items', [UserCartController::class, 'add']);
         Route::patch('cart/items/{id}', [UserCartController::class, 'update']);
