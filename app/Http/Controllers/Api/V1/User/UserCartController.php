@@ -26,15 +26,16 @@ class UserCartController extends Controller
         $items = CartItem::query()
             ->where('cart_id', $cart->id)
             ->with([
-                'product:id,category_id,subcategory_id,name,slug,price,thumbnail,is_active,is_published',
+                // jangan select kolom yang belum ada di DB
+                'product:id,category_id,subcategory_id,name,slug,is_active,is_published',
                 'product.category:id,name,slug',
-                'product.subcategory:id,category_id,name,slug,provider,image',
+                // ganti image -> image_path
+                'product.subcategory:id,category_id,name,slug,provider,image_path',
             ])
             ->get()
             ->map(function (CartItem $item) {
                 $p = $item->product;
 
-                // stock from licenses (available)
                 $stock = License::query()
                     ->where('product_id', $item->product_id)
                     ->where('status', License::STATUS_AVAILABLE)
@@ -42,15 +43,19 @@ class UserCartController extends Controller
 
                 $canBuy = (bool) ($p?->is_active && $p?->is_published && $stock > 0);
 
+                // kalau price belum ada di DB, amanin pakai 0 dulu
+                $price = (int) ($p->price ?? 0);
+
                 return [
                     'id' => $item->id,
                     'qty' => $item->qty,
                     'product' => $p,
                     'stock_available' => $stock,
                     'can_buy' => $canBuy,
-                    'line_total' => (int) ($p?->price ?? 0) * (int) $item->qty,
+                    'line_total' => $price * (int) $item->qty,
                 ];
             });
+
 
         $subtotal = $items->sum('line_total');
 
