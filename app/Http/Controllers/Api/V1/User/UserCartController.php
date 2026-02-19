@@ -100,9 +100,9 @@ class UserCartController extends Controller
         $items = CartItem::query()
             ->where('cart_id', $cart->id)
             ->with([
-                'product:id,category_id,subcategory_id,name,slug,price,tier_pricing,is_active,is_published',
-                'product.category:id,name,slug',
-                'product.subcategory:id,category_id,name,slug,provider,image_path',
+                'product',              // ✅ jangan select kolom dulu (anti error kolom hilang)
+                'product.category',
+                'product.subcategory',
             ])
             ->get()
             ->map(function (CartItem $item) use ($role) {
