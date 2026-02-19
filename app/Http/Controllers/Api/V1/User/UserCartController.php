@@ -22,16 +22,20 @@ class UserCartController extends Controller
 {
     use ApiResponse;
 
+    private function requireUser(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return $this->fail('Unauthenticated', 401);
+        }
+        return $user;
+    }
+
     private function cartForUser(int $userId): Cart
     {
         return Cart::firstOrCreate(['user_id' => $userId]);
     }
 
-    /**
-     * Ambil tax percent dari site_settings:
-     * group=payment, key=tax_percent, value={"percent":10}
-     * Default: 0
-     */
     private function getTaxPercent(): int
     {
         $row = Setting::query()
@@ -43,7 +47,6 @@ class UserCartController extends Controller
 
         $val = $row->value;
 
-        // bisa array {"percent":10} / bisa scalar (kalau pernah tersimpan 10)
         if (is_array($val)) {
             return (int) ($val['percent'] ?? 0);
         }
@@ -51,10 +54,6 @@ class UserCartController extends Controller
         return (int) $val;
     }
 
-    /**
-     * Harga konsisten dengan UserOrderController@store:
-     * tier_pricing[role] -> tier_pricing['member'] -> price
-     */
     private function resolveUnitPrice(Product $product, string $role): int
     {
         $tier = (array) ($product->tier_pricing ?? []);
@@ -78,8 +77,10 @@ class UserCartController extends Controller
 
     public function show(Request $request)
     {
-        $user = $request->user();
-        $cart = $this->cartForUser($user->id);
+        $user = $this->requireUser($request);
+        if ($user instanceof \Illuminate\Http\JsonResponse) return $user;
+
+        $cart = $this->cartForUser((int) $user->id);
 
         $role = (string) ($user->role ?? 'member');
         $taxPercent = $this->getTaxPercent(); // default 0
@@ -131,7 +132,6 @@ class UserCartController extends Controller
 
         $subtotal = (float) $items->sum('line_subtotal');
 
-        // belum apply voucher di cart page (biar simpel) => diskon 0
         $discountTotal = 0.0;
 
         $taxAmount = 0.0;
@@ -155,8 +155,10 @@ class UserCartController extends Controller
 
     public function add(Request $request)
     {
-        $userId = $request->user()->id;
-        $cart = $this->cartForUser($userId);
+        $user = $this->requireUser($request);
+        if ($user instanceof \Illuminate\Http\JsonResponse) return $user;
+
+        $cart = $this->cartForUser((int) $user->id);
 
         $v = $request->validate([
             'product_id' => ['required', 'integer', 'min:1'],
@@ -171,9 +173,7 @@ class UserCartController extends Controller
             ->where('is_published', true)
             ->first();
 
-        if (!$product) {
-            return $this->fail('Product not available', 404);
-        }
+        if (!$product) return $this->fail('Product not available', 404);
 
         $stock = License::query()
             ->where('product_id', $product->id)
@@ -205,8 +205,10 @@ class UserCartController extends Controller
 
     public function update(Request $request, int $id)
     {
-        $userId = $request->user()->id;
-        $cart = $this->cartForUser($userId);
+        $user = $this->requireUser($request);
+        if ($user instanceof \Illuminate\Http\JsonResponse) return $user;
+
+        $cart = $this->cartForUser((int) $user->id);
 
         $v = $request->validate([
             'qty' => ['required', 'integer', 'min:1', 'max:99'],
@@ -224,8 +226,10 @@ class UserCartController extends Controller
 
     public function remove(Request $request, int $id)
     {
-        $userId = $request->user()->id;
-        $cart = $this->cartForUser($userId);
+        $user = $this->requireUser($request);
+        if ($user instanceof \Illuminate\Http\JsonResponse) return $user;
+
+        $cart = $this->cartForUser((int) $user->id);
 
         $item = CartItem::query()
             ->where('id', $id)
@@ -237,37 +241,27 @@ class UserCartController extends Controller
         return $this->ok(['message' => 'Removed']);
     }
 
-    /**
-     * POST /api/v1/cart/checkout
-     * Body:
-     * {
-     *   "voucher_code": "PROMO5K" // optional
-     * }
-     *
-     * Result: 1 order + banyak order_items, lalu cart dikosongkan
-     */
     public function checkout(Request $request)
     {
-        $user = $request->user();
-        $cart = $this->cartForUser($user->id);
+        $user = $this->requireUser($request);
+        if ($user instanceof \Illuminate\Http\JsonResponse) return $user;
+
+        $cart = $this->cartForUser((int) $user->id);
 
         $v = $request->validate([
             'voucher_code' => ['nullable', 'string', 'max:50'],
         ]);
 
         $role = (string) ($user->role ?? 'member');
-        $taxPercent = $this->getTaxPercent(); // default 0
+        $taxPercent = $this->getTaxPercent();
 
         $cartItems = CartItem::query()
             ->where('cart_id', $cart->id)
             ->with(['product'])
             ->get();
 
-        if ($cartItems->isEmpty()) {
-            return $this->fail('Cart kosong', 422);
-        }
+        if ($cartItems->isEmpty()) return $this->fail('Cart kosong', 422);
 
-        // validasi product + stock
         foreach ($cartItems as $ci) {
             $p = $ci->product;
             if (!$p || !$p->is_active || !$p->is_published) {
@@ -298,9 +292,8 @@ class UserCartController extends Controller
             }
         }
 
-        return DB::transaction(function () use ($user, $cart, $cartItems, $role, $taxPercent, $v) {
+        return DB::transaction(function () use ($cart, $cartItems, $role, $taxPercent, $v, $user) {
 
-            // hitung subtotal dari semua item
             $computedItems = [];
             $subtotal = 0.0;
 
@@ -322,7 +315,6 @@ class UserCartController extends Controller
                 ];
             }
 
-            // Voucher optional (diskon order-level)
             $discountTotal = 0.0;
             $voucher = null;
 
@@ -330,12 +322,8 @@ class UserCartController extends Controller
                 $code = strtoupper(trim((string) $v['voucher_code']));
 
                 $voucher = Voucher::query()->where('code', $code)->first();
-                if (!$voucher) {
-                    return $this->fail('Voucher tidak ditemukan', 404);
-                }
-                if (!$voucher->is_active) {
-                    return $this->fail('Voucher tidak aktif', 422);
-                }
+                if (!$voucher) return $this->fail('Voucher tidak ditemukan', 404);
+                if (!$voucher->is_active) return $this->fail('Voucher tidak aktif', 422);
                 if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
                     return $this->fail('Voucher sudah kedaluwarsa', 422);
                 }
@@ -351,14 +339,13 @@ class UserCartController extends Controller
 
                 if ($voucher->type == 'percent') {
                     $discountTotal = (float) floor($subtotal * ((float) $voucher->value / 100));
-                } else { // fixed
+                } else {
                     $discountTotal = (float) $voucher->value;
                 }
 
                 if ($discountTotal > $subtotal) $discountTotal = $subtotal;
             }
 
-            // Tax (default 0 dari settings)
             $taxAmount = 0.0;
             if ($taxPercent > 0) {
                 $taxAmount = round($subtotal * ($taxPercent / 100), 2);
@@ -368,7 +355,6 @@ class UserCartController extends Controller
 
             $invoice = 'INV-' . now()->format('Ymd') . '-' . Str::upper(Str::random(8));
 
-            // ✅ 1 order (product_id & qty legacy kita null)
             $order = Order::create([
                 'user_id' => (int) $user->id,
                 'product_id' => null,
@@ -383,7 +369,6 @@ class UserCartController extends Controller
                 'payment_gateway_code' => null,
             ]);
 
-            // insert order_items
             foreach ($computedItems as $it) {
                 OrderItem::create([
                     'order_id' => (int) $order->id,
@@ -396,21 +381,16 @@ class UserCartController extends Controller
                 ]);
             }
 
-            // attach voucher pivot
             if ($voucher) {
                 $order->vouchers()->syncWithoutDetaching([
                     $voucher->id => ['discount_amount' => (float) $discountTotal],
                 ]);
             }
 
-            // clear cart
             CartItem::query()->where('cart_id', (int) $cart->id)->delete();
 
             return $this->ok([
-                'order' => $order->fresh()->load([
-                    'items.product',
-                    'vouchers',
-                ]),
+                'order' => $order->fresh()->load(['items.product','vouchers']),
             ]);
         });
     }
