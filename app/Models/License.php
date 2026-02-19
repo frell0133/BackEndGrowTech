@@ -7,6 +7,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class License extends Model
 {
+    public const STATUS_AVAILABLE = 'available';
+    public const STATUS_USED = 'used';
+    public const STATUS_REVOKED = 'revoked';
+
     protected $fillable = [
         'product_id',
         'license_key',
