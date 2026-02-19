@@ -25,48 +25,71 @@ class OrderFulfillmentService
         }
 
         return DB::transaction(function () use ($order) {
-            $qty = (int) ($order->qty ?? 1);
-            $productId = (int) $order->product_id;
 
-            // Ambil license qty dengan locking supaya gak double terambil
-            $licenses = License::query()
-                ->where('product_id', $productId)
-                ->where('status', 'available')
-                ->lockForUpdate()
-                ->limit($qty)
-                ->get();
+            // Ambil item dari order_items (Opsi B)
+            $items = $order->items()->get();
 
-            if ($licenses->count() < $qty) {
-                // stok kurang
-                // opsional: update status order jadi hold/failed
-                return ['ok' => false, 'message' => 'Stock not enough'];
+            // fallback legacy (kalau order lama belum punya items)
+            if ($items->isEmpty()) {
+                $legacyQty = (int) ($order->qty ?? 1);
+                $legacyProductId = (int) ($order->product_id ?? 0);
+
+                if ($legacyProductId <= 0 || $legacyQty <= 0) {
+                    return ['ok' => false, 'message' => 'Order items empty'];
+                }
+
+                $items = collect([ (object)[
+                    'product_id' => $legacyProductId,
+                    'qty' => $legacyQty,
+                ] ]);
             }
 
-            // mark used
-            $ids = $licenses->pluck('id')->all();
-            License::whereIn('id', $ids)->update([
-                'status' => 'used',
-                'used_at' => now(), // kalau kolom ada
-            ]);
+            $totalQty = (int) $items->sum('qty');
+            $mode = ($totalQty === 1) ? 'one_time' : 'email_only';
 
-            $mode = ($qty === 1) ? 'one_time' : 'email_only';
+            $allAllocated = collect();
 
-            foreach ($licenses as $lic) {
-                Delivery::create([
-                    'order_id' => $order->id,
-                    'license_id' => $lic->id,
-                    'delivery_mode' => $mode,
-                    'reveal_count' => 0,
-                    'revealed_at' => null,
-                    'emailed_at' => ($qty === 1) ? null : now(), // qty>1: langsung email
+            foreach ($items as $it) {
+                $productId = (int) $it->product_id;
+                $qty = (int) ($it->qty ?? 1);
+
+                $licenses = License::query()
+                    ->where('product_id', $productId)
+                    ->where('status', 'available')
+                    ->lockForUpdate()
+                    ->limit($qty)
+                    ->get();
+
+                if ($licenses->count() < $qty) {
+                    return ['ok' => false, 'message' => 'Stock not enough for product_id=' . $productId];
+                }
+
+                // mark used
+                $ids = $licenses->pluck('id')->all();
+                License::whereIn('id', $ids)->update([
+                    'status' => 'used',
+                    'used_at' => now(),
                 ]);
+
+                foreach ($licenses as $lic) {
+                    Delivery::create([
+                        'order_id' => $order->id,
+                        'license_id' => $lic->id,
+                        'delivery_mode' => $mode,
+                        'reveal_count' => 0,
+                        'revealed_at' => null,
+                        'emailed_at' => ($totalQty === 1) ? null : now(),
+                    ]);
+                }
+
+                $allAllocated = $allAllocated->merge($licenses);
             }
 
-            // qty>1: langsung kirim email semua item
-            if ($qty > 1) {
-                $items = $licenses->map(fn($lic) => $this->formatLicense($lic))->values()->all();
+            // qty total > 1 => langsung email semua item
+            if ($totalQty > 1) {
+                $itemsEmail = $allAllocated->map(fn($lic) => $this->formatLicense($lic))->values()->all();
                 Mail::to($order->email ?? $order->user?->email)->send(
-                    new DigitalItemsMail($order, $items)
+                    new DigitalItemsMail($order, $itemsEmail)
                 );
             }
 
@@ -91,4 +114,5 @@ class OrderFulfillmentService
         $data['license_id'] = $license->id;
         return $data;
     }
+    
 }

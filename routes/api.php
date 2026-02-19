@@ -182,6 +182,7 @@ Route::prefix('v1')->group(function () {
         Route::post('cart/items', [UserCartController::class, 'add']);
         Route::patch('cart/items/{id}', [UserCartController::class, 'update']);
         Route::delete('cart/items/{id}', [UserCartController::class, 'remove']);
+        Route::post('cart/checkout', [UserCartController::class, 'checkout']);
 
         // Orders (User)
         Route::post('orders', [UserOrderController::class, 'store']);

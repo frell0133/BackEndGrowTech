@@ -7,8 +7,16 @@ use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\License;
 use App\Models\Product;
+use App\Models\Order;
+use App\Models\OrderItem;
+use App\Models\Voucher;
+use App\Models\Setting;
+use App\Enums\OrderStatus;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class UserCartController extends Controller
 {
@@ -19,21 +27,72 @@ class UserCartController extends Controller
         return Cart::firstOrCreate(['user_id' => $userId]);
     }
 
+    /**
+     * Ambil tax percent dari site_settings:
+     * group=payment, key=tax_percent, value={"percent":10}
+     * Default: 0
+     */
+    private function getTaxPercent(): int
+    {
+        $row = Setting::query()
+            ->where('group', 'payment')
+            ->where('key', 'tax_percent')
+            ->first();
+
+        if (!$row) return 0;
+
+        $val = $row->value;
+
+        // bisa array {"percent":10} / bisa scalar (kalau pernah tersimpan 10)
+        if (is_array($val)) {
+            return (int) ($val['percent'] ?? 0);
+        }
+
+        return (int) $val;
+    }
+
+    /**
+     * Harga konsisten dengan UserOrderController@store:
+     * tier_pricing[role] -> tier_pricing['member'] -> price
+     */
+    private function resolveUnitPrice(Product $product, string $role): int
+    {
+        $tier = (array) ($product->tier_pricing ?? []);
+        $unitPrice = 0;
+
+        if (!empty($tier)) {
+            $unitPrice = (int) ($tier[$role] ?? 0);
+            if ($unitPrice <= 0) $unitPrice = (int) ($tier['member'] ?? 0);
+            if ($unitPrice <= 0) {
+                $vals = array_values($tier);
+                $unitPrice = (int) ($vals[0] ?? 0);
+            }
+        }
+
+        if ($unitPrice <= 0) {
+            $unitPrice = (int) ($product->price ?? 0);
+        }
+
+        return (int) $unitPrice;
+    }
+
     public function show(Request $request)
     {
-        $cart = $this->cartForUser($request->user()->id);
+        $user = $request->user();
+        $cart = $this->cartForUser($user->id);
+
+        $role = (string) ($user->role ?? 'member');
+        $taxPercent = $this->getTaxPercent(); // default 0
 
         $items = CartItem::query()
             ->where('cart_id', $cart->id)
             ->with([
-                // jangan select kolom yang belum ada di DB
-                'product:id,category_id,subcategory_id,name,slug,is_active,is_published',
+                'product:id,category_id,subcategory_id,name,slug,price,tier_pricing,is_active,is_published',
                 'product.category:id,name,slug',
-                // ganti image -> image_path
                 'product.subcategory:id,category_id,name,slug,provider,image_path',
             ])
             ->get()
-            ->map(function (CartItem $item) {
+            ->map(function (CartItem $item) use ($role) {
                 $p = $item->product;
 
                 $stock = License::query()
@@ -43,25 +102,54 @@ class UserCartController extends Controller
 
                 $canBuy = (bool) ($p?->is_active && $p?->is_published && $stock > 0);
 
-                // kalau price belum ada di DB, amanin pakai 0 dulu
-                $price = (int) ($p->price ?? 0);
+                $unitPrice = 0;
+                if ($p) {
+                    $tier = (array) ($p->tier_pricing ?? []);
+                    if (!empty($tier)) {
+                        $unitPrice = (int) ($tier[$role] ?? 0);
+                        if ($unitPrice <= 0) $unitPrice = (int) ($tier['member'] ?? 0);
+                        if ($unitPrice <= 0) {
+                            $vals = array_values($tier);
+                            $unitPrice = (int) ($vals[0] ?? 0);
+                        }
+                    }
+                    if ($unitPrice <= 0) $unitPrice = (int) ($p->price ?? 0);
+                }
+
+                $qty = (int) ($item->qty ?? 1);
 
                 return [
                     'id' => $item->id,
-                    'qty' => $item->qty,
+                    'qty' => $qty,
+                    'unit_price' => (int) $unitPrice,
+                    'line_subtotal' => (int) $unitPrice * $qty,
                     'product' => $p,
                     'stock_available' => $stock,
                     'can_buy' => $canBuy,
-                    'line_total' => $price * (int) $item->qty,
                 ];
             });
 
+        $subtotal = (float) $items->sum('line_subtotal');
 
-        $subtotal = $items->sum('line_total');
+        // belum apply voucher di cart page (biar simpel) => diskon 0
+        $discountTotal = 0.0;
+
+        $taxAmount = 0.0;
+        if ($taxPercent > 0) {
+            $taxAmount = round($subtotal * ($taxPercent / 100), 2);
+        }
+
+        $total = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
 
         return $this->ok([
             'items' => $items,
-            'subtotal' => $subtotal,
+            'summary' => [
+                'subtotal' => $subtotal,
+                'discount_total' => $discountTotal,
+                'tax_percent' => $taxPercent,
+                'tax_amount' => $taxAmount,
+                'total' => $total,
+            ],
         ]);
     }
 
@@ -87,7 +175,6 @@ class UserCartController extends Controller
             return $this->fail('Product not available', 404);
         }
 
-        // optional: blok add kalau benar-benar out of stock
         $stock = License::query()
             ->where('product_id', $product->id)
             ->where('status', License::STATUS_AVAILABLE)
@@ -148,5 +235,183 @@ class UserCartController extends Controller
         $item->delete();
 
         return $this->ok(['message' => 'Removed']);
+    }
+
+    /**
+     * POST /api/v1/cart/checkout
+     * Body:
+     * {
+     *   "voucher_code": "PROMO5K" // optional
+     * }
+     *
+     * Result: 1 order + banyak order_items, lalu cart dikosongkan
+     */
+    public function checkout(Request $request)
+    {
+        $user = $request->user();
+        $cart = $this->cartForUser($user->id);
+
+        $v = $request->validate([
+            'voucher_code' => ['nullable', 'string', 'max:50'],
+        ]);
+
+        $role = (string) ($user->role ?? 'member');
+        $taxPercent = $this->getTaxPercent(); // default 0
+
+        $cartItems = CartItem::query()
+            ->where('cart_id', $cart->id)
+            ->with(['product'])
+            ->get();
+
+        if ($cartItems->isEmpty()) {
+            return $this->fail('Cart kosong', 422);
+        }
+
+        // validasi product + stock
+        foreach ($cartItems as $ci) {
+            $p = $ci->product;
+            if (!$p || !$p->is_active || !$p->is_published) {
+                return $this->fail('Ada product yang tidak tersedia', 422, [
+                    'product_id' => (int) $ci->product_id,
+                ]);
+            }
+
+            $need = (int) ($ci->qty ?? 1);
+            $stock = License::query()
+                ->where('product_id', (int) $ci->product_id)
+                ->where('status', License::STATUS_AVAILABLE)
+                ->count();
+
+            if ($stock < $need) {
+                return $this->fail('Stock tidak cukup', 422, [
+                    'product_id' => (int) $ci->product_id,
+                    'stock_available' => (int) $stock,
+                    'qty_requested' => (int) $need,
+                ]);
+            }
+
+            $unit = $this->resolveUnitPrice($p, $role);
+            if ($unit <= 0) {
+                return $this->fail('Harga product belum diset (tier_pricing/price kosong)', 422, [
+                    'product_id' => (int) $ci->product_id,
+                ]);
+            }
+        }
+
+        return DB::transaction(function () use ($user, $cart, $cartItems, $role, $taxPercent, $v) {
+
+            // hitung subtotal dari semua item
+            $computedItems = [];
+            $subtotal = 0.0;
+
+            foreach ($cartItems as $ci) {
+                $p = $ci->product;
+                $qty = (int) ($ci->qty ?? 1);
+                $unitPrice = $this->resolveUnitPrice($p, $role);
+
+                $line = (float) ($unitPrice * $qty);
+                $subtotal += $line;
+
+                $computedItems[] = [
+                    'product_id' => (int) $p->id,
+                    'qty' => $qty,
+                    'unit_price' => (float) $unitPrice,
+                    'line_subtotal' => (float) $line,
+                    'product_name' => (string) ($p->name ?? null),
+                    'product_slug' => (string) ($p->slug ?? null),
+                ];
+            }
+
+            // Voucher optional (diskon order-level)
+            $discountTotal = 0.0;
+            $voucher = null;
+
+            if (!empty($v['voucher_code'])) {
+                $code = strtoupper(trim((string) $v['voucher_code']));
+
+                $voucher = Voucher::query()->where('code', $code)->first();
+                if (!$voucher) {
+                    return $this->fail('Voucher tidak ditemukan', 404);
+                }
+                if (!$voucher->is_active) {
+                    return $this->fail('Voucher tidak aktif', 422);
+                }
+                if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
+                    return $this->fail('Voucher sudah kedaluwarsa', 422);
+                }
+                if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
+                    return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
+                }
+                if ($voucher->quota !== null) {
+                    $used = $voucher->orders()->count();
+                    if ($used >= (int) $voucher->quota) {
+                        return $this->fail('Kuota voucher sudah habis', 422);
+                    }
+                }
+
+                if ($voucher->type == 'percent') {
+                    $discountTotal = (float) floor($subtotal * ((float) $voucher->value / 100));
+                } else { // fixed
+                    $discountTotal = (float) $voucher->value;
+                }
+
+                if ($discountTotal > $subtotal) $discountTotal = $subtotal;
+            }
+
+            // Tax (default 0 dari settings)
+            $taxAmount = 0.0;
+            if ($taxPercent > 0) {
+                $taxAmount = round($subtotal * ($taxPercent / 100), 2);
+            }
+
+            $amount = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
+
+            $invoice = 'INV-' . now()->format('Ymd') . '-' . Str::upper(Str::random(8));
+
+            // ✅ 1 order (product_id & qty legacy kita null)
+            $order = Order::create([
+                'user_id' => (int) $user->id,
+                'product_id' => null,
+                'invoice_number' => $invoice,
+                'status' => OrderStatus::CREATED->value,
+                'qty' => null,
+                'subtotal' => (float) $subtotal,
+                'discount_total' => (float) $discountTotal,
+                'tax_percent' => (int) $taxPercent,
+                'tax_amount' => (float) $taxAmount,
+                'amount' => (float) $amount,
+                'payment_gateway_code' => null,
+            ]);
+
+            // insert order_items
+            foreach ($computedItems as $it) {
+                OrderItem::create([
+                    'order_id' => (int) $order->id,
+                    'product_id' => (int) $it['product_id'],
+                    'qty' => (int) $it['qty'],
+                    'unit_price' => (float) $it['unit_price'],
+                    'line_subtotal' => (float) $it['line_subtotal'],
+                    'product_name' => $it['product_name'],
+                    'product_slug' => $it['product_slug'],
+                ]);
+            }
+
+            // attach voucher pivot
+            if ($voucher) {
+                $order->vouchers()->syncWithoutDetaching([
+                    $voucher->id => ['discount_amount' => (float) $discountTotal],
+                ]);
+            }
+
+            // clear cart
+            CartItem::query()->where('cart_id', (int) $cart->id)->delete();
+
+            return $this->ok([
+                'order' => $order->fresh()->load([
+                    'items.product',
+                    'vouchers',
+                ]),
+            ]);
+        });
     }
 }

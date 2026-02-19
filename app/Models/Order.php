@@ -13,13 +13,15 @@ class Order extends Model
 {
     protected $fillable = [
         'user_id',
-        'product_id',
+        'product_id', // legacy (nullable)
         'invoice_number',
         'status',
-        'qty',
+        'qty', // legacy (nullable)
         'amount',
         'subtotal',
         'discount_total',
+        'tax_percent',
+        'tax_amount',
         'payment_gateway_code',
     ];
 
@@ -27,6 +29,8 @@ class Order extends Model
         'amount' => 'decimal:2',
         'subtotal' => 'decimal:2',
         'discount_total' => 'decimal:2',
+        'tax_amount' => 'decimal:2',
+        'tax_percent' => 'integer',
         'status' => OrderStatus::class,
     ];
 
@@ -35,9 +39,15 @@ class Order extends Model
         return $this->belongsTo(User::class);
     }
 
+    // legacy (boleh tetap ada)
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);
+    }
+
+    public function items(): HasMany
+    {
+        return $this->hasMany(\App\Models\OrderItem::class);
     }
 
     public function payment(): HasOne
@@ -56,7 +66,7 @@ class Order extends Model
             ->withPivot(['discount_amount'])
             ->withTimestamps();
     }
-    
+
     public function deliveries(): HasMany
     {
         return $this->hasMany(\App\Models\Delivery::class);
