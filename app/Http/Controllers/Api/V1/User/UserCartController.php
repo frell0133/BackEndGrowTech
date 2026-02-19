@@ -47,11 +47,23 @@ class UserCartController extends Controller
 
         $val = $row->value;
 
+        // kalau ternyata string JSON
+        if (is_string($val)) {
+            $decoded = json_decode($val, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $val = $decoded;
+            }
+        }
+
         if (is_array($val)) {
             return (int) ($val['percent'] ?? 0);
         }
 
-        return (int) $val;
+        if (is_numeric($val)) {
+            return (int) $val;
+        }
+
+        return 0;
     }
 
     private function resolveUnitPrice(Product $product, string $role): int
