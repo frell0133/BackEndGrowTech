@@ -65,14 +65,14 @@ return [
     ],
 
     'midtrans' => [
-    'server_key' => env('MIDTRANS_SERVER_KEY'),
-    'snap_url'   => env('MIDTRANS_SNAP_URL', 'https://app.sandbox.midtrans.com/snap/v1/transactions'),
-    'simulate'   => env('MIDTRANS_SIMULATE', false),
+        'server_key' => env('MIDTRANS_SERVER_KEY'),
+        'snap_url'   => env('MIDTRANS_SNAP_URL', 'https://app.sandbox.midtrans.com/snap/v1/transactions'),
+        'simulate'   => env('MIDTRANS_SIMULATE', false),
 
     'brevo' => [
-    'key' => env('BREVO_KEY'),
-    'sender_email' => env('BREVO_SENDER_EMAIL'),
-    'sender_name' => env('BREVO_SENDER_NAME', 'GrowTech Central'),
+        'key' => env('BREVO_KEY'),
+        'sender_email' => env('BREVO_SENDER_EMAIL'),
+        'sender_name' => env('BREVO_SENDER_NAME', 'GrowTech Central'),
 ],
 ],
 
