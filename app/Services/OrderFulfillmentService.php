@@ -6,6 +6,7 @@ use App\Models\Order;
 use App\Models\License;
 use App\Models\Delivery;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\DigitalItemsMail;
 use App\Jobs\SendDigitalItemsFallbackEmail;
@@ -13,21 +14,23 @@ use App\Jobs\SendDigitalItemsFallbackEmail;
 class OrderFulfillmentService
 {
     /**
-     * Fulfill order ketika status payment sudah PAID.
-     * Rules:
-     * - qty total == 1 => one_time (reveal sekali) + fallback email otomatis (delay 3 menit)
-     * - qty total > 1  => email_only langsung kirim email
+     * Fulfill order ketika payment sudah PAID.
+     * - qty total == 1 => one_time + fallback email (delay 3 menit)
+     * - qty total > 1  => email_only langsung (via QUEUE)
+     *
+     * NOTE: Email selalu QUEUE supaya kalau SMTP error tidak rollback transaksi.
      */
     public function fulfillPaidOrder(Order $order): array
     {
-        // cegah dobel fulfill
+        // idempotent: kalau sudah punya deliveries, jangan ulang
         if ($order->deliveries()->count() > 0) {
             return ['ok' => true, 'message' => 'Already fulfilled'];
         }
 
+        $emailTo = $order->email ?? $order->user?->email;
+
         $result = DB::transaction(function () use ($order) {
 
-            // Ambil item dari order_items (Opsi B)
             $items = $order->items()->get();
 
             // fallback legacy (kalau order lama belum punya items)
@@ -86,24 +89,43 @@ class OrderFulfillmentService
                 $allAllocated = $allAllocated->merge($licenses);
             }
 
-            // qty total > 1 => langsung email semua item
-            if ($totalQty > 1) {
-                $itemsEmail = $allAllocated->map(fn($lic) => $this->formatLicense($lic))->values()->all();
-                Mail::to($order->email ?? $order->user?->email)->send(
-                    new DigitalItemsMail($order, $itemsEmail)
-                );
-            }
-
-            return ['ok' => true, 'message' => 'Fulfilled', 'mode' => $mode, 'totalQty' => $totalQty];
+            return [
+                'ok' => true,
+                'message' => 'Fulfilled',
+                'mode' => $mode,
+                'totalQty' => $totalQty,
+                'licenses' => $allAllocated->values(),
+            ];
         });
 
-        // OUTSIDE transaction: schedule fallback email untuk qty==1 (one_time)
-        if (($result['ok'] ?? false) && (($result['totalQty'] ?? 0) === 1)) {
-            // Default delay 3 menit
+        // OUTSIDE TRANSACTION: kirim email via QUEUE supaya tidak rollback
+        if (!($result['ok'] ?? false)) return $result;
+
+        $totalQty = (int) ($result['totalQty'] ?? 0);
+
+        // qty > 1 => email langsung (queue)
+        if ($totalQty > 1) {
+            try {
+                $itemsEmail = collect($result['licenses'] ?? [])
+                    ->map(fn($lic) => $this->formatLicense($lic))
+                    ->values()
+                    ->all();
+
+                Mail::to($emailTo)->queue(new DigitalItemsMail($order, $itemsEmail));
+            } catch (\Throwable $e) {
+                // jangan gagal-kan order
+                Log::error('EMAIL_QUEUE_FAILED (EMAIL_ONLY)', [
+                    'order_id' => $order->id,
+                    'err' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        // qty == 1 => schedule fallback email 3 menit
+        if ($totalQty === 1) {
             $job = SendDigitalItemsFallbackEmail::dispatch($order->id)
                 ->delay(now()->addMinutes(3));
 
-            // kalau Laravel kamu support afterCommit, ini lebih aman
             if (method_exists($job, 'afterCommit')) {
                 $job->afterCommit();
             }

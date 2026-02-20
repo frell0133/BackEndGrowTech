@@ -11,6 +11,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
 class SendDigitalItemsFallbackEmail implements ShouldQueue
@@ -32,23 +33,20 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
 
         if (!$order) return;
 
-        // Hanya untuk kasus qty=1 (one_time), karena qty>1 sudah langsung email saat fulfill
         if ($order->deliveries->count() !== 1) return;
 
         $delivery = $order->deliveries->first();
         if (!$delivery) return;
 
         if ($delivery->delivery_mode !== 'one_time') return;
-
-        // kalau sudah pernah email, stop
         if ($delivery->emailed_at) return;
 
-        DB::transaction(function () use ($order, $delivery) {
+        $emailTo = $order->email ?? $order->user?->email;
 
-            // lock supaya tidak double-send kalau job kepanggil 2x
+        DB::transaction(function () use ($order, $delivery, $emailTo) {
+
             $d = Delivery::where('id', $delivery->id)->lockForUpdate()->first();
             if (!$d) return;
-
             if ($d->emailed_at) return;
 
             $lic = $d->license;
@@ -59,12 +57,16 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
                 'payload' => $lic->payload ?? null,
             ]];
 
-            Mail::to($order->email ?? $order->user?->email)->send(
-                new DigitalItemsMail($order, $items)
-            );
-
-            $d->emailed_at = now();
-            $d->save();
+            try {
+                Mail::to($emailTo)->queue(new DigitalItemsMail($order, $items));
+                $d->emailed_at = now();
+                $d->save();
+            } catch (\Throwable $e) {
+                Log::error('FALLBACK_EMAIL_QUEUE_FAILED', [
+                    'order_id' => $order->id,
+                    'err' => $e->getMessage(),
+                ]);
+            }
         });
     }
 }
