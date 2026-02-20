@@ -196,7 +196,7 @@ Route::prefix('v1')->group(function () {
 
         // Delivery (User)
         Route::get('orders/{id}/delivery', [UserDeliveryController::class, 'info']);
-        Route::post('orders/{id}/w/reveal', [UserDeliveryController::class, 'reveal']);
+        Route::post('orders/{id}/delivery/reveal', [UserDeliveryController::class, 'reveal']);
         Route::post('orders/{id}/delivery/close', [UserDeliveryController::class, 'close']);
         Route::post('orders/{id}/delivery/resend', [UserDeliveryController::class, 'resend']);
 
