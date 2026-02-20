@@ -56,6 +56,8 @@ use App\Http\Controllers\Api\V1\Public\SubcategoryController as PublicSubcategor
 // Upload sign (Supabase)
 use App\Http\Controllers\Api\SupabaseUploadController;
 
+use App\Services\BrevoMailService;
+
 Route::prefix('v1')->group(function () {
 
     // =========================
@@ -402,6 +404,21 @@ Route::prefix('v1')->group(function () {
             'mail_host' => config('mail.mailers.smtp.host'),
             'mail_port' => config('mail.mailers.smtp.port'),
         ]);
+    });
+
+    Route::get('/test-brevo', function () {
+        $to = request()->query('to');
+
+        if (!$to) {
+            return response()->json(['error' => 'missing ?to=email']);
+        }
+
+        $html = "<h1>Test Email GrowTech</h1><p>Jika ini masuk, berarti Brevo API OK.</p>";
+
+        $res = app(BrevoMailService::class)
+            ->sendHtml($to, 'Test Brevo GrowTech', $html);
+
+        return response()->json($res);
     });
 
 });
