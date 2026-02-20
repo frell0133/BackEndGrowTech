@@ -152,17 +152,32 @@ class MidtransWebhookController extends Controller
          * ==========================================================
          */
         $order = Order::query()
+            // match utama: invoice_number (paling umum)
             ->where('invoice_number', $orderId)
+
+            // fallback: match via payment.external_id
+            ->orWhereHas('payment', function ($q) use ($orderId) {
+                $q->where('external_id', $orderId);
+            })
+
             ->with('payment')
             ->first();
 
         if (!$order) {
             Log::warning('MIDTRANS NO MATCH TOPUP/ORDER (IGNORED)', [
                 'order_id' => $orderId,
+                'status_code' => $statusCode,
+                'gross_amount' => $grossAmount,
                 'transaction_status' => $transactionStatus,
                 'payment_type' => $paymentType,
+                'note' => 'No match on Order.invoice_number OR Payment.external_id',
             ]);
-            return response()->json(['success' => true, 'ignored' => true, 'message' => 'No matching topup/order (ignored)'], 200);
+
+            return response()->json([
+                'success' => true,
+                'ignored' => true,
+                'message' => 'No matching topup/order (ignored)',
+            ], 200);
         }
 
         try {
