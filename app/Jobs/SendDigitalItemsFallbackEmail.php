@@ -2,17 +2,15 @@
 
 namespace App\Jobs;
 
-use App\Mail\DigitalItemsMail;
 use App\Models\Delivery;
 use App\Models\Order;
+use App\Services\BrevoMailService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 
 class SendDigitalItemsFallbackEmail implements ShouldQueue
 {
@@ -33,23 +31,30 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
 
         if (!$order) return;
 
+        // Hanya untuk kasus qty=1 (one_time), karena qty>1 sudah langsung email saat fulfill
         if ($order->deliveries->count() !== 1) return;
 
         $delivery = $order->deliveries->first();
         if (!$delivery) return;
 
         if ($delivery->delivery_mode !== 'one_time') return;
+
+        // kalau sudah pernah email, stop
         if ($delivery->emailed_at) return;
 
-        $emailTo = $order->email ?? $order->user?->email;
+        DB::transaction(function () use ($order, $delivery) {
 
-        DB::transaction(function () use ($order, $delivery, $emailTo) {
-
+            // lock supaya tidak double-send kalau job kepanggil 2x
             $d = Delivery::where('id', $delivery->id)->lockForUpdate()->first();
             if (!$d) return;
+
             if ($d->emailed_at) return;
 
             $lic = $d->license;
+            if (!$lic) return;
+
+            $to = $order->email ?? $order->user?->email;
+            if (!$to) return;
 
             $items = [[
                 'license_id' => $lic->id,
@@ -57,15 +62,17 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
                 'payload' => $lic->payload ?? null,
             ]];
 
-            try {
-                Mail::to($emailTo)->queue(new DigitalItemsMail($order, $items));
+            $html = view('emails.digital-items', [
+                'order' => $order,
+                'items' => $items,
+            ])->render();
+
+            $brevo = app(BrevoMailService::class);
+            $res = $brevo->sendHtml($to, 'Pesanan GrowTech - Digital Items', $html);
+
+            if ($res['ok']) {
                 $d->emailed_at = now();
                 $d->save();
-            } catch (\Throwable $e) {
-                Log::error('FALLBACK_EMAIL_QUEUE_FAILED', [
-                    'order_id' => $order->id,
-                    'err' => $e->getMessage(),
-                ]);
             }
         });
     }

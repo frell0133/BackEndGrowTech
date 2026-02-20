@@ -6,31 +6,27 @@ use App\Models\Order;
 use App\Models\License;
 use App\Models\Delivery;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
-use App\Mail\DigitalItemsMail;
 use App\Jobs\SendDigitalItemsFallbackEmail;
+use App\Services\BrevoMailService;
 
 class OrderFulfillmentService
 {
     /**
-     * Fulfill order ketika payment sudah PAID.
-     * - qty total == 1 => one_time + fallback email (delay 3 menit)
-     * - qty total > 1  => email_only langsung (via QUEUE)
-     *
-     * NOTE: Email selalu QUEUE supaya kalau SMTP error tidak rollback transaksi.
+     * Fulfill order ketika status payment sudah PAID.
+     * Rules:
+     * - qty total == 1 => one_time (reveal sekali) + fallback email otomatis (delay 3 menit)
+     * - qty total > 1  => email_only langsung kirim email (via Brevo API)
      */
     public function fulfillPaidOrder(Order $order): array
     {
-        // idempotent: kalau sudah punya deliveries, jangan ulang
+        // cegah dobel fulfill
         if ($order->deliveries()->count() > 0) {
             return ['ok' => true, 'message' => 'Already fulfilled'];
         }
 
-        $emailTo = $order->email ?? $order->user?->email;
-
         $result = DB::transaction(function () use ($order) {
 
+            // Ambil item dari order_items (Opsi B)
             $items = $order->items()->get();
 
             // fallback legacy (kalau order lama belum punya items)
@@ -68,12 +64,14 @@ class OrderFulfillmentService
                     return ['ok' => false, 'message' => 'Stock not enough for product_id=' . $productId];
                 }
 
-                // mark used
-                $ids = $licenses->pluck('id')->all();
-                License::whereIn('id', $ids)->update([
-                    'status' => 'used',
-                    'used_at' => now(),
-                ]);
+                // mark as sold + assign to order
+                License::query()
+                    ->whereIn('id', $licenses->pluck('id')->all())
+                    ->update([
+                        'status' => 'sold',
+                        'order_id' => $order->id,
+                        'sold_at' => now(),
+                    ]);
 
                 foreach ($licenses as $lic) {
                     Delivery::create([
@@ -82,50 +80,67 @@ class OrderFulfillmentService
                         'delivery_mode' => $mode,
                         'reveal_count' => 0,
                         'revealed_at' => null,
-                        'emailed_at' => ($totalQty === 1) ? null : now(),
+
+                        // ✅ JANGAN set emailed_at sebelum email benar-benar sukses
+                        'emailed_at' => null,
                     ]);
                 }
 
                 $allAllocated = $allAllocated->merge($licenses);
             }
 
-            return [
-                'ok' => true,
-                'message' => 'Fulfilled',
-                'mode' => $mode,
-                'totalQty' => $totalQty,
-                'licenses' => $allAllocated->values(),
-            ];
+            return ['ok' => true, 'message' => 'Fulfilled', 'mode' => $mode, 'totalQty' => $totalQty];
         });
 
-        // OUTSIDE TRANSACTION: kirim email via QUEUE supaya tidak rollback
-        if (!($result['ok'] ?? false)) return $result;
+        // OUTSIDE transaction: qty total > 1 => langsung email semua item via Brevo API
+        if (($result['ok'] ?? false) && (($result['totalQty'] ?? 0) > 1)) {
+            $to = $order->email ?? $order->user?->email;
 
-        $totalQty = (int) ($result['totalQty'] ?? 0);
+            if ($to) {
+                // ambil semua delivery order ini + licenses
+                $deliveries = Delivery::query()
+                    ->where('order_id', $order->id)
+                    ->with('license')
+                    ->get();
 
-        // qty > 1 => email langsung (queue)
-        if ($totalQty > 1) {
-            try {
-                $itemsEmail = collect($result['licenses'] ?? [])
-                    ->map(fn($lic) => $this->formatLicense($lic))
+                $itemsEmail = $deliveries
+                    ->map(fn($d) => $this->formatLicense($d->license))
                     ->values()
                     ->all();
 
-                Mail::to($emailTo)->queue(new DigitalItemsMail($order, $itemsEmail));
-            } catch (\Throwable $e) {
-                // jangan gagal-kan order
-                Log::error('EMAIL_QUEUE_FAILED (EMAIL_ONLY)', [
-                    'order_id' => $order->id,
-                    'err' => $e->getMessage(),
-                ]);
+                $html = view('emails.digital-items', [
+                    'order' => $order,
+                    'items' => $itemsEmail,
+                ])->render();
+
+                $brevo = app(BrevoMailService::class);
+                $res = $brevo->sendHtml($to, 'Pesanan GrowTech - Digital Items', $html);
+
+                if ($res['ok']) {
+                    // ✅ tandai emailed setelah sukses
+                    Delivery::query()
+                        ->where('order_id', $order->id)
+                        ->where('delivery_mode', 'email_only')
+                        ->whereNull('emailed_at')
+                        ->update(['emailed_at' => now()]);
+                } else {
+                    // ❌ biarkan emailed_at null agar bisa retry
+                    return [
+                        'ok' => false,
+                        'message' => 'Brevo send failed',
+                        'details' => $res,
+                    ];
+                }
             }
         }
 
-        // qty == 1 => schedule fallback email 3 menit
-        if ($totalQty === 1) {
+        // OUTSIDE transaction: schedule fallback email untuk qty==1 (one_time)
+        if (($result['ok'] ?? false) && (($result['totalQty'] ?? 0) === 1)) {
+            // Default delay 3 menit
             $job = SendDigitalItemsFallbackEmail::dispatch($order->id)
                 ->delay(now()->addMinutes(3));
 
+            // kalau Laravel kamu support afterCommit, ini lebih aman
             if (method_exists($job, 'afterCommit')) {
                 $job->afterCommit();
             }
