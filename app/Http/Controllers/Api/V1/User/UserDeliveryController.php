@@ -16,6 +16,18 @@ class UserDeliveryController extends Controller
 {
     use ApiResponse;
 
+    private function computeTotalQty(Order $order): int
+    {
+        // order_items adalah sumber utama untuk order baru (cart checkout)
+        if ($order->relationLoaded('items')) {
+            $sum = (int) $order->items->sum('qty');
+            if ($sum > 0) return $sum;
+        }
+
+        // fallback legacy
+        return (int) ($order->qty ?? 1);
+    }
+
     public function info(Request $request, $id)
     {
         $user = $request->user();
@@ -23,23 +35,25 @@ class UserDeliveryController extends Controller
         $order = Order::query()
             ->where('id', $id)
             ->where('user_id', $user->id)
-            ->with(['deliveries.license','product'])
+            ->with(['items', 'deliveries.license', 'product'])
             ->first();
 
         if (!$order) return $this->fail('Order not found', 404);
 
-        $qty = (int) ($order->qty ?? 1);
+        $qty = $this->computeTotalQty($order);
+
+        $delivery = $order->deliveries->first();
 
         // info untuk FE: boleh reveal atau tidak
         $canReveal = ($qty === 1)
             && $order->deliveries->count() === 1
-            && $order->deliveries->first()->delivery_mode === 'one_time'
-            && $order->deliveries->first()->revealed_at === null;
+            && ($delivery?->delivery_mode === 'one_time')
+            && ($delivery?->revealed_at === null);
 
         return $this->ok([
             'order_id' => $order->id,
             'qty' => $qty,
-            'delivery_mode' => $qty === 1 ? 'one_time' : 'email_only',
+            'delivery_mode' => $delivery?->delivery_mode ?? ($qty === 1 ? 'one_time' : 'email_only'),
             'deliveries_count' => $order->deliveries->count(),
             'can_reveal' => $canReveal,
             'emailed' => $order->deliveries->whereNotNull('emailed_at')->count() > 0,
@@ -47,7 +61,7 @@ class UserDeliveryController extends Controller
     }
 
     /**
-     * Reveal one-time (qty==1 only)
+     * Reveal one-time (qty total==1 only)
      */
     public function reveal(Request $request, $id, OrderFulfillmentService $fulfill)
     {
@@ -56,7 +70,7 @@ class UserDeliveryController extends Controller
         $order = Order::query()
             ->where('id', $id)
             ->where('user_id', $user->id)
-            ->with(['deliveries.license','product'])
+            ->with(['items', 'deliveries.license', 'product'])
             ->first();
 
         if (!$order) return $this->fail('Order not found', 404);
@@ -66,10 +80,10 @@ class UserDeliveryController extends Controller
             $r = $fulfill->fulfillPaidOrder($order);
             if (!($r['ok'] ?? false)) return $this->fail($r['message'] ?? 'Cannot fulfill', 422);
 
-            $order->refresh()->load(['deliveries.license','product']);
+            $order->refresh()->load(['items', 'deliveries.license', 'product']);
         }
 
-        $qty = (int) ($order->qty ?? 1);
+        $qty = $this->computeTotalQty($order);
         if ($qty !== 1) return $this->fail('Reveal only available for qty=1', 422);
 
         $delivery = $order->deliveries->first();
@@ -86,6 +100,8 @@ class UserDeliveryController extends Controller
         // Lock supaya tidak bisa reveal 2x dalam race condition
         $payload = DB::transaction(function () use ($delivery) {
             $d = Delivery::where('id', $delivery->id)->lockForUpdate()->first();
+            if (!$d) return null;
+
             if ($d->revealed_at) {
                 return null;
             }
@@ -95,6 +111,7 @@ class UserDeliveryController extends Controller
             $d->save();
 
             $lic = $d->license;
+
             // return data yang akan ditampilkan di modal
             $data = [];
             if (isset($lic->code) && $lic->code) $data['code'] = $lic->code;
@@ -121,12 +138,12 @@ class UserDeliveryController extends Controller
         $order = Order::query()
             ->where('id', $id)
             ->where('user_id', $user->id)
-            ->with(['deliveries.license','product'])
+            ->with(['items', 'deliveries.license', 'product'])
             ->first();
 
         if (!$order) return $this->fail('Order not found', 404);
 
-        $qty = (int) ($order->qty ?? 1);
+        $qty = $this->computeTotalQty($order);
         if ($qty !== 1) return $this->fail('Close flow only for qty=1', 422);
 
         $delivery = $order->deliveries->first();
@@ -139,6 +156,8 @@ class UserDeliveryController extends Controller
         // kirim email + mark emailed_at (lock)
         DB::transaction(function () use ($delivery, $order) {
             $d = Delivery::where('id', $delivery->id)->lockForUpdate()->first();
+            if (!$d) return;
+
             if ($d->emailed_at) return;
 
             $lic = $d->license;
@@ -169,7 +188,7 @@ class UserDeliveryController extends Controller
         $order = Order::query()
             ->where('id', $id)
             ->where('user_id', $user->id)
-            ->with(['deliveries.license','product'])
+            ->with(['items', 'deliveries.license', 'product'])
             ->first();
 
         if (!$order) return $this->fail('Order not found', 404);

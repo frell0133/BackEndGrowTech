@@ -8,14 +8,15 @@ use App\Models\Delivery;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\DigitalItemsMail;
+use App\Jobs\SendDigitalItemsFallbackEmail;
 
 class OrderFulfillmentService
 {
     /**
      * Fulfill order ketika status payment sudah PAID.
      * Rules:
-     * - qty == 1 => one_time (reveal sekali) + email setelah close
-     * - qty > 1  => email_only langsung kirim email
+     * - qty total == 1 => one_time (reveal sekali) + fallback email otomatis (delay 3 menit)
+     * - qty total > 1  => email_only langsung kirim email
      */
     public function fulfillPaidOrder(Order $order): array
     {
@@ -24,7 +25,7 @@ class OrderFulfillmentService
             return ['ok' => true, 'message' => 'Already fulfilled'];
         }
 
-        return DB::transaction(function () use ($order) {
+        $result = DB::transaction(function () use ($order) {
 
             // Ambil item dari order_items (Opsi B)
             $items = $order->items()->get();
@@ -38,10 +39,10 @@ class OrderFulfillmentService
                     return ['ok' => false, 'message' => 'Order items empty'];
                 }
 
-                $items = collect([ (object)[
+                $items = collect([(object)[
                     'product_id' => $legacyProductId,
                     'qty' => $legacyQty,
-                ] ]);
+                ]]);
             }
 
             $totalQty = (int) $items->sum('qty');
@@ -93,26 +94,36 @@ class OrderFulfillmentService
                 );
             }
 
-            return ['ok' => true, 'message' => 'Fulfilled', 'mode' => $mode];
+            return ['ok' => true, 'message' => 'Fulfilled', 'mode' => $mode, 'totalQty' => $totalQty];
         });
+
+        // OUTSIDE transaction: schedule fallback email untuk qty==1 (one_time)
+        if (($result['ok'] ?? false) && (($result['totalQty'] ?? 0) === 1)) {
+            // Default delay 3 menit
+            $job = SendDigitalItemsFallbackEmail::dispatch($order->id)
+                ->delay(now()->addMinutes(3));
+
+            // kalau Laravel kamu support afterCommit, ini lebih aman
+            if (method_exists($job, 'afterCommit')) {
+                $job->afterCommit();
+            }
+        }
+
+        return $result;
     }
 
     public function formatLicense(License $license): array
     {
-        // sesuaikan dengan struktur kolom licenses kamu:
-        // - kalau punya "code" => kirim code
-        // - kalau punya "payload" json => kirim payload
         $data = [];
 
         if (isset($license->code) && $license->code) {
             $data['code'] = $license->code;
         }
         if (isset($license->payload) && $license->payload) {
-            $data['payload'] = $license->payload; // kalau json
+            $data['payload'] = $license->payload;
         }
 
         $data['license_id'] = $license->id;
         return $data;
     }
-    
 }
