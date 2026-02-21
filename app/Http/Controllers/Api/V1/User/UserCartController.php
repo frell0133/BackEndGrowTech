@@ -406,4 +406,127 @@ class UserCartController extends Controller
             ]);
         });
     }
+    
+    public function checkoutPreview(Request $request)
+    {
+        $user = $this->requireUser($request);
+        if ($user instanceof \Illuminate\Http\JsonResponse) return $user;
+
+        $cart = $this->cartForUser((int) $user->id);
+
+        $v = $request->validate([
+            'voucher_code' => ['nullable', 'string', 'max:50'],
+        ]);
+
+        $role = (string) ($user->role ?? 'member');
+        $taxPercent = $this->getTaxPercent();
+
+        $cartItems = CartItem::query()
+            ->where('cart_id', $cart->id)
+            ->with(['product'])
+            ->get();
+
+        if ($cartItems->isEmpty()) return $this->fail('Cart kosong', 422);
+
+        // ✅ validasi product + stock + harga (sama seperti checkout POST)
+        foreach ($cartItems as $ci) {
+            $p = $ci->product;
+            if (!$p || !$p->is_active || !$p->is_published) {
+                return $this->fail('Ada product yang tidak tersedia', 422, [
+                    'product_id' => (int) $ci->product_id,
+                ]);
+            }
+
+            $need = (int) ($ci->qty ?? 1);
+            $stock = License::query()
+                ->where('product_id', (int) $ci->product_id)
+                ->where('status', License::STATUS_AVAILABLE)
+                ->count();
+
+            if ($stock < $need) {
+                return $this->fail('Stock tidak cukup', 422, [
+                    'product_id' => (int) $ci->product_id,
+                    'stock_available' => (int) $stock,
+                    'qty_requested' => (int) $need,
+                ]);
+            }
+
+            $unit = $this->resolveUnitPrice($p, $role);
+            if ($unit <= 0) {
+                return $this->fail('Harga product belum diset (tier_pricing/price kosong)', 422, [
+                    'product_id' => (int) $ci->product_id,
+                ]);
+            }
+        }
+
+        // ✅ hitung items + subtotal
+        $items = [];
+        $subtotal = 0.0;
+
+        foreach ($cartItems as $ci) {
+            $p = $ci->product;
+            $qty = (int) ($ci->qty ?? 1);
+            $unitPrice = $this->resolveUnitPrice($p, $role);
+
+            $line = (float) ($unitPrice * $qty);
+            $subtotal += $line;
+
+            $items[] = [
+                'product_id' => (int) $p->id,
+                'qty' => $qty,
+                'unit_price' => (float) $unitPrice,
+                'line_subtotal' => (float) $line,
+                'product' => $p,
+            ];
+        }
+
+        // ✅ voucher (copas logic dari checkout POST kamu biar konsisten)
+        $discountTotal = 0.0;
+
+        if (!empty($v['voucher_code'])) {
+            $code = strtoupper(trim((string) $v['voucher_code']));
+
+            $voucher = Voucher::query()->where('code', $code)->first();
+            if (!$voucher) return $this->fail('Voucher tidak ditemukan', 404);
+            if (!$voucher->is_active) return $this->fail('Voucher tidak aktif', 422);
+            if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
+                return $this->fail('Voucher sudah kedaluwarsa', 422);
+            }
+            if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
+                return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
+            }
+            if ($voucher->quota !== null) {
+                $used = $voucher->orders()->count();
+                if ($used >= (int) $voucher->quota) {
+                    return $this->fail('Kuota voucher sudah habis', 422);
+                }
+            }
+
+            if ($voucher->type == 'percent') {
+                $discountTotal = (float) floor($subtotal * ((float) $voucher->value / 100));
+            } else {
+                $discountTotal = (float) $voucher->value;
+            }
+
+            if ($discountTotal > $subtotal) $discountTotal = $subtotal;
+        }
+
+        $taxAmount = 0.0;
+        if ($taxPercent > 0) {
+            $taxAmount = round($subtotal * ($taxPercent / 100), 2);
+        }
+
+        $total = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
+
+        return $this->ok([
+            'items' => $items,
+            'summary' => [
+                'subtotal' => $subtotal,
+                'discount_total' => $discountTotal,
+                'tax_percent' => $taxPercent,
+                'tax_amount' => $taxAmount,
+                'total' => $total,
+            ],
+        ]);
+    }
 }

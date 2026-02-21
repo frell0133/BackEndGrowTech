@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Public;
 
 use App\Http\Controllers\Controller;
-use App\Models\SubCategory; // ✅ FIX
+use App\Models\SubCategory;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -21,6 +21,7 @@ class SubcategoryController extends Controller
                 'id',
                 'category_id',
                 'name',
+                'description',
                 'slug',
                 'provider',
                 'image_url',

@@ -11,9 +11,9 @@
     <ul>
       @foreach($items as $item)
         <li style="margin-bottom:10px;">
-          <b>Item</b> (License ID: {{ $item['license_id'] }})<br/>
-          @if(!empty($item['code']))
-            <div><b>Code:</b> {{ $item['code'] }}</div>
+          <b>Item</b><br/>
+          @if(!empty($item['license_key']))
+            <div><b>License Key:</b> {{ $item['license_key'] }}</div>
           @endif
 
           @if(!empty($item['payload']))

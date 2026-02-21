@@ -37,6 +37,7 @@ class AdminSubCategoryController extends Controller
             'image_path'  => ['nullable','string','max:2000'],
             'is_active'   => ['boolean'],
             'sort_order'  => ['required','integer','min:1'],
+            'description' => ['nullable', 'string'],
         ]);
 
         $sub = SubCategory::create($validated);
@@ -63,6 +64,7 @@ class AdminSubCategoryController extends Controller
             'image_path'  => ['nullable','string','max:2000'],
             'is_active'   => ['boolean'],
             'sort_order'  => ['sometimes','integer','min:1'],
+            'description' => ['nullable','string'],
         ]);
 
         $sub->update($validated);

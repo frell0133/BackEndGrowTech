@@ -20,6 +20,12 @@ class Product extends Model
         'is_active',
         'is_published',
         'price',
+
+        'track_stock',
+        'stock_min_alert',
+
+        'rating',         // ✅ add
+        'rating_count',   // ✅ add
     ];
 
     protected $casts = [
@@ -28,11 +34,16 @@ class Product extends Model
         'is_published' => 'boolean',
         'duration_days' => 'integer',
         'price' => 'integer',
+        'track_stock' => 'boolean',
+        'stock_min_alert' => 'integer',
+
+        'rating' => 'float',          // ✅ add
+        'rating_count' => 'integer',  // ✅ add
     ];
 
-    public function licenses(): HasMany
+    public function licenses()
     {
-        return $this->hasMany(License::class);
+        return $this->hasMany(\App\Models\License::class);
     }
 
     public function orders(): HasMany
@@ -49,4 +60,5 @@ class Product extends Model
     {
         return $this->belongsTo(Category::class, 'category_id');
     }
+    
 }

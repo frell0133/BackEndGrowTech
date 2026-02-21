@@ -153,14 +153,17 @@ class OrderFulfillmentService
     {
         $data = [];
 
-        if (isset($license->code) && $license->code) {
-            $data['code'] = $license->code;
+        if (!empty($license->code)) {
+            $data['license_key'] = $license->code;
         }
-        if (isset($license->payload) && $license->payload) {
+
+        if (!empty($license->payload)) {
             $data['payload'] = $license->payload;
         }
 
-        $data['license_id'] = $license->id;
+        // ❌ hapus ini:
+        // $data['license_id'] = $license->id;
+
         return $data;
     }
 }

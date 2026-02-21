@@ -37,7 +37,7 @@ class CategoryController extends Controller
             ->firstOrFail();
 
         $data = $category->subcategories()
-            ->select('id', 'category_id', 'name', 'slug', 'provider', 'image', 'is_active')
+            ->select('id', 'category_id', 'name', 'description', 'slug', 'provider', 'image_url', 'image_path', 'is_active')
             ->where('is_active', true)
             ->whereHas('products', function ($q) {
                 $q->where('is_active', true)->where('is_published', true);

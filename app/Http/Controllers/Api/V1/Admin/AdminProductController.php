@@ -53,11 +53,19 @@ class AdminProductController extends Controller
             'tier_pricing' => ['required','array'], // {"member":19500,"reseller":18500}
             'is_active' => ['nullable','boolean'],
             'is_published' => ['nullable','boolean'],
+            'track_stock' => ['nullable','boolean'],
+            'stock_min_alert' => ['nullable','integer','min:0'],
+            'rating' => ['nullable','numeric','min:0','max:5'],
+            'rating_count' => ['nullable','integer','min:0'],
         ]);
 
         $v['slug'] = $v['slug'] ?? Str::slug($v['name']);
         $v['is_active'] = $v['is_active'] ?? true;
         $v['is_published'] = $v['is_published'] ?? false;
+        $v['track_stock'] = $v['track_stock'] ?? true;
+        $v['stock_min_alert'] = $v['stock_min_alert'] ?? 0;
+        $v['rating'] = $v['rating'] ?? 0;
+        $v['rating_count'] = $v['rating_count'] ?? 0;
 
         $p = Product::create($v);
 
@@ -84,6 +92,10 @@ class AdminProductController extends Controller
             'tier_pricing' => ['sometimes','array'],
             'is_active' => ['sometimes','boolean'],
             'is_published' => ['sometimes','boolean'],
+            'track_stock' => ['sometimes','boolean'],
+            'stock_min_alert' => ['sometimes','integer','min:0'],
+            'rating' => ['sometimes','numeric','min:0','max:5'],
+            'rating_count' => ['sometimes','integer','min:0'],
         ]);
 
         // optional: auto slug kalau name diubah tapi slug tidak dikirim
