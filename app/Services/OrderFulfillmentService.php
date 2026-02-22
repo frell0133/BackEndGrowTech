@@ -100,7 +100,7 @@ class OrderFulfillmentService
                 // ambil semua delivery order ini + licenses
                 $deliveries = Delivery::query()
                     ->where('order_id', $order->id)
-                    ->with('license')
+                    ->with('license.product')
                     ->get();
 
                 $itemsEmail = $deliveries
@@ -153,17 +153,34 @@ class OrderFulfillmentService
     {
         $data = [];
 
-        if (!empty($license->code)) {
-            $data['license_key'] = $license->code;
+        // ✅ Nama product (biar jelas key ini product apa)
+        $data['product_name'] = $license->product?->name ?? null;
+
+        // ✅ Ini yang tampil di admin: license_key
+        $data['license_key'] = $license->license_key ?? null;
+
+        // ✅ Extra info kalau ada
+        $payload = [];
+
+        // metadata (jsonb)
+        if (!empty($license->metadata)) {
+            $meta = $license->metadata;
+
+            // kalau metadata masih string json, decode
+            if (is_string($meta)) {
+                $decoded = json_decode($meta, true);
+                if (json_last_error() === JSON_ERROR_NONE) $meta = $decoded;
+            }
+
+            $payload['metadata'] = $meta;
         }
 
-        if (!empty($license->payload)) {
-            $data['payload'] = $license->payload;
-        }
+        if (!empty($license->data_other)) $payload['data_other'] = $license->data_other;
+        if (!empty($license->note))      $payload['note'] = $license->note;
 
-        // ❌ hapus ini:
-        // $data['license_id'] = $license->id;
+        if (!empty($payload)) $data['payload'] = $payload;
 
         return $data;
     }
+
 }

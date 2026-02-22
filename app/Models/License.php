@@ -29,6 +29,7 @@ class License extends Model
         'taken_at' => 'datetime',
         'reserved_at' => 'datetime',
         'delivered_at' => 'datetime',
+        'metadata' => 'array',
     ];
 
     public function product(): BelongsTo

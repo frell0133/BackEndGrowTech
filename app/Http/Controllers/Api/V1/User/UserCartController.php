@@ -504,7 +504,6 @@ class UserCartController extends Controller
             ];
         }
 
-        // ✅ voucher (copas logic dari checkout POST kamu biar konsisten)
         $discountTotal = 0.0;
 
         if (!empty($v['voucher_code'])) {
@@ -553,4 +552,5 @@ class UserCartController extends Controller
             ],
         ]);
     }
+    
 }
