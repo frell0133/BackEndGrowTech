@@ -137,7 +137,7 @@ class UserDeliveryController extends Controller
     /**
      * Close modal => kirim email (qty==1 only, setelah reveal)
      */
-    public function close(Request $request, $id, OrderFulfillmentService $fulfill)
+    public function close(Request $request, $id, OrderFulfillmentService $fulfill, BrevoMailService $brevo)
     {
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
@@ -158,36 +158,58 @@ class UserDeliveryController extends Controller
         $to = $order->email ?? $order->user?->email;
         if (!$to) return $this->fail('Order email not found', 422);
 
-        // kirim email + mark emailed_at (lock)
-        DB::transaction(function () use ($delivery, $order, $to, $fulfill) {
+        // ✅ kirim email + mark emailed_at (lock)
+        $result = DB::transaction(function () use ($delivery, $order, $to, $fulfill, $brevo) {
             $d = Delivery::query()
                 ->where('id', $delivery->id)
                 ->lockForUpdate()
                 ->with(['license.product'])
                 ->first();
 
-            if (!$d || !$d->license) return;
-            if ($d->emailed_at) return;
+            if (!$d || !$d->license) {
+                return ['ok' => false, 'message' => 'License not found'];
+            }
+
+            if ($d->emailed_at) {
+                return ['ok' => true, 'message' => 'Already emailed'];
+            }
 
             $items = [
                 $fulfill->formatLicense($d->license)
             ];
 
-            Mail::to($to)->send(
-                new DigitalItemsMail($order, $items)
-            );
+            $html = view('emails.digital-items', [
+                'order' => $order,
+                'items' => $items,
+            ])->render();
 
+            $res = $brevo->sendHtml($to, 'Pesanan GrowTech - Digital Items', $html);
+
+            if (!($res['ok'] ?? false)) {
+                // ❌ jangan set emailed_at kalau gagal
+                return ['ok' => false, 'message' => 'Brevo send failed', 'details' => $res];
+            }
+
+            // ✅ tandai emailed_at kalau sukses
             $d->emailed_at = now();
             $d->save();
+
+            return ['ok' => true, 'message' => 'Email sent'];
         });
 
-        return $this->ok(['message' => 'Email sent']);
+        if (!($result['ok'] ?? false)) {
+            return $this->fail($result['message'] ?? 'Failed', 500, [
+                'details' => $result['details'] ?? null
+            ]);
+        }
+
+        return $this->ok(['message' => $result['message']]);
     }
 
     /**
      * Resend email (qty>1 atau qty==1 yang sudah reveal)
      */
-    public function resend(Request $request, $id, OrderFulfillmentService $fulfill)
+    public function resend(Request $request, $id, OrderFulfillmentService $fulfill, BrevoMailService $brevo)
     {
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
@@ -200,18 +222,36 @@ class UserDeliveryController extends Controller
         $to = $order->email ?? $order->user?->email;
         if (!$to) return $this->fail('Order email not found', 422);
 
-        $items = $order->deliveries->map(function ($d) use ($fulfill) {
+        // ambil deliveries fresh supaya aman
+        $deliveries = Delivery::query()
+            ->where('order_id', $order->id)
+            ->with(['license.product'])
+            ->get();
+
+        if ($deliveries->isEmpty()) return $this->fail('No deliveries yet', 422);
+
+        $items = $deliveries->map(function ($d) use ($fulfill) {
             if (!$d->license) return null;
             return $fulfill->formatLicense($d->license);
         })->filter()->values()->all();
 
-        Mail::to($to)->send(
-            new DigitalItemsMail($order, $items)
-        );
+        $html = view('emails.digital-items', [
+            'order' => $order,
+            'items' => $items,
+        ])->render();
 
-        // optional: update emailed_at untuk semua deliveries
+        $res = $brevo->sendHtml($to, 'Pesanan GrowTech - Digital Items', $html);
+
+        if (!($res['ok'] ?? false)) {
+            return $this->fail('Brevo send failed', 500, [
+                'details' => $res
+            ]);
+        }
+
+        // tandai emailed_at untuk semua deliveries
         Delivery::where('order_id', $order->id)->update(['emailed_at' => now()]);
 
         return $this->ok(['message' => 'Resent']);
     }
+
 }
