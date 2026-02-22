@@ -406,7 +406,7 @@ class UserCartController extends Controller
             ]);
         });
     }
-    
+
     public function checkoutPreview(Request $request)
     {
         $user = $this->requireUser($request);
@@ -426,7 +426,31 @@ class UserCartController extends Controller
             ->with(['product'])
             ->get();
 
-        if ($cartItems->isEmpty()) return $this->fail('Cart kosong', 422);
+        if ($cartItems->isEmpty()) {
+            $lastOrder = \App\Models\Order::query()
+                ->where('user_id', $user->id)
+                ->with(['items.product'])
+                ->latest('id')
+                ->first();
+
+            if (!$lastOrder) {
+                return $this->fail('Cart kosong', 422);
+            }
+
+            // balikin data seperti "checkout view" tapi sumbernya dari order
+            return $this->ok([
+                'mode' => 'order',
+                'order' => $lastOrder,
+                'items' => $lastOrder->items,
+                'summary' => [
+                    'subtotal' => (float) $lastOrder->subtotal,
+                    'discount_total' => (float) $lastOrder->discount_total,
+                    'tax_percent' => (int) ($lastOrder->tax_percent ?? 0),
+                    'tax_amount' => (float) $lastOrder->tax_amount,
+                    'total' => (float) $lastOrder->amount,
+                ],
+            ]);
+        }
 
         // ✅ validasi product + stock + harga (sama seperti checkout POST)
         foreach ($cartItems as $ci) {
