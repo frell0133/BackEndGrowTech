@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\DigitalItemsMail;
 use App\Services\OrderFulfillmentService;
+use App\Services\BrevoMailService;
 
 class UserDeliveryController extends Controller
 {
@@ -158,7 +159,6 @@ class UserDeliveryController extends Controller
         $to = $order->email ?? $order->user?->email;
         if (!$to) return $this->fail('Order email not found', 422);
 
-        // ✅ kirim email + mark emailed_at (lock)
         $result = DB::transaction(function () use ($delivery, $order, $to, $fulfill, $brevo) {
             $d = Delivery::query()
                 ->where('id', $delivery->id)
@@ -171,12 +171,10 @@ class UserDeliveryController extends Controller
             }
 
             if ($d->emailed_at) {
-                return ['ok' => true, 'message' => 'Already emailed'];
+                return ['ok' => true, 'message' => 'Email already sent'];
             }
 
-            $items = [
-                $fulfill->formatLicense($d->license)
-            ];
+            $items = [$fulfill->formatLicense($d->license)];
 
             $html = view('emails.digital-items', [
                 'order' => $order,
@@ -186,11 +184,9 @@ class UserDeliveryController extends Controller
             $res = $brevo->sendHtml($to, 'Pesanan GrowTech - Digital Items', $html);
 
             if (!($res['ok'] ?? false)) {
-                // ❌ jangan set emailed_at kalau gagal
                 return ['ok' => false, 'message' => 'Brevo send failed', 'details' => $res];
             }
 
-            // ✅ tandai emailed_at kalau sukses
             $d->emailed_at = now();
             $d->save();
 
@@ -198,9 +194,8 @@ class UserDeliveryController extends Controller
         });
 
         if (!($result['ok'] ?? false)) {
-            return $this->fail($result['message'] ?? 'Failed', 500, [
-                'details' => $result['details'] ?? null
-            ]);
+            // jangan bocorin detail besar, tapi cukup
+            return $this->fail($result['message'] ?? 'Failed', 500);
         }
 
         return $this->ok(['message' => $result['message']]);
@@ -222,7 +217,7 @@ class UserDeliveryController extends Controller
         $to = $order->email ?? $order->user?->email;
         if (!$to) return $this->fail('Order email not found', 422);
 
-        // ambil deliveries fresh supaya aman
+        // ambil deliveries fresh
         $deliveries = Delivery::query()
             ->where('order_id', $order->id)
             ->with(['license.product'])
@@ -230,10 +225,10 @@ class UserDeliveryController extends Controller
 
         if ($deliveries->isEmpty()) return $this->fail('No deliveries yet', 422);
 
-        $items = $deliveries->map(function ($d) use ($fulfill) {
-            if (!$d->license) return null;
-            return $fulfill->formatLicense($d->license);
-        })->filter()->values()->all();
+        $items = $deliveries->map(fn($d) => $d->license ? $fulfill->formatLicense($d->license) : null)
+            ->filter()
+            ->values()
+            ->all();
 
         $html = view('emails.digital-items', [
             'order' => $order,
@@ -243,15 +238,11 @@ class UserDeliveryController extends Controller
         $res = $brevo->sendHtml($to, 'Pesanan GrowTech - Digital Items', $html);
 
         if (!($res['ok'] ?? false)) {
-            return $this->fail('Brevo send failed', 500, [
-                'details' => $res
-            ]);
+            return $this->fail('Brevo send failed', 500);
         }
 
-        // tandai emailed_at untuk semua deliveries
         Delivery::where('order_id', $order->id)->update(['emailed_at' => now()]);
 
         return $this->ok(['message' => 'Resent']);
     }
-
 }
