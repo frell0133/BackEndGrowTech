@@ -22,7 +22,7 @@ class DigitalItemsMail extends Mailable
 
     public function build()
     {
-        return $this->subject('Pesanan Digital Kamu #' . $this->order->id)
+        return $this->subject('Invoice ' . $this->order->invoice_number . ' - Pesanan Digital Kamu')
             ->view('emails.digital-items')
             ->with([
                 'order' => $this->order,
