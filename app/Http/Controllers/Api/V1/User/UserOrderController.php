@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers\Api\V1\User;
 
+use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
-use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Payment;
@@ -14,10 +17,8 @@ use App\Services\LedgerService;
 use App\Services\MidtransService;
 use App\Services\OrderFulfillmentService;
 use App\Support\ApiResponse;
-use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
+use App\Jobs\SendInvoiceEmailJob;
+use App\Http\Controllers\Controller;
 
 class UserOrderController extends Controller
 {
@@ -246,6 +247,15 @@ class UserOrderController extends Controller
                     }
 
                     $locked->update(['status' => OrderStatus::FULFILLED->value]);
+                    
+                    // ✅ kirim invoice email (async) setelah transaksi commit
+                    DB::afterCommit(function () use ($locked) {
+                        $job = SendInvoiceEmailJob::dispatch((int) $locked->id)->delay(now()->addSeconds(5));
+
+                        if (method_exists($job, 'afterCommit')) {
+                            $job->afterCommit();
+                        }
+                    });
 
                     return $this->ok([
                         'method' => 'wallet',

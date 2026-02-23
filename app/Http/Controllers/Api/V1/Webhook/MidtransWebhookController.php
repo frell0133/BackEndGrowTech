@@ -15,6 +15,7 @@ use App\Services\OrderFulfillmentService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use App\Jobs\SendInvoiceEmailJob;
 
 class MidtransWebhookController extends Controller
 {
@@ -333,6 +334,15 @@ class MidtransWebhookController extends Controller
                 // tandai fulfilled (enum)
                 $lockedOrder->status = OrderStatus::FULFILLED->value;
                 $lockedOrder->save();
+
+                // ✅ kirim invoice email (async) setelah commit
+                DB::afterCommit(function () use ($lockedOrder) {
+                    $job = SendInvoiceEmailJob::dispatch((int) $lockedOrder->id)->delay(now()->addSeconds(5));
+
+                    if (method_exists($job, 'afterCommit')) {
+                        $job->afterCommit();
+                    }
+                });
 
                 Log::info('MIDTRANS ORDER PAID -> FULFILLED', [
                     'midtrans_order_id' => $orderId,
