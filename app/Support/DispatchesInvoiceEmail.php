@@ -9,13 +9,12 @@ use Illuminate\Support\Facades\Log;
 trait DispatchesInvoiceEmail
 {
     /**
-     * Dispatch invoice email setelah transaksi commit.
+     * Dispatch invoice email setelah transaksi commit (QUEUE ONLY).
      *
-     * Strategi:
-     * - Tetap kirim ke queue (normal production flow)
-     * - Tambahkan fallback sync agar tetap terkirim walau queue worker belum jalan
-     *
-     * Aman dari double send karena SendInvoiceEmailJob sudah cek invoice_emailed_at.
+     * Kenapa queue-only:
+     * - Menghindari request payment timeout (500) saat API email lambat
+     * - Menghindari "sudah sukses tapi client lihat error"
+     * - Lebih aman untuk wallet dan midtrans webhook
      */
     protected function dispatchInvoiceEmailAfterCommit(
         int $orderId,
@@ -30,22 +29,18 @@ trait DispatchesInvoiceEmail
             ]);
 
             try {
-                // 1) dispatch async ke queue (flow normal)
-                $job = SendInvoiceEmailJob::dispatch($orderId)->delay(now()->addSeconds(5));
+                $job = SendInvoiceEmailJob::dispatch($orderId)->delay(now()->addSeconds(3));
 
                 if (method_exists($job, 'afterCommit')) {
                     $job->afterCommit();
                 }
 
-                // 2) fallback sync (jika queue worker belum aktif)
-                // Anti double-send ditangani di job (invoice_emailed_at)
-                SendInvoiceEmailJob::dispatchSync($orderId);
-
-                Log::info('INVOICE DISPATCH SYNC FALLBACK DONE', [
+                Log::info('INVOICE QUEUED', [
                     'source' => $source,
                     'order_id' => $orderId,
                 ]);
             } catch (\Throwable $e) {
+                // Dispatch queue gagal (jarang, tapi tetap dicatat)
                 Log::error('INVOICE DISPATCH FAILED', [
                     'source' => $source,
                     'order_id' => $orderId,
