@@ -25,7 +25,8 @@ class UserDeliveryController extends Controller
             ->with([
                 'items',                 // order_items (kalau ada)
                 'deliveries.license.product', // ✅ penting: license + product
-                'product',               // legacy (kalau masih dipakai)
+                'product',
+                'payment',             
             ])
             ->first();
     }
@@ -67,6 +68,10 @@ class UserDeliveryController extends Controller
             'deliveries_count' => $order->deliveries->count(),
             'can_reveal' => $canReveal,
             'emailed' => $order->deliveries->whereNotNull('emailed_at')->count() > 0,
+
+            // debug tambahan
+            'order_status' => (string) ($order->status?->value ?? $order->status),
+            'payment_status' => (string) ($order->payment->status?->value ?? $order->payment->status ?? null),
         ]);
     }
 

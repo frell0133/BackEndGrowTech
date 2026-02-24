@@ -8,6 +8,7 @@ use App\Models\Delivery;
 use Illuminate\Support\Facades\DB;
 use App\Jobs\SendDigitalItemsFallbackEmail;
 use App\Services\BrevoMailService;
+use Illuminate\Support\Facades\Log;
 
 class OrderFulfillmentService
 {
@@ -19,22 +20,37 @@ class OrderFulfillmentService
      */
     public function fulfillPaidOrder(Order $order): array
     {
-        // cegah dobel fulfill
+        Log::info('FULFILL START', [
+            'order_id' => $order->id,
+            'invoice_number' => $order->invoice_number ?? null,
+        ]);
+
         if ($order->deliveries()->count() > 0) {
+            Log::info('FULFILL SKIP ALREADY_DELIVERED', ['order_id' => $order->id]);
             return ['ok' => true, 'message' => 'Already fulfilled'];
         }
 
         $result = DB::transaction(function () use ($order) {
-
-            // Ambil item dari order_items (Opsi B)
             $items = $order->items()->get();
 
-            // fallback legacy (kalau order lama belum punya items)
+            Log::info('FULFILL ITEMS CHECK', [
+                'order_id' => $order->id,
+                'items_count' => $items->count(),
+                'legacy_product_id' => $order->product_id ?? null,
+                'legacy_qty' => $order->qty ?? null,
+            ]);
+
             if ($items->isEmpty()) {
                 $legacyQty = (int) ($order->qty ?? 1);
                 $legacyProductId = (int) ($order->product_id ?? 0);
 
                 if ($legacyProductId <= 0 || $legacyQty <= 0) {
+                    Log::error('FULFILL FAIL ORDER_ITEMS_EMPTY', [
+                        'order_id' => $order->id,
+                        'legacy_product_id' => $legacyProductId,
+                        'legacy_qty' => $legacyQty,
+                    ]);
+
                     return ['ok' => false, 'message' => 'Order items empty'];
                 }
 
@@ -47,8 +63,6 @@ class OrderFulfillmentService
             $totalQty = (int) $items->sum('qty');
             $mode = ($totalQty === 1) ? 'one_time' : 'email_only';
 
-            $allAllocated = collect();
-
             foreach ($items as $it) {
                 $productId = (int) $it->product_id;
                 $qty = (int) ($it->qty ?? 1);
@@ -60,11 +74,25 @@ class OrderFulfillmentService
                     ->limit($qty)
                     ->get();
 
+                Log::info('FULFILL STOCK CHECK', [
+                    'order_id' => $order->id,
+                    'product_id' => $productId,
+                    'need_qty' => $qty,
+                    'available_found' => $licenses->count(),
+                    'license_ids' => $licenses->pluck('id')->all(),
+                ]);
+
                 if ($licenses->count() < $qty) {
+                    Log::error('FULFILL FAIL STOCK_NOT_ENOUGH', [
+                        'order_id' => $order->id,
+                        'product_id' => $productId,
+                        'need_qty' => $qty,
+                        'available_found' => $licenses->count(),
+                    ]);
+
                     return ['ok' => false, 'message' => 'Stock not enough for product_id=' . $productId];
                 }
 
-                // mark as sold + assign to order
                 License::query()
                     ->whereIn('id', $licenses->pluck('id')->all())
                     ->update([
@@ -80,24 +108,30 @@ class OrderFulfillmentService
                         'delivery_mode' => $mode,
                         'reveal_count' => 0,
                         'revealed_at' => null,
-
-                        // ✅ JANGAN set emailed_at sebelum email benar-benar sukses
                         'emailed_at' => null,
                     ]);
                 }
-
-                $allAllocated = $allAllocated->merge($licenses);
             }
+
+            Log::info('FULFILL SUCCESS ALLOCATION_DONE', [
+                'order_id' => $order->id,
+                'total_qty' => $totalQty,
+                'mode' => $mode,
+            ]);
 
             return ['ok' => true, 'message' => 'Fulfilled', 'mode' => $mode, 'totalQty' => $totalQty];
         });
 
-        // OUTSIDE transaction: qty total > 1 => langsung email semua item via Brevo API
+        // Email untuk qty > 1
         if (($result['ok'] ?? false) && (($result['totalQty'] ?? 0) > 1)) {
             $to = $order->email ?? $order->user?->email;
 
+            Log::info('FULFILL EMAIL_ONLY SEND_ATTEMPT', [
+                'order_id' => $order->id,
+                'to' => $to,
+            ]);
+
             if ($to) {
-                // ambil semua delivery order ini + licenses
                 $deliveries = Delivery::query()
                     ->where('order_id', $order->id)
                     ->with('license.product')
@@ -116,31 +150,33 @@ class OrderFulfillmentService
                 $brevo = app(BrevoMailService::class);
                 $res = $brevo->sendHtml($to, 'Pesanan GrowTech - Digital Items', $html);
 
-                if ($res['ok']) {
-                    // ✅ tandai emailed setelah sukses
+                if ($res['ok'] ?? false) {
                     Delivery::query()
                         ->where('order_id', $order->id)
                         ->where('delivery_mode', 'email_only')
                         ->whereNull('emailed_at')
                         ->update(['emailed_at' => now()]);
+
+                    Log::info('FULFILL EMAIL_ONLY SEND_SUCCESS', ['order_id' => $order->id]);
                 } else {
-                    // ❌ biarkan emailed_at null agar bisa retry
+                    Log::error('FULFILL EMAIL_ONLY SEND_FAIL', [
+                        'order_id' => $order->id,
+                        'brevo_response' => $res,
+                    ]);
+
                     return [
                         'ok' => false,
                         'message' => 'Brevo send failed',
                         'details' => $res,
                     ];
                 }
+            } else {
+                Log::error('FULFILL EMAIL_ONLY NO_RECIPIENT', ['order_id' => $order->id]);
             }
         }
 
-        // OUTSIDE transaction: schedule fallback email untuk qty==1 (one_time)
         if (($result['ok'] ?? false) && (($result['totalQty'] ?? 0) === 1)) {
-            // Default delay 3 menit
-            $job = SendDigitalItemsFallbackEmail::dispatch($order->id)
-                ->delay(now()->addMinutes(3));
-
-            // kalau Laravel kamu support afterCommit, ini lebih aman
+            $job = SendDigitalItemsFallbackEmail::dispatch($order->id)->delay(now()->addMinutes(3));
             if (method_exists($job, 'afterCommit')) {
                 $job->afterCommit();
             }

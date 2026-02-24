@@ -43,7 +43,7 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
         if ($deliveries->isEmpty()) return;
 
         // ✅ kalau sudah emailed sukses, jangan kirim lagi
-        $alreadyEmailed = $deliveries->firstWhere(fn ($d) => !empty($d->emailed_at));
+        $alreadyEmailed = $deliveries->first(fn ($d) => !empty($d->emailed_at));
         if ($alreadyEmailed) return;
 
         $itemsEmail = $deliveries
