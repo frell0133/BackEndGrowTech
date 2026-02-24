@@ -248,15 +248,15 @@ class UserOrderController extends Controller
                     }
 
                     $locked->update(['status' => OrderStatus::FULFILLED->value]);
-
                     // ✅ kirim invoice email (async) setelah transaksi commit
-                    DB::afterCommit(function () use ($lockedOrder) {
-                        Log::info('INVOICE DISPATCH', [
+                    DB::afterCommit(function () use ($locked) {
+                        \Illuminate\Support\Facades\Log::info('INVOICE DISPATCH', [
                             'source' => 'wallet_paid',
-                            'order_id' => $lockedOrder->id,
+                            'order_id' => (int) $locked->id,
+                            'invoice_number' => $locked->invoice_number,
                         ]);
 
-                        $job = SendInvoiceEmailJob::dispatch((int) $lockedOrder->id)->delay(now()->addSeconds(5));
+                        $job = SendInvoiceEmailJob::dispatch((int) $locked->id)->delay(now()->addSeconds(5));
 
                         if (method_exists($job, 'afterCommit')) {
                             $job->afterCommit();
