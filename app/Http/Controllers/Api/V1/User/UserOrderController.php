@@ -20,10 +20,11 @@ use App\Support\ApiResponse;
 use App\Jobs\SendInvoiceEmailJob;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Log;
+use App\Support\DispatchesInvoiceEmail;
 
 class UserOrderController extends Controller
 {
-    use ApiResponse;
+    use ApiResponse, DispatchesInvoiceEmail;
 
     /**
      * POST /api/v1/orders (BUY NOW)

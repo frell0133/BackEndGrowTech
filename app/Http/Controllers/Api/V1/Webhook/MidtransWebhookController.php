@@ -16,9 +16,12 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Jobs\SendInvoiceEmailJob;
+use App\Support\DispatchesInvoiceEmail;
 
 class MidtransWebhookController extends Controller
 {
+    use DispatchesInvoiceEmail;
+    
     public function handle(Request $request, LedgerService $ledger, OrderFulfillmentService $fulfillment)
     {
         $payload = $request->all();
