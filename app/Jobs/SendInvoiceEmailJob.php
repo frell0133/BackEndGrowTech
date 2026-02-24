@@ -16,7 +16,6 @@ class SendInvoiceEmailJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $orderId;
-
     public int $tries = 3;
 
     public function __construct(int $orderId)
@@ -29,8 +28,8 @@ class SendInvoiceEmailJob implements ShouldQueue
         $order = Order::query()
             ->with([
                 'user',
-                'product',        // legacy fallback
-                'items.product',
+                'product',       // legacy fallback
+                'items.product', // multi-item (opsi B)
                 'payment',
             ])
             ->find($this->orderId);
@@ -40,7 +39,7 @@ class SendInvoiceEmailJob implements ShouldQueue
             return;
         }
 
-        // ✅ idempotent (anti double-send)
+        // anti double send
         if (!empty($order->invoice_emailed_at)) {
             Log::info('SendInvoiceEmailJob: already sent', ['order_id' => $order->id]);
             return;
@@ -52,31 +51,30 @@ class SendInvoiceEmailJob implements ShouldQueue
             return;
         }
 
-        // Ambil item order (multi-item)
         $items = $order->items;
 
-        // fallback legacy order (single product)
+        // fallback legacy single-product order
         if ($items->isEmpty() && !empty($order->product_id)) {
+            $legacyQty = (int) ($order->qty ?? 1);
+            $legacySubtotal = (float) ($order->subtotal ?? $order->amount ?? 0);
+            $legacyUnit = $legacyQty > 0 ? ($legacySubtotal / $legacyQty) : 0;
+
             $items = collect([
                 (object) [
-                    'qty' => (int) ($order->qty ?? 1),
-                    'price' => (float) ($order->subtotal ?? $order->amount ?? 0),
-                    'subtotal' => (float) ($order->subtotal ?? $order->amount ?? 0),
+                    'qty' => $legacyQty,
+                    'unit_price' => $legacyUnit,
+                    'line_subtotal' => $legacySubtotal,
                     'product' => $order->product,
                 ]
             ]);
         }
 
         $mappedItems = collect($items)->map(function ($it) {
-            $qty = (int) ($it->qty ?? 1);
-            $subtotal = (float) ($it->subtotal ?? 0);
-            $price = (float) ($it->price ?? ($qty > 0 ? $subtotal / $qty : 0));
-
             return [
                 'name' => $it->product->name ?? 'Product',
-                'qty' => $qty,
-                'price' => $price,
-                'subtotal' => $subtotal,
+                'qty' => (int) ($it->qty ?? 1),
+                'price' => (float) ($it->unit_price ?? 0),
+                'subtotal' => (float) ($it->line_subtotal ?? 0),
             ];
         })->values()->all();
 
@@ -85,7 +83,9 @@ class SendInvoiceEmailJob implements ShouldQueue
             $paymentStatus = $paymentStatus->value ?? '-';
         }
 
-        $paymentMethod = $order->payment_gateway_code ?: ($order->payment?->gateway_code ?? '-');
+        $paymentMethod = $order->payment?->gateway_code
+            ?? $order->payment_gateway_code
+            ?? '-';
 
         $html = view('emails.invoice', [
             'order' => $order,
@@ -100,10 +100,12 @@ class SendInvoiceEmailJob implements ShouldQueue
             $res = $brevo->sendHtml($to, $subject, $html);
 
             if (!($res['ok'] ?? false)) {
+                $body = $res['body'] ?? null;
+
                 $order->forceFill([
-                    'invoice_email_error' => is_string($res['body'] ?? null)
-                        ? mb_substr((string) $res['body'], 0, 2000)
-                        : mb_substr(json_encode($res['body'] ?? [], JSON_UNESCAPED_UNICODE), 0, 2000),
+                    'invoice_email_error' => is_string($body)
+                        ? mb_substr($body, 0, 2000)
+                        : mb_substr(json_encode($body, JSON_UNESCAPED_UNICODE), 0, 2000),
                 ])->save();
 
                 Log::error('SendInvoiceEmailJob: brevo failed', [
@@ -133,7 +135,7 @@ class SendInvoiceEmailJob implements ShouldQueue
                 'error' => $e->getMessage(),
             ]);
 
-            throw $e; // biar queue retry
+            throw $e; // retry queue
         }
     }
 }

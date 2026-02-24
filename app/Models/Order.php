@@ -32,6 +32,7 @@ class Order extends Model
         'tax_amount' => 'decimal:2',
         'tax_percent' => 'integer',
         'status' => OrderStatus::class,
+        'invoice_emailed_at' => 'datetime',
     ];
 
     public function user(): BelongsTo

@@ -13,6 +13,7 @@ use App\Models\Voucher;
 use App\Models\Setting;
 use App\Enums\OrderStatus;
 use App\Support\ApiResponse;
+use App\Jobs\SendInvoiceEmailJob;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -100,7 +101,7 @@ class UserCartController extends Controller
         $items = CartItem::query()
             ->where('cart_id', $cart->id)
             ->with([
-                'product',              // ✅ jangan select kolom dulu (anti error kolom hilang)
+                'product',
                 'product.category',
                 'product.subcategory',
             ])
@@ -304,7 +305,7 @@ class UserCartController extends Controller
             }
         }
 
-        return DB::transaction(function () use ($cart, $cartItems, $role, $taxPercent, $v, $user) {
+        $response = DB::transaction(function () use ($cart, $cartItems, $role, $taxPercent, $v, $user) {
 
             $computedItems = [];
             $subtotal = 0.0;
@@ -401,10 +402,21 @@ class UserCartController extends Controller
 
             CartItem::query()->where('cart_id', (int) $cart->id)->delete();
 
+            // ✅ invoice langsung dikirim setelah order berhasil dibuat (tanpa menunggu payment success)
+            DB::afterCommit(function () use ($order) {
+                $job = SendInvoiceEmailJob::dispatch((int) $order->id)->delay(now()->addSeconds(3));
+
+                if (method_exists($job, 'afterCommit')) {
+                    $job->afterCommit();
+                }
+            });
+
             return $this->ok([
                 'order' => $order->fresh()->load(['items.product','vouchers']),
             ]);
         });
+
+        return $response;
     }
 
     public function checkoutPreview(Request $request)
@@ -437,7 +449,6 @@ class UserCartController extends Controller
                 return $this->fail('Cart kosong', 422);
             }
 
-            // balikin data seperti "checkout view" tapi sumbernya dari order
             return $this->ok([
                 'mode' => 'order',
                 'order' => $lastOrder,
@@ -452,7 +463,6 @@ class UserCartController extends Controller
             ]);
         }
 
-        // ✅ validasi product + stock + harga (sama seperti checkout POST)
         foreach ($cartItems as $ci) {
             $p = $ci->product;
             if (!$p || !$p->is_active || !$p->is_published) {
@@ -483,7 +493,6 @@ class UserCartController extends Controller
             }
         }
 
-        // ✅ hitung items + subtotal
         $items = [];
         $subtotal = 0.0;
 
@@ -525,7 +534,7 @@ class UserCartController extends Controller
                 }
             }
 
-            if ($voucher->type == 'percent') {
+            if ($voucher->type === 'percent') {
                 $discountTotal = (float) floor($subtotal * ((float) $voucher->value / 100));
             } else {
                 $discountTotal = (float) $voucher->value;
@@ -542,6 +551,7 @@ class UserCartController extends Controller
         $total = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
 
         return $this->ok([
+            'mode' => 'cart',
             'items' => $items,
             'summary' => [
                 'subtotal' => $subtotal,
@@ -552,5 +562,4 @@ class UserCartController extends Controller
             ],
         ]);
     }
-    
 }
