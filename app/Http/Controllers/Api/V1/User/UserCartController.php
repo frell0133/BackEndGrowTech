@@ -13,7 +13,6 @@ use App\Models\Voucher;
 use App\Models\Setting;
 use App\Enums\OrderStatus;
 use App\Support\ApiResponse;
-use App\Jobs\SendInvoiceEmailJob;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;

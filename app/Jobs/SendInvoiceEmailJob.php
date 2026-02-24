@@ -85,7 +85,7 @@ class SendInvoiceEmailJob implements ShouldQueue
                 'name' => $it->product->name ?? 'Product',
                 'qty' => (int) ($it->qty ?? 1),
                 'price' => (float) ($it->unit_price ?? 0),
-                'subtotal' => (float) ($it->line_subtotal ?? 0),
+                'subtotal' => (float) ($it->line_subtotal ?? $it->line_total ?? 0),
             ];
         })->values()->all();
 
