@@ -402,15 +402,6 @@ class UserCartController extends Controller
 
             CartItem::query()->where('cart_id', (int) $cart->id)->delete();
 
-            // ✅ invoice langsung dikirim setelah order berhasil dibuat (tanpa menunggu payment success)
-            DB::afterCommit(function () use ($order) {
-                $job = SendInvoiceEmailJob::dispatch((int) $order->id)->delay(now()->addSeconds(3));
-
-                if (method_exists($job, 'afterCommit')) {
-                    $job->afterCommit();
-                }
-            });
-
             return $this->ok([
                 'order' => $order->fresh()->load(['items.product','vouchers']),
             ]);

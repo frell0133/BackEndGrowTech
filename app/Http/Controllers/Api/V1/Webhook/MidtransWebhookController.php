@@ -337,6 +337,12 @@ class MidtransWebhookController extends Controller
 
                 // ✅ kirim invoice email (async) setelah commit
                 DB::afterCommit(function () use ($lockedOrder) {
+                    Log::info('INVOICE DISPATCH', [
+                        'source' => 'midtrans_paid',
+                        'order_id' => (int) $lockedOrder->id,
+                        'invoice_number' => $lockedOrder->invoice_number,
+                    ]);
+
                     $job = SendInvoiceEmailJob::dispatch((int) $lockedOrder->id)->delay(now()->addSeconds(5));
 
                     if (method_exists($job, 'afterCommit')) {
