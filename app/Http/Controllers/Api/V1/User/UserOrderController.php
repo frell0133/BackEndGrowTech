@@ -248,7 +248,7 @@ class UserOrderController extends Controller
                     }
 
                     $locked->update(['status' => OrderStatus::FULFILLED->value]);
-                    // ✅ kirim invoice email (async) setelah transaksi commit
+                    // ✅ kirim invoice email (queue + fallback sync) setelah transaksi commit
                     DB::afterCommit(function () use ($locked) {
                         \Illuminate\Support\Facades\Log::info('INVOICE DISPATCH', [
                             'source' => 'wallet_paid',
@@ -256,10 +256,28 @@ class UserOrderController extends Controller
                             'invoice_number' => $locked->invoice_number,
                         ]);
 
-                        $job = SendInvoiceEmailJob::dispatch((int) $locked->id)->delay(now()->addSeconds(5));
+                        try {
+                            // 1) tetap dispatch ke queue (kalau worker aktif, ini jalan normal)
+                            $job = SendInvoiceEmailJob::dispatch((int) $locked->id)->delay(now()->addSeconds(5));
 
-                        if (method_exists($job, 'afterCommit')) {
-                            $job->afterCommit();
+                            if (method_exists($job, 'afterCommit')) {
+                                $job->afterCommit();
+                            }
+
+                            // 2) fallback sync supaya tetap terkirim walau queue worker belum jalan
+                            // Anti-double-send sudah ditangani di SendInvoiceEmailJob (cek invoice_emailed_at)
+                            SendInvoiceEmailJob::dispatchSync((int) $locked->id);
+
+                            \Illuminate\Support\Facades\Log::info('INVOICE DISPATCH SYNC FALLBACK DONE', [
+                                'source' => 'wallet_paid',
+                                'order_id' => (int) $locked->id,
+                            ]);
+                        } catch (\Throwable $e) {
+                            \Illuminate\Support\Facades\Log::error('INVOICE DISPATCH FAILED', [
+                                'source' => 'wallet_paid',
+                                'order_id' => (int) $locked->id,
+                                'error' => $e->getMessage(),
+                            ]);
                         }
                     });
 

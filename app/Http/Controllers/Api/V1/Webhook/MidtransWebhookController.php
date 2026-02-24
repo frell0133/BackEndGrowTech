@@ -335,7 +335,7 @@ class MidtransWebhookController extends Controller
                 $lockedOrder->status = OrderStatus::FULFILLED->value;
                 $lockedOrder->save();
 
-                // ✅ kirim invoice email (async) setelah commit
+                // ✅ kirim invoice email (queue + fallback sync) setelah commit
                 DB::afterCommit(function () use ($lockedOrder) {
                     Log::info('INVOICE DISPATCH', [
                         'source' => 'midtrans_paid',
@@ -343,10 +343,27 @@ class MidtransWebhookController extends Controller
                         'invoice_number' => $lockedOrder->invoice_number,
                     ]);
 
-                    $job = SendInvoiceEmailJob::dispatch((int) $lockedOrder->id)->delay(now()->addSeconds(5));
+                    try {
+                        // 1) tetap dispatch ke queue
+                        $job = SendInvoiceEmailJob::dispatch((int) $lockedOrder->id)->delay(now()->addSeconds(5));
 
-                    if (method_exists($job, 'afterCommit')) {
-                        $job->afterCommit();
+                        if (method_exists($job, 'afterCommit')) {
+                            $job->afterCommit();
+                        }
+
+                        // 2) fallback sync (anti-double-send aman karena job cek invoice_emailed_at)
+                        SendInvoiceEmailJob::dispatchSync((int) $lockedOrder->id);
+
+                        Log::info('INVOICE DISPATCH SYNC FALLBACK DONE', [
+                            'source' => 'midtrans_paid',
+                            'order_id' => (int) $lockedOrder->id,
+                        ]);
+                    } catch (\Throwable $e) {
+                        Log::error('INVOICE DISPATCH FAILED', [
+                            'source' => 'midtrans_paid',
+                            'order_id' => (int) $lockedOrder->id,
+                            'error' => $e->getMessage(),
+                        ]);
                     }
                 });
 
