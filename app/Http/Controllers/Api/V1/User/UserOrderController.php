@@ -17,7 +17,7 @@ use App\Services\LedgerService;
 use App\Services\MidtransService;
 use App\Services\OrderFulfillmentService;
 use App\Support\ApiResponse;
-use App\Jobs\SendInvoiceEmailJob;
+// use App\Jobs\SendInvoiceEmailJob;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Log;
 use App\Support\DispatchesInvoiceEmail;
@@ -250,37 +250,11 @@ class UserOrderController extends Controller
 
                     $locked->update(['status' => OrderStatus::FULFILLED->value]);
                     // ✅ kirim invoice email (queue + fallback sync) setelah transaksi commit
-                    DB::afterCommit(function () use ($locked) {
-                        \Illuminate\Support\Facades\Log::info('INVOICE DISPATCH', [
-                            'source' => 'wallet_paid',
-                            'order_id' => (int) $locked->id,
-                            'invoice_number' => $locked->invoice_number,
-                        ]);
-
-                        try {
-                            // 1) tetap dispatch ke queue (kalau worker aktif, ini jalan normal)
-                            $job = SendInvoiceEmailJob::dispatch((int) $locked->id)->delay(now()->addSeconds(5));
-
-                            if (method_exists($job, 'afterCommit')) {
-                                $job->afterCommit();
-                            }
-
-                            // 2) fallback sync supaya tetap terkirim walau queue worker belum jalan
-                            // Anti-double-send sudah ditangani di SendInvoiceEmailJob (cek invoice_emailed_at)
-                            SendInvoiceEmailJob::dispatchSync((int) $locked->id);
-
-                            \Illuminate\Support\Facades\Log::info('INVOICE DISPATCH SYNC FALLBACK DONE', [
-                                'source' => 'wallet_paid',
-                                'order_id' => (int) $locked->id,
-                            ]);
-                        } catch (\Throwable $e) {
-                            \Illuminate\Support\Facades\Log::error('INVOICE DISPATCH FAILED', [
-                                'source' => 'wallet_paid',
-                                'order_id' => (int) $locked->id,
-                                'error' => $e->getMessage(),
-                            ]);
-                        }
-                    });
+                    $this->dispatchInvoiceEmailAfterCommit(
+                        (int) $locked->id,
+                        'wallet_paid',
+                        (string) $locked->invoice_number
+                    );
 
                     return $this->ok([
                         'method' => 'wallet',

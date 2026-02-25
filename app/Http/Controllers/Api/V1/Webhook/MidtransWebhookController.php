@@ -15,13 +15,13 @@ use App\Services\OrderFulfillmentService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use App\Jobs\SendInvoiceEmailJob;
+// use App\Jobs\SendInvoiceEmailJob;
 use App\Support\DispatchesInvoiceEmail;
 
 class MidtransWebhookController extends Controller
 {
     use DispatchesInvoiceEmail;
-    
+
     public function handle(Request $request, LedgerService $ledger, OrderFulfillmentService $fulfillment)
     {
         $payload = $request->all();
@@ -339,36 +339,11 @@ class MidtransWebhookController extends Controller
                 $lockedOrder->save();
 
                 // ✅ kirim invoice email (queue + fallback sync) setelah commit
-                DB::afterCommit(function () use ($lockedOrder) {
-                    Log::info('INVOICE DISPATCH', [
-                        'source' => 'midtrans_paid',
-                        'order_id' => (int) $lockedOrder->id,
-                        'invoice_number' => $lockedOrder->invoice_number,
-                    ]);
-
-                    try {
-                        // 1) tetap dispatch ke queue
-                        $job = SendInvoiceEmailJob::dispatch((int) $lockedOrder->id)->delay(now()->addSeconds(5));
-
-                        if (method_exists($job, 'afterCommit')) {
-                            $job->afterCommit();
-                        }
-
-                        // 2) fallback sync (anti-double-send aman karena job cek invoice_emailed_at)
-                        SendInvoiceEmailJob::dispatchSync((int) $lockedOrder->id);
-
-                        Log::info('INVOICE DISPATCH SYNC FALLBACK DONE', [
-                            'source' => 'midtrans_paid',
-                            'order_id' => (int) $lockedOrder->id,
-                        ]);
-                    } catch (\Throwable $e) {
-                        Log::error('INVOICE DISPATCH FAILED', [
-                            'source' => 'midtrans_paid',
-                            'order_id' => (int) $lockedOrder->id,
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
-                });
+                $this->dispatchInvoiceEmailAfterCommit(
+                    (int) $lockedOrder->id,
+                    'midtrans_paid',
+                    (string) $lockedOrder->invoice_number
+                );
 
                 Log::info('MIDTRANS ORDER PAID -> FULFILLED', [
                     'midtrans_order_id' => $orderId,

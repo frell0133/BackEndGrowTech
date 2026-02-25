@@ -19,21 +19,23 @@ class BrevoMailService
             ];
         }
 
-        $response = Http::withHeaders([
-            'api-key' => $key,
-            'Content-Type' => 'application/json',
-            'Accept' => 'application/json',
-        ])->post('https://api.brevo.com/v3/smtp/email', [
-            'sender' => [
-                'email' => (string) config('services.brevo.sender_email'),
-                'name' => (string) config('services.brevo.sender_name'),
-            ],
-            'to' => [
-                ['email' => $toEmail],
-            ],
-            'subject' => $subject,
-            'htmlContent' => $html,
-        ]);
+        $response = Http::timeout(15)
+            ->connectTimeout(5)
+            ->withHeaders([
+                'api-key' => $key,
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ])->post('https://api.brevo.com/v3/smtp/email', [
+                'sender' => [
+                    'email' => (string) config('services.brevo.sender_email'),
+                    'name' => (string) config('services.brevo.sender_name'),
+                ],
+                'to' => [
+                    ['email' => $toEmail],
+                ],
+                'subject' => $subject,
+                'htmlContent' => $html,
+            ]);
 
         if ($response->failed()) {
             Log::error('Brevo sendHtml failed', [

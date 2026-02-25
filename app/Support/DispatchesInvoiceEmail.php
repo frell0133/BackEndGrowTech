@@ -9,12 +9,8 @@ use Illuminate\Support\Facades\Log;
 trait DispatchesInvoiceEmail
 {
     /**
-     * Dispatch invoice email setelah transaksi commit (QUEUE ONLY).
-     *
-     * Kenapa queue-only:
-     * - Menghindari request payment timeout (500) saat API email lambat
-     * - Menghindari "sudah sukses tapi client lihat error"
-     * - Lebih aman untuk wallet dan midtrans webhook
+     * Queue invoice email setelah transaction commit.
+     * Jangan kirim sync di request supaya endpoint payment tidak timeout (500).
      */
     protected function dispatchInvoiceEmailAfterCommit(
         int $orderId,
@@ -40,7 +36,6 @@ trait DispatchesInvoiceEmail
                     'order_id' => $orderId,
                 ]);
             } catch (\Throwable $e) {
-                // Dispatch queue gagal (jarang, tapi tetap dicatat)
                 Log::error('INVOICE DISPATCH FAILED', [
                     'source' => $source,
                     'order_id' => $orderId,
@@ -49,4 +44,4 @@ trait DispatchesInvoiceEmail
             }
         });
     }
-}
+} 
