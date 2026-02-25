@@ -17,7 +17,7 @@ use App\Services\LedgerService;
 use App\Services\MidtransService;
 use App\Services\OrderFulfillmentService;
 use App\Support\ApiResponse;
-// use App\Jobs\SendInvoiceEmailJob;
+use App\Jobs\SendInvoiceEmailJob;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Log;
 use App\Support\DispatchesInvoiceEmail;
