@@ -48,17 +48,13 @@ class SendInvoiceEmailJob implements ShouldQueue
 
         $to = $order->email ?? $order->user?->email;
         if (!$to) {
-            // simpan error biar gampang dilihat
             try {
                 $order->forceFill([
                     'invoice_email_error' => 'Invoice email recipient is empty',
                 ])->save();
-            } catch (\Throwable $ignored) {
-            }
+            } catch (\Throwable $ignored) {}
 
             Log::warning('SendInvoiceEmailJob: email empty', ['order_id' => $order->id]);
-
-            // throw supaya retry (kalau memang mau retry)
             throw new \RuntimeException('Invoice email recipient is empty');
         }
 
@@ -119,15 +115,13 @@ class SendInvoiceEmailJob implements ShouldQueue
                             ? mb_substr($body, 0, 2000)
                             : mb_substr((string) json_encode($body, JSON_UNESCAPED_UNICODE), 0, 2000),
                     ])->save();
-                } catch (\Throwable $ignored) {
-                }
+                } catch (\Throwable $ignored) {}
 
                 Log::error('SendInvoiceEmailJob: brevo failed', [
                     'order_id' => $order->id,
                     'response' => $res,
                 ]);
 
-                // ✅ PENTING: throw supaya queue retry
                 throw new \RuntimeException('Brevo send failed for invoice email');
             }
 
@@ -145,15 +139,14 @@ class SendInvoiceEmailJob implements ShouldQueue
                 $order->forceFill([
                     'invoice_email_error' => mb_substr($e->getMessage(), 0, 2000),
                 ])->save();
-            } catch (\Throwable $ignored) {
-            }
+            } catch (\Throwable $ignored) {}
 
             Log::error('SendInvoiceEmailJob: exception', [
                 'order_id' => $order->id,
                 'error' => $e->getMessage(),
             ]);
 
-            throw $e; // retry queue / masuk failed_jobs kalau mentok
+            throw $e;
         }
     }
 }

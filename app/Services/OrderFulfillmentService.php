@@ -14,8 +14,8 @@ class OrderFulfillmentService
     /**
      * Fulfill order ketika status payment sudah PAID.
      * Rules:
-     * - qty total == 1 => one_time (reveal sekali) + fallback email otomatis (delay 3 menit)
-     * - qty total > 1  => email_only (EMAIL DI-QUEUE, bukan sync, supaya request payment tidak timeout)
+     * - qty total == 1 => one_time (reveal sekali) + product email dikirim saat endpoint close()
+     * - qty total > 1  => email_only (product email di-queue setelah paid)
      */
     public function fulfillPaidOrder(Order $order): array
     {
@@ -133,9 +133,8 @@ class OrderFulfillmentService
         });
 
         /**
-         * ✅ PENTING:
-         * Untuk qty > 1, JANGAN kirim email langsung ke Brevo di request ini.
-         * Queue-kan saja agar endpoint payment tidak timeout (500).
+         * qty > 1:
+         * Product email langsung di-queue setelah payment sukses (barengan invoice).
          */
         if (($result['ok'] ?? false) && ((int) ($result['totalQty'] ?? 0) > 1)) {
             Log::info('FULFILL EMAIL_ONLY QUEUE_DISPATCH', [
@@ -152,15 +151,13 @@ class OrderFulfillmentService
 
         /**
          * qty == 1:
-         * one_time reveal, tapi tetap siapkan fallback email (delay 3 menit)
-         * kalau user belum reveal / belum menerima item dari UI.
+         * JANGAN auto-kirim product email di sini.
+         * Product email akan dikirim saat user menutup modal (endpoint close).
          */
         if (($result['ok'] ?? false) && ((int) ($result['totalQty'] ?? 0) === 1)) {
-            $job = SendDigitalItemsFallbackEmail::dispatch($order->id)->delay(now()->addMinutes(3));
-
-            if (method_exists($job, 'afterCommit')) {
-                $job->afterCommit();
-            }
+            Log::info('FULFILL ONE_TIME WAIT_CLOSE_TO_SEND_PRODUCT_EMAIL', [
+                'order_id' => $order->id,
+            ]);
         }
 
         return $result;
