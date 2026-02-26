@@ -72,7 +72,7 @@ return [
     'brevo' => [
         'key' => env('BREVO_KEY'),
         'sender_email' => env('BREVO_SENDER_EMAIL'),
-        'sender_name' => env('BREVO_SENDER_NAME', 'GrowTech Central'),
+        'sender_name' => env('BREVO_SENDER_NAME', 'GrowTech'),
 ],
 ],
 
