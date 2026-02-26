@@ -102,7 +102,7 @@ class SocialAuthController extends Controller
 
             // 7) Redirect ke FE
             $frontendDefault = rtrim(
-                env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production.up.railway.app'),
+                env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app'),
                 '/'
             );
 

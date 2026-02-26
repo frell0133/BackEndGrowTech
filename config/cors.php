@@ -9,7 +9,7 @@ return [
     // ✅ bolehkan origin FE kamu (atau pakai env)
     'allowed_origins' => [
         env('FRONTEND_URL', 'http://localhost:3000'),
-        'https://frontendgrowtechtesting1-production.up.railway.app',
+        'https://frontendgrowtechtesting1-production-dfb9.up.railway.app',
     ],
 
     'allowed_origins_patterns' => [],
