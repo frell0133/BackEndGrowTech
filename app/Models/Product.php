@@ -20,12 +20,12 @@ class Product extends Model
         'is_active',
         'is_published',
         'price',
-
         'track_stock',
         'stock_min_alert',
-
-        'rating',         // ✅ add
-        'rating_count',   // ✅ add
+        'rating',       
+        'rating_count',   
+        'purchases_count',
+        'popularity_score',
     ];
 
     protected $casts = [
@@ -36,9 +36,10 @@ class Product extends Model
         'price' => 'integer',
         'track_stock' => 'boolean',
         'stock_min_alert' => 'integer',
-
-        'rating' => 'float',          // ✅ add
-        'rating_count' => 'integer',  // ✅ add
+        'rating' => 'float',         
+        'rating_count' => 'integer',  
+        'purchases_count' => 'integer',
+        'popularity_score' => 'float',
     ];
 
     public function licenses()
@@ -59,6 +60,11 @@ class Product extends Model
     public function category(): BelongsTo
     {
         return $this->belongsTo(Category::class, 'category_id');
+    }
+
+    public function favorites()
+    {
+        return $this->hasMany(\App\Models\Favorite::class);
     }
     
 }

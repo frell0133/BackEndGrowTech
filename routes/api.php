@@ -21,6 +21,7 @@ use App\Http\Controllers\Api\V1\User\UserVoucherController;
 use App\Http\Controllers\Api\V1\User\UserProfileController;
 use App\Http\Controllers\Api\V1\User\UserTopupController;
 use App\Http\Controllers\Api\V1\User\UserCartController;
+use App\Http\Controllers\Api\V1\User\UserFavoriteController;
 
 // Controllers (Webhook/Simulate)
 use App\Http\Controllers\Api\V1\Webhook\MidtransWebhookController;
@@ -216,6 +217,10 @@ Route::prefix('v1')->group(function () {
         Route::get('referral', [UserReferralController::class, 'dashboard']);
         Route::post('referral/attach', [UserReferralController::class, 'attach'])->middleware('referral.attach.guard');
         Route::post('referral/preview-discount', [UserReferralController::class, 'previewDiscount']);
+
+        Route::get('favorites', [UserFavoriteController::class, 'index']);
+        Route::post('favorites', [UserFavoriteController::class, 'store']);
+        Route::delete('favorites/{productId}', [UserFavoriteController::class, 'destroy']);
 
         // Withdraw (User)
         Route::post('withdraws', [UserWithdrawController::class, 'store']);

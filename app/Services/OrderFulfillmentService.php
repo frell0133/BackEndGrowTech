@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Order;
 use App\Models\License;
 use App\Models\Delivery;
+use App\Models\Product;
 use Illuminate\Support\Facades\DB;
 use App\Jobs\SendDigitalItemsFallbackEmail;
 use Illuminate\Support\Facades\Log;
@@ -118,6 +119,9 @@ class OrderFulfillmentService
                 }
             }
 
+            // ✅ UPDATE PURCHASES + POPULARITY (inside transaction)
+            $this->bumpPurchaseCountAndPopularity($order, $items);
+
             Log::info('FULFILL SUCCESS ALLOCATION_DONE', [
                 'order_id' => $order->id,
                 'total_qty' => $totalQty,
@@ -144,6 +148,7 @@ class OrderFulfillmentService
 
             $job = SendDigitalItemsFallbackEmail::dispatch($order->id)->delay(now()->addSeconds(3));
 
+            // aman bila queue driver mendukung afterCommit
             if (method_exists($job, 'afterCommit')) {
                 $job->afterCommit();
             }
@@ -161,6 +166,53 @@ class OrderFulfillmentService
         }
 
         return $result;
+    }
+
+    /**
+     * ✅ Naikkan purchases_count dan update popularity_score.
+     * - Menggunakan $items hasil resolve (order_items atau fallback legacy)
+     * - Popularity score: (rating * 20) + purchases_count
+     */
+    private function bumpPurchaseCountAndPopularity(Order $order, $items): void
+    {
+        try {
+            // items bisa collection object {product_id, qty}
+            $grouped = collect($items)
+                ->groupBy(fn ($it) => (int) ($it->product_id ?? 0))
+                ->map(fn ($rows) => (int) $rows->sum(fn ($r) => (int) ($r->qty ?? 1)));
+
+            foreach ($grouped as $productId => $qty) {
+                if ($productId <= 0 || $qty <= 0) continue;
+
+                $product = Product::query()->lockForUpdate()->find($productId);
+                if (!$product) continue;
+
+                $product->purchases_count = ((int) ($product->purchases_count ?? 0)) + $qty;
+
+                $rating = (float) ($product->rating ?? 0);
+                $purchases = (int) ($product->purchases_count ?? 0);
+
+                // rumus simple sesuai request: rating + jumlah pembelian
+                $product->popularity_score = ($rating * 20) + $purchases;
+
+                $product->save();
+
+                Log::info('FULFILL POPULARITY_UPDATED', [
+                    'order_id' => $order->id,
+                    'product_id' => $productId,
+                    'added_qty' => $qty,
+                    'purchases_count' => (int) $product->purchases_count,
+                    'rating' => (float) $product->rating,
+                    'popularity_score' => (float) $product->popularity_score,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            // Jangan ganggu fulfill kalau popularity gagal
+            Log::error('FULFILL POPULARITY_UPDATE_FAILED', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     public function formatLicense(License $license): array
