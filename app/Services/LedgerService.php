@@ -156,4 +156,46 @@ class LedgerService
             return $tx;
         });
     }
+    // ADMIN TOPUP: user CREDIT ONLY (tanpa SYSTEM_CASH)
+    public function adminTopup(int $userId, int $amount, ?string $idempotencyKey = null, ?string $note = null): LedgerTransaction
+    {
+        if ($amount <= 0) {
+            throw ValidationException::withMessages(['amount' => 'Amount harus > 0']);
+        }
+
+        return DB::transaction(function () use ($userId, $amount, $idempotencyKey, $note) {
+
+            if ($idempotencyKey) {
+                $existing = LedgerTransaction::where('idempotency_key', $idempotencyKey)->first();
+                if ($existing) return $existing;
+            }
+
+            $userWallet = $this->getOrCreateUserWallet($userId);
+
+            // lock wallet agar aman
+            $userWallet = Wallet::whereKey($userWallet->id)->lockForUpdate()->first();
+
+            $tx = LedgerTransaction::create([
+                'type' => 'TOPUP',         // biar konsisten dengan sistem kamu
+                'status' => 'SUCCESS',
+                'idempotency_key' => $idempotencyKey,
+                'note' => $note,
+            ]);
+
+            // Entry: user CREDIT saja
+            [$before, $after] = $this->applyBalance($userWallet, 'CREDIT', $amount);
+            $userWallet->update(['balance' => $after]);
+
+            LedgerEntry::create([
+                'ledger_transaction_id' => $tx->id,
+                'wallet_id' => $userWallet->id,
+                'direction' => 'CREDIT',
+                'amount' => $amount,
+                'balance_before' => $before,
+                'balance_after' => $after,
+            ]);
+
+            return $tx;
+        });
+    }
 }

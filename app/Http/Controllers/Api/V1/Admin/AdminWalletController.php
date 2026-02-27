@@ -16,6 +16,8 @@ class AdminWalletController extends Controller
      */
     public function topup(Request $request, LedgerService $ledgerService)
     {
+        $admin = $request->user();
+
         $data = $request->validate([
             'user_id' => ['required', 'integer', 'min:1'],
             'amount' => ['required', 'integer', 'min:1'],
@@ -23,11 +25,19 @@ class AdminWalletController extends Controller
             'note' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        $tx = $ledgerService->topup(
+        $auditNote = trim(
+            '[ADMIN_TOPUP]'
+            . ' actor_admin_id=' . ($admin?->id ?? 'unknown')
+            . ' target_user_id=' . (int)$data['user_id']
+            . ' amount=' . (int)$data['amount']
+            . ($data['note'] ? ' | ' . $data['note'] : '')
+        );
+
+        $tx = $ledgerService->adminTopup(
             (int) $data['user_id'],
             (int) $data['amount'],
             $data['idempotency_key'] ?? null,
-            $data['note'] ?? null
+            $auditNote
         );
 
         return response()->json([
