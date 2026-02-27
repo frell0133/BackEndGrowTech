@@ -16,6 +16,8 @@ class AdminWalletController extends Controller
      */
     public function topup(Request $request, LedgerService $ledgerService)
     {
+        $admin = $request->user();
+
         $data = $request->validate([
             'user_id' => ['required', 'integer', 'min:1'],
             'amount' => ['required', 'integer', 'min:1'],
@@ -23,12 +25,55 @@ class AdminWalletController extends Controller
             'note' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        $tx = $ledgerService->topup(
-            (int) $data['user_id'],
-            (int) $data['amount'],
-            $data['idempotency_key'] ?? null,
-            $data['note'] ?? null
+        $userId = (int) $data['user_id'];
+        $amount = (int) $data['amount'];
+        $idempotencyKey = $data['idempotency_key'] ?? null;
+
+        // audit masuk note (tanpa ubah DB)
+        $auditNote = trim(
+            '[ADMIN_TOPUP] actor_admin_id=' . ($admin?->id ?? 'unknown')
+            . ' target_user_id=' . $userId
+            . ' amount=' . $amount
+            . ($data['note'] ? ' | ' . $data['note'] : '')
         );
+
+        $tx = DB::transaction(function () use ($ledgerService, $userId, $amount, $idempotencyKey, $auditNote) {
+
+            // idempotency guard (optional)
+            if ($idempotencyKey) {
+                $existing = LedgerTransaction::query()
+                    ->where('idempotency_key', $idempotencyKey)
+                    ->first();
+                if ($existing) return $existing;
+            }
+
+            $wallet = $ledgerService->getOrCreateUserWallet($userId);
+
+            // buat transaction
+            $tx = LedgerTransaction::create([
+                'type' => 'ADMIN_TOPUP',
+                'status' => 'SUCCESS',
+                'idempotency_key' => $idempotencyKey,
+                'reference_type' => 'user_wallet',
+                'reference_id' => $wallet->id,
+                'note' => $auditNote,
+            ]);
+
+            // hanya 1 entry: CREDIT user
+            $balanceAfter = (int) $wallet->balance + $amount;
+
+            LedgerEntry::create([
+                'ledger_transaction_id' => $tx->id,
+                'wallet_id' => $wallet->id,
+                'direction' => 'credit',
+                'amount' => $amount,
+                'balance_after' => $balanceAfter,
+            ]);
+
+            $wallet->update(['balance' => $balanceAfter]);
+
+            return $tx;
+        });
 
         return response()->json([
             'success' => true,
@@ -37,6 +82,7 @@ class AdminWalletController extends Controller
                 'type' => $tx->type,
                 'status' => $tx->status,
                 'idempotency_key' => $tx->idempotency_key,
+                'note' => $tx->note,
             ],
         ]);
     }
