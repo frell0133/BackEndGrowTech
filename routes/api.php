@@ -291,6 +291,9 @@ Route::prefix('v1')->group(function () {
         Route::post('orders/{id}/mark-failed', [AdminOrderController::class, 'markFailed']);
         Route::post('orders/{id}/refund', [AdminOrderController::class, 'refund']);
 
+        // wallet (Admin)
+        Route::get('wallet/topups', [AdminWalletController::class, 'topups']);
+
         // Delivery (Admin)
         Route::post('orders/{id}/delivery/resend', [AdminDeliveryController::class, 'resend']);
         Route::post('orders/{id}/delivery/revoke', [AdminDeliveryController::class, 'revoke']);
