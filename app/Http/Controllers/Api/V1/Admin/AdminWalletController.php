@@ -44,7 +44,6 @@ class AdminWalletController extends Controller
 
         $tx = DB::transaction(function () use ($ledgerService, $userId, $amount, $idempotencyKey, $auditNote) {
 
-            // idempotency guard
             if ($idempotencyKey) {
                 $existing = LedgerTransaction::query()
                     ->where('idempotency_key', $idempotencyKey)
@@ -54,16 +53,14 @@ class AdminWalletController extends Controller
 
             $wallet = $ledgerService->getOrCreateUserWallet($userId);
 
+            // ✅ HAPUS reference_type & reference_id (biar gak column not found)
             $tx = LedgerTransaction::create([
                 'type' => 'ADMIN_TOPUP',
                 'status' => 'SUCCESS',
                 'idempotency_key' => $idempotencyKey,
-                'reference_type' => 'user_wallet',
-                'reference_id' => $wallet->id,
                 'note' => $auditNote,
             ]);
 
-            // credit user only
             $balanceAfter = (int) $wallet->balance + $amount;
 
             LedgerEntry::create([
@@ -90,7 +87,7 @@ class AdminWalletController extends Controller
             ],
         ]);
     }
-
+    
     /**
      * POST /api/v1/admin/wallet/adjust
      * NOTE: ini akan 500 kalau LedgerService belum punya method adjust()
