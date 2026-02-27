@@ -4,15 +4,20 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\LedgerEntry;
+use App\Models\LedgerTransaction;
 use App\Models\WalletTopup;
 use App\Services\LedgerService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class AdminWalletController extends Controller
 {
     /**
      * POST /api/v1/admin/wallet/topup
-     * Manual topup oleh admin (rescue case)
+     * Manual topup oleh admin:
+     * - HANYA credit wallet user
+     * - TIDAK ada debit wallet admin
+     * - Audit disimpan di note (tanpa ubah DB)
      */
     public function topup(Request $request, LedgerService $ledgerService)
     {
@@ -29,9 +34,9 @@ class AdminWalletController extends Controller
         $amount = (int) $data['amount'];
         $idempotencyKey = $data['idempotency_key'] ?? null;
 
-        // audit masuk note (tanpa ubah DB)
         $auditNote = trim(
-            '[ADMIN_TOPUP] actor_admin_id=' . ($admin?->id ?? 'unknown')
+            '[ADMIN_TOPUP]'
+            . ' actor_admin_id=' . ($admin?->id ?? 'unknown')
             . ' target_user_id=' . $userId
             . ' amount=' . $amount
             . ($data['note'] ? ' | ' . $data['note'] : '')
@@ -39,7 +44,7 @@ class AdminWalletController extends Controller
 
         $tx = DB::transaction(function () use ($ledgerService, $userId, $amount, $idempotencyKey, $auditNote) {
 
-            // idempotency guard (optional)
+            // idempotency guard
             if ($idempotencyKey) {
                 $existing = LedgerTransaction::query()
                     ->where('idempotency_key', $idempotencyKey)
@@ -49,7 +54,6 @@ class AdminWalletController extends Controller
 
             $wallet = $ledgerService->getOrCreateUserWallet($userId);
 
-            // buat transaction
             $tx = LedgerTransaction::create([
                 'type' => 'ADMIN_TOPUP',
                 'status' => 'SUCCESS',
@@ -59,7 +63,7 @@ class AdminWalletController extends Controller
                 'note' => $auditNote,
             ]);
 
-            // hanya 1 entry: CREDIT user
+            // credit user only
             $balanceAfter = (int) $wallet->balance + $amount;
 
             LedgerEntry::create([
@@ -89,8 +93,7 @@ class AdminWalletController extends Controller
 
     /**
      * POST /api/v1/admin/wallet/adjust
-     * Adjust balance (debit/credit) oleh admin
-     * direction: credit|debit
+     * NOTE: ini akan 500 kalau LedgerService belum punya method adjust()
      */
     public function adjust(Request $request, LedgerService $ledgerService)
     {
@@ -101,11 +104,6 @@ class AdminWalletController extends Controller
             'idempotency_key' => ['nullable', 'string', 'max:255'],
             'note' => ['nullable', 'string', 'max:1000'],
         ]);
-
-        // kalau LedgerService kamu belum punya method adjust(),
-        // paling aman: map debit/credit ke method yang sudah ada.
-        // Aku asumsikan LedgerService kamu punya adjust().
-        // Kalau belum, bilang—nanti aku sesuaikan dengan service kamu.
 
         $tx = $ledgerService->adjust(
             (int) $data['user_id'],
@@ -128,7 +126,6 @@ class AdminWalletController extends Controller
 
     /**
      * GET /api/v1/admin/wallet/ledger
-     * Semua ledger semua user
      */
     public function ledger(Request $request)
     {
@@ -146,8 +143,7 @@ class AdminWalletController extends Controller
 
     /**
      * GET /api/v1/admin/wallet/topups
-     * List semua topup user (Midtrans) dari tabel wallet_topups
-     * Untuk monitor pending/failed, dll.
+     * List topup user (Midtrans) dari wallet_topups
      */
     public function topups(Request $request)
     {
@@ -157,7 +153,6 @@ class AdminWalletController extends Controller
             ->with(['user:id,name,email'])
             ->orderByDesc('id');
 
-        // filter opsional
         if ($status = $request->query('status')) {
             $q->where('status', $status);
         }
@@ -166,12 +161,6 @@ class AdminWalletController extends Controller
         }
         if ($request->query('unposted') === '1') {
             $q->whereNull('posted_to_ledger_at');
-        }
-        if ($request->query('date_from')) {
-            $q->whereDate('created_at', '>=', $request->query('date_from'));
-        }
-        if ($request->query('date_to')) {
-            $q->whereDate('created_at', '<=', $request->query('date_to'));
         }
 
         return response()->json([
