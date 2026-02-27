@@ -21,23 +21,39 @@ class AdminWalletController extends Controller
         $data = $request->validate([
             'user_id' => ['required', 'integer', 'min:1'],
             'amount' => ['required', 'integer', 'min:1'],
-            'idempotency_key' => ['nullable', 'string', 'max:255'],
+
+            // FE boleh kirim atau tidak (optional)
             'note' => ['nullable', 'string', 'max:1000'],
+            'idempotency_key' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $auditNote = trim(
-            '[ADMIN_TOPUP]'
-            . ' actor_admin_id=' . ($admin?->id ?? 'unknown')
-            . ' target_user_id=' . (int)$data['user_id']
-            . ' amount=' . (int)$data['amount']
+        $userId = (int) $data['user_id'];
+        $amount = (int) $data['amount'];
+
+        // ✅ AUTO idempotency_key kalau FE tidak mengirim
+        // Pilih salah satu strategi:
+
+        // (A) unik per request (aman anti-double click selama FE retry memakai key yg sama)
+        $idempotencyKey = $data['idempotency_key']
+            ?? ('ADMIN-TOPUP-' . $userId . '-' . $amount . '-' . now()->format('YmdHis'));
+
+        // (B) kalau kamu punya "topup_id" dan ingin 1 rescue per topup:
+        // $idempotencyKey = $data['idempotency_key'] ?? ('ADMIN-RESCUE-TOPUP-' . (int)$data['topup_id']);
+
+        // ✅ AUTO note audit
+        $note = trim(
+            '[ADMIN_TOPUP] actor_admin_id=' . ($admin?->id ?? 'unknown')
+            . ' target_user_id=' . $userId
+            . ' amount=' . $amount
             . ($data['note'] ? ' | ' . $data['note'] : '')
         );
 
+        // ✅ pakai method yang single-credit (tanpa SYSTEM_CASH debit)
         $tx = $ledgerService->adminTopup(
-            (int) $data['user_id'],
-            (int) $data['amount'],
-            $data['idempotency_key'] ?? null,
-            $auditNote
+            $userId,
+            $amount,
+            $idempotencyKey,
+            $note
         );
 
         return response()->json([
@@ -50,7 +66,6 @@ class AdminWalletController extends Controller
             ],
         ]);
     }
-
     /**
      * POST /api/v1/admin/wallet/adjust
      * Adjust balance (debit/credit) oleh admin
