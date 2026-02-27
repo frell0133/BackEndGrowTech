@@ -3,56 +3,92 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\LedgerEntry;
-use App\Models\WalletTopup;
-use App\Services\LedgerService;
+use App\Models\Order;
+use App\Support\ApiResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
-class AdminWalletController extends Controller
+class AdminOrderController extends Controller
 {
-    public function topup(Request $request, LedgerService $ledgerService)
+    use ApiResponse;
+
+    private function hasRelation(string $relation): bool
     {
-        $data = $request->validate([
-            'user_id' => ['required', 'integer'],
-            'amount' => ['required', 'integer', 'min:1'],
-            'idempotency_key' => ['nullable', 'string', 'max:255'],
-            'note' => ['nullable', 'string'],
-        ]);
-
-        $tx = $ledgerService->topup(
-            (int) $data['user_id'],
-            (int) $data['amount'],
-            $data['idempotency_key'] ?? null,
-            $data['note'] ?? null
-        );
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'transaction_id' => $tx->id,
-                'type' => $tx->type,
-                'status' => $tx->status,
-                'idempotency_key' => $tx->idempotency_key,
-            ],
-        ]);
+        return method_exists(new Order(), $relation);
     }
 
-    // ✅ ENDPOINT BARU: GET /api/v1/admin/wallet/topups
-    public function topups(Request $request)
+    private function cols(string $table, array $wanted): array
     {
-        $perPage = (int) $request->query('per_page', 50);
+        // hanya ambil kolom yang benar-benar ada di DB
+        $out = [];
+        foreach ($wanted as $c) {
+            if (Schema::hasColumn($table, $c)) $out[] = $c;
+        }
+        return $out;
+    }
 
-        $q = WalletTopup::query()
-            ->with(['user:id,name,email']) // pastikan WalletTopup punya relasi user()
-            ->orderByDesc('id');
+    public function index(Request $request)
+    {
+        $perPage = (int) $request->query('per_page', 20);
 
-        // filter opsional
+        $q = Order::query()->orderByDesc('id');
+
+        // user
+        if ($this->hasRelation('user')) {
+            $q->with(['user:id,name,email']);
+        }
+
+        // items
+        if ($this->hasRelation('items')) {
+            $itemCols = array_merge(
+                ['id', 'order_id', 'product_id', 'qty'],
+                $this->cols('order_items', ['unit_price', 'line_subtotal', 'product_name', 'product_slug', 'price', 'subtotal'])
+            );
+
+            $q->with(['items' => function ($qq) use ($itemCols) {
+                $qq->select(array_values(array_unique($itemCols)));
+            }]);
+        }
+
+        // payment
+        if ($this->hasRelation('payment')) {
+            $payCols = array_merge(
+                ['id', 'order_id'],
+                $this->cols('payments', ['gateway_code', 'external_id', 'amount', 'status', 'created_at'])
+            );
+
+            $q->with(['payment' => function ($qq) use ($payCols) {
+                $qq->select(array_values(array_unique($payCols)));
+            }]);
+        }
+
+        // deliveries (ini sering penyebab 500 kalau relasi tidak ada / kolom beda)
+        if ($this->hasRelation('deliveries')) {
+            $delCols = array_merge(
+                ['id', 'order_id'],
+                $this->cols('deliveries', ['type', 'delivery_type', 'status', 'emailed', 'created_at'])
+            );
+
+            $q->with(['deliveries' => function ($qq) use ($delCols) {
+                $qq->select(array_values(array_unique($delCols)));
+            }]);
+        }
+
+        // filters (aman)
         if ($status = $request->query('status')) {
-            $q->where('status', $status);
+            if (Schema::hasColumn('orders', 'status')) $q->where('status', $status);
         }
+
         if ($userId = $request->query('user_id')) {
-            $q->where('user_id', (int) $userId);
+            if (Schema::hasColumn('orders', 'user_id')) $q->where('user_id', (int) $userId);
         }
+
+        if ($invoice = $request->query('invoice_number')) {
+            if (Schema::hasColumn('orders', 'invoice_number')) {
+                $q->where('invoice_number', 'like', "%{$invoice}%");
+            }
+        }
+
         if ($request->query('date_from')) {
             $q->whereDate('created_at', '>=', $request->query('date_from'));
         }
@@ -60,23 +96,18 @@ class AdminWalletController extends Controller
             $q->whereDate('created_at', '<=', $request->query('date_to'));
         }
 
-        return response()->json([
-            'success' => true,
-            'data' => $q->paginate($perPage),
-        ]);
+        return $this->ok($q->paginate($perPage));
     }
 
-    public function ledger(Request $request)
+    public function show(string $id)
     {
-        $perPage = (int) ($request->query('per_page', 50));
+        $q = Order::query();
 
-        $entries = LedgerEntry::with(['transaction', 'wallet'])
-            ->orderByDesc('id')
-            ->paginate($perPage);
+        if ($this->hasRelation('user')) $q->with(['user:id,name,email']);
+        if ($this->hasRelation('items')) $q->with(['items']);
+        if ($this->hasRelation('payment')) $q->with(['payment']);
+        if ($this->hasRelation('deliveries')) $q->with(['deliveries']);
 
-        return response()->json([
-            'success' => true,
-            'data' => $entries,
-        ]);
+        return $this->ok($q->findOrFail($id));
     }
 }
