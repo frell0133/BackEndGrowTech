@@ -53,25 +53,25 @@ class AdminWalletController extends Controller
 
             $wallet = $ledgerService->getOrCreateUserWallet($userId);
 
-            // ✅ HAPUS reference_type & reference_id (biar gak column not found)
+            // pakai type/status yang SUDAH TERBUKTI valid di sistem kamu
             $tx = LedgerTransaction::create([
-                'type' => 'ADMIN_TOPUP',
+                'type' => 'TOPUP',
                 'status' => 'SUCCESS',
                 'idempotency_key' => $idempotencyKey,
                 'note' => $auditNote,
             ]);
 
+            // update wallet dulu
             $balanceAfter = (int) $wallet->balance + $amount;
+            $wallet->update(['balance' => $balanceAfter]);
 
+            // entry: MINIMAL FIELD (hindari balance_after kalau kolomnya tidak ada)
             LedgerEntry::create([
                 'ledger_transaction_id' => $tx->id,
                 'wallet_id' => $wallet->id,
-                'direction' => 'credit',
+                'direction' => 'credit', // kalau ini masih error, lihat catatan di bawah
                 'amount' => $amount,
-                'balance_after' => $balanceAfter,
             ]);
-
-            $wallet->update(['balance' => $balanceAfter]);
 
             return $tx;
         });
