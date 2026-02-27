@@ -17,10 +17,10 @@ class AdminOrderController extends Controller
         return method_exists(new Order(), $relation);
     }
 
-    private function optionalCols(string $table, array $cols): array
+    private function cols(string $table, array $wanted): array
     {
         $out = [];
-        foreach ($cols as $c) {
+        foreach ($wanted as $c) {
             if (Schema::hasColumn($table, $c)) $out[] = $c;
         }
         return $out;
@@ -41,11 +41,7 @@ class AdminOrderController extends Controller
         if ($this->hasRelation('items')) {
             $itemCols = array_merge(
                 ['id', 'order_id', 'product_id', 'qty'],
-                $this->optionalCols('order_items', [
-                    'unit_price', 'line_subtotal', 'product_name', 'product_slug',
-                    // kalau project kamu pakai nama lain:
-                    'price', 'subtotal'
-                ])
+                $this->cols('order_items', ['unit_price', 'line_subtotal', 'product_name', 'product_slug', 'price', 'subtotal'])
             );
 
             $q->with(['items' => function ($qq) use ($itemCols) {
@@ -57,7 +53,7 @@ class AdminOrderController extends Controller
         if ($this->hasRelation('payment')) {
             $payCols = array_merge(
                 ['id', 'order_id'],
-                $this->optionalCols('payments', ['gateway_code', 'external_id', 'amount', 'status', 'created_at'])
+                $this->cols('payments', ['gateway_code', 'external_id', 'amount', 'status', 'created_at'])
             );
 
             $q->with(['payment' => function ($qq) use ($payCols) {
@@ -65,11 +61,11 @@ class AdminOrderController extends Controller
             }]);
         }
 
-        // deliveries (opsional)
+        // deliveries
         if ($this->hasRelation('deliveries')) {
             $delCols = array_merge(
                 ['id', 'order_id'],
-                $this->optionalCols('deliveries', ['delivery_type', 'type', 'status', 'emailed', 'created_at'])
+                $this->cols('deliveries', ['type', 'delivery_type', 'status', 'emailed', 'created_at'])
             );
 
             $q->with(['deliveries' => function ($qq) use ($delCols) {
@@ -99,7 +95,7 @@ class AdminOrderController extends Controller
             $q->whereDate('created_at', '<=', $request->query('date_to'));
         }
 
-        // ✅ pakai simplePaginate biar gak COUNT(*) berat
+        // ✅ ringan, minim timeout
         return $this->ok($q->simplePaginate($perPage));
     }
 
@@ -115,7 +111,6 @@ class AdminOrderController extends Controller
         return $this->ok($q->findOrFail($id));
     }
 
-    // NOTE:
-    // routes kamu punya markFailed & refund, tapi methodnya belum ada.
-    // Kalau kamu hit endpoint itu, bakal 500/404. Nanti bisa kita tambah.
+    // NOTE: routes kamu ada markFailed & refund.
+    // Kalau kamu mau, aku bisa tambahin methodnya juga biar endpoint itu tidak error.
 }

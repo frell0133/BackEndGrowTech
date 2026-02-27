@@ -305,13 +305,14 @@ Route::prefix('v1')->group(function () {
         Route::patch('payment-gateways/{code}', [PaymentGatewayController::class, 'update']);
         Route::delete('payment-gateways/{code}', [PaymentGatewayController::class, 'destroy']);
 
-        // Payments (Admin)
-        Route::get('payments', [AdminPaymentController::class, 'index']);
+        // Payments (User di Admin)
+        // Route::get('payments', [AdminPaymentController::class, 'index']);
 
         // Wallet ops (Admin)
         Route::get('wallet/ledger', [AdminWalletController::class, 'ledger']);
         Route::post('wallet/adjust', [AdminWalletController::class, 'adjust']);
         Route::post('wallet/topup', [AdminWalletController::class, 'topup']);
+        Route::get('wallet/topups', [AdminWalletController::class, 'topups']);
 
         // Referrals (Admin)
         Route::get('referrals', [AdminReferralController::class, 'index']);
