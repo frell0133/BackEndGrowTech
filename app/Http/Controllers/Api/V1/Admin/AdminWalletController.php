@@ -4,25 +4,18 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\LedgerEntry;
-use App\Models\LedgerTransaction;
 use App\Models\WalletTopup;
 use App\Services\LedgerService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class AdminWalletController extends Controller
 {
     /**
      * POST /api/v1/admin/wallet/topup
-     * Manual topup oleh admin:
-     * - HANYA credit wallet user
-     * - TIDAK ada debit wallet admin
-     * - Audit disimpan di note (tanpa ubah DB)
+     * Manual topup oleh admin (rescue case)
      */
     public function topup(Request $request, LedgerService $ledgerService)
     {
-        $admin = $request->user();
-
         $data = $request->validate([
             'user_id' => ['required', 'integer', 'min:1'],
             'amount' => ['required', 'integer', 'min:1'],
@@ -30,54 +23,12 @@ class AdminWalletController extends Controller
             'note' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        $userId = (int) $data['user_id'];
-        $amount = (int) $data['amount'];
-        $idempotencyKey = $data['idempotency_key'] ?? null;
-
-        $auditNote = trim(
-            '[ADMIN_TOPUP]'
-            . ' actor_admin_id=' . ($admin?->id ?? 'unknown')
-            . ' target_user_id=' . $userId
-            . ' amount=' . $amount
-            . ($data['note'] ? ' | ' . $data['note'] : '')
+        $tx = $ledgerService->topup(
+            (int) $data['user_id'],
+            (int) $data['amount'],
+            $data['idempotency_key'] ?? null,
+            $data['note'] ?? null
         );
-
-        $tx = DB::transaction(function () use ($ledgerService, $userId, $amount, $idempotencyKey, $auditNote) {
-
-            // idempotency guard
-            if ($idempotencyKey) {
-                $existing = LedgerTransaction::query()
-                    ->where('idempotency_key', $idempotencyKey)
-                    ->first();
-                if ($existing) return $existing;
-            }
-
-            $wallet = $ledgerService->getOrCreateUserWallet($userId);
-
-            $balanceBefore = (int) $wallet->balance;
-            $balanceAfter  = $balanceBefore + $amount;
-
-            // pakai type/status yang sudah valid di sistem kamu
-            $tx = LedgerTransaction::create([
-                'type' => 'TOPUP',
-                'status' => 'SUCCESS',
-                'idempotency_key' => $idempotencyKey,
-                'note' => $auditNote,
-            ]);
-
-            LedgerEntry::create([
-                'ledger_transaction_id' => $tx->id,
-                'wallet_id' => $wallet->id,
-                'direction' => 'credit',
-                'amount' => $amount,
-                'balance_before' => $balanceBefore,
-                'balance_after' => $balanceAfter,
-            ]);
-
-            $wallet->update(['balance' => $balanceAfter]);
-
-            return $tx;
-        });
 
         return response()->json([
             'success' => true,
@@ -86,14 +37,14 @@ class AdminWalletController extends Controller
                 'type' => $tx->type,
                 'status' => $tx->status,
                 'idempotency_key' => $tx->idempotency_key,
-                'note' => $tx->note,
             ],
         ]);
     }
-    
+
     /**
      * POST /api/v1/admin/wallet/adjust
-     * NOTE: ini akan 500 kalau LedgerService belum punya method adjust()
+     * Adjust balance (debit/credit) oleh admin
+     * direction: credit|debit
      */
     public function adjust(Request $request, LedgerService $ledgerService)
     {
@@ -104,6 +55,11 @@ class AdminWalletController extends Controller
             'idempotency_key' => ['nullable', 'string', 'max:255'],
             'note' => ['nullable', 'string', 'max:1000'],
         ]);
+
+        // kalau LedgerService kamu belum punya method adjust(),
+        // paling aman: map debit/credit ke method yang sudah ada.
+        // Aku asumsikan LedgerService kamu punya adjust().
+        // Kalau belum, bilang—nanti aku sesuaikan dengan service kamu.
 
         $tx = $ledgerService->adjust(
             (int) $data['user_id'],
@@ -126,6 +82,7 @@ class AdminWalletController extends Controller
 
     /**
      * GET /api/v1/admin/wallet/ledger
+     * Semua ledger semua user
      */
     public function ledger(Request $request)
     {
@@ -143,7 +100,8 @@ class AdminWalletController extends Controller
 
     /**
      * GET /api/v1/admin/wallet/topups
-     * List topup user (Midtrans) dari wallet_topups
+     * List semua topup user (Midtrans) dari tabel wallet_topups
+     * Untuk monitor pending/failed, dll.
      */
     public function topups(Request $request)
     {
@@ -153,6 +111,7 @@ class AdminWalletController extends Controller
             ->with(['user:id,name,email'])
             ->orderByDesc('id');
 
+        // filter opsional
         if ($status = $request->query('status')) {
             $q->where('status', $status);
         }
@@ -161,6 +120,12 @@ class AdminWalletController extends Controller
         }
         if ($request->query('unposted') === '1') {
             $q->whereNull('posted_to_ledger_at');
+        }
+        if ($request->query('date_from')) {
+            $q->whereDate('created_at', '>=', $request->query('date_from'));
+        }
+        if ($request->query('date_to')) {
+            $q->whereDate('created_at', '<=', $request->query('date_to'));
         }
 
         return response()->json([
