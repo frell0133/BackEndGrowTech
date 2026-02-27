@@ -103,17 +103,27 @@ class AdminDiscountCampaignController extends Controller
             'usage_limit_total' => ['nullable','integer','min:1'],
             'usage_limit_per_user' => ['nullable','integer','min:1'],
 
-            'subcategory_id' => ['nullable','integer','min:1'],
+            'targets' => ['nullable','array'],
+            'targets.*.type' => ['required','in:subcategory,product'],
+            'targets.*.id' => ['required','integer','min:1'],
         ]);
 
         if (empty($v['slug'])) {
             $v['slug'] = Str::slug($v['name']);
         }
 
-        $subcategoryId = $v['subcategory_id'] ?? null;
-        unset($v['subcategory_id']);
+        $targets = $v['targets'] ?? [];
+        unset($v['targets']);
 
         $campaign = DiscountCampaign::create($v);
+
+        foreach ($targets as $t) {
+            DiscountCampaignTarget::create([
+                'campaign_id' => $campaign->id,
+                'target_type' => $t['type'],
+                'target_id' => (int) $t['id'],
+            ]);
+        }
 
         if ($subcategoryId) {
             DiscountCampaignTarget::firstOrCreate([
@@ -158,6 +168,10 @@ class AdminDiscountCampaignController extends Controller
             'usage_limit_per_user' => ['sometimes','nullable','integer','min:1'],
 
             'subcategory_id' => ['sometimes','nullable','integer','min:1'],
+
+            'targets' => ['sometimes','array'],
+            'targets.*.type' => ['required','in:subcategory,product'],
+            'targets.*.id' => ['required','integer','min:1'],
         ]);
 
         if (array_key_exists('name', $v) && (!array_key_exists('slug', $v) || $v['slug'] === null)) {
@@ -181,6 +195,18 @@ class AdminDiscountCampaignController extends Controller
                     'campaign_id' => $campaign->id,
                     'target_type' => 'subcategory',
                     'target_id' => (int) $subcategoryId,
+                ]);
+            }
+        }
+
+        if (array_key_exists('targets', $v)) {
+            DiscountCampaignTarget::where('campaign_id', $campaign->id)->delete();
+
+            foreach ($v['targets'] as $t) {
+                DiscountCampaignTarget::create([
+                    'campaign_id' => $campaign->id,
+                    'target_type' => $t['type'],
+                    'target_id' => (int) $t['id'],
                 ]);
             }
         }
