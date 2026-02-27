@@ -44,6 +44,7 @@ class AdminWalletController extends Controller
 
         $tx = DB::transaction(function () use ($ledgerService, $userId, $amount, $idempotencyKey, $auditNote) {
 
+            // idempotency guard
             if ($idempotencyKey) {
                 $existing = LedgerTransaction::query()
                     ->where('idempotency_key', $idempotencyKey)
@@ -53,7 +54,10 @@ class AdminWalletController extends Controller
 
             $wallet = $ledgerService->getOrCreateUserWallet($userId);
 
-            // pakai type/status yang SUDAH TERBUKTI valid di sistem kamu
+            $balanceBefore = (int) $wallet->balance;
+            $balanceAfter  = $balanceBefore + $amount;
+
+            // pakai type/status yang sudah valid di sistem kamu
             $tx = LedgerTransaction::create([
                 'type' => 'TOPUP',
                 'status' => 'SUCCESS',
@@ -61,17 +65,16 @@ class AdminWalletController extends Controller
                 'note' => $auditNote,
             ]);
 
-            // update wallet dulu
-            $balanceAfter = (int) $wallet->balance + $amount;
-            $wallet->update(['balance' => $balanceAfter]);
-
-            // entry: MINIMAL FIELD (hindari balance_after kalau kolomnya tidak ada)
             LedgerEntry::create([
                 'ledger_transaction_id' => $tx->id,
                 'wallet_id' => $wallet->id,
-                'direction' => 'credit', // kalau ini masih error, lihat catatan di bawah
+                'direction' => 'credit',
                 'amount' => $amount,
+                'balance_before' => $balanceBefore,
+                'balance_after' => $balanceAfter,
             ]);
+
+            $wallet->update(['balance' => $balanceAfter]);
 
             return $tx;
         });
