@@ -15,6 +15,16 @@ class User extends Authenticatable
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
 
+
+    public const TIER_MEMBER   = 'member';
+    public const TIER_RESELLER = 'reseller';
+    public const TIER_VIP      = 'vip';
+
+    public static function allowedTiers(): array
+    {
+        return [self::TIER_MEMBER, self::TIER_RESELLER, self::TIER_VIP];
+    }
+
     /**
      * The attributes that are mass assignable.
      *
@@ -27,6 +37,7 @@ class User extends Authenticatable
     'email',
     'password',
     'role',
+    'tier',
     'referral_code',
     'provider',
     'provider_id',

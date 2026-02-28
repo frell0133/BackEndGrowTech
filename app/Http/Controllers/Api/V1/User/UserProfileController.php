@@ -37,6 +37,7 @@ class UserProfileController extends Controller
             'name'       => $user->name,
             'email'      => $user->email,
             'role'       => $user->role,
+            'tier'       => $user->tier ?? 'member',
             'avatar'     => $user->avatar,      // 🔥 PASTIKAN TERKIRIM
             'avatar_url' => $avatarUrl,         // 🔥 URL FINAL
             'avatar_path'=> $user->avatar_path, // optional

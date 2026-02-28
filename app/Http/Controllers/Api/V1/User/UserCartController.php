@@ -157,6 +157,7 @@ class UserCartController extends Controller
             'items' => $items,
             'summary' => [
                 'subtotal' => $subtotal,
+                'tier' => $role,
                 'discount_total' => $discountTotal,
                 'tax_percent' => $taxPercent,
                 'tax_amount' => $taxAmount,
@@ -443,6 +444,7 @@ class UserCartController extends Controller
                 'mode' => 'order',
                 'order' => $lastOrder,
                 'items' => $lastOrder->items,
+                'tier' => $role,
                 'summary' => [
                     'subtotal' => (float) $lastOrder->subtotal,
                     'discount_total' => (float) $lastOrder->discount_total,
@@ -500,6 +502,7 @@ class UserCartController extends Controller
                 'unit_price' => (float) $unitPrice,
                 'line_subtotal' => (float) $line,
                 'product' => $p,
+                'tier' => $role,
             ];
         }
 
@@ -545,6 +548,7 @@ class UserCartController extends Controller
             'items' => $items,
             'summary' => [
                 'subtotal' => $subtotal,
+                'tier' => $role,
                 'discount_total' => $discountTotal,
                 'tax_percent' => $taxPercent,
                 'tax_amount' => $taxAmount,

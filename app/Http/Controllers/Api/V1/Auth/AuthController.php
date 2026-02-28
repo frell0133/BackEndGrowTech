@@ -28,12 +28,13 @@ class AuthController extends Controller
             'email' => $data['email'],
             'password' => Hash::make($data['password']),
             'role' => 'user',
+            'tier' => 'member',
         ]);
 
         $token = $user->createToken('api-token')->plainTextToken;
 
         return $this->ok([
-            'user' => $user->only('id','name','email','role'),
+            'user' => $user->only('id','name','email','role','tier'),
             'token' => $token,
             'token_type' => 'Bearer',
         ]);
@@ -70,7 +71,7 @@ class AuthController extends Controller
         $token = $user->createToken($tokenName)->plainTextToken;
 
         return $this->ok([
-            'user' => $user->only('id','name','email','role'),
+            'user' => $user->only('id','name','email','role','tier'),
             'token' => $token,
             'token_type' => 'Bearer',
         ]);
@@ -108,6 +109,6 @@ class AuthController extends Controller
             ], 401);
         }
 
-        return $this->ok($user->only('id','name','email','role'));
+        return $this->ok($user->only('id','name','email','role','tier'));
     }
 }

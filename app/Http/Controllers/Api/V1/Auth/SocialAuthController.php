@@ -72,6 +72,7 @@ class SocialAuthController extends Controller
                     'email' => $email ?? (Str::uuid() . "@{$provider}.local"),
                     'password' => Hash::make(Str::random(32)),
                     'role' => 'user',
+                    'tier' => 'member',
                     'provider' => $provider,
                     'provider_id' => $providerId,
                     'avatar' => $avatar,     // ✅ simpan avatar provider

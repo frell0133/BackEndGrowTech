@@ -78,6 +78,7 @@ class AdminUserController extends Controller
             'email' => ['required','email','max:190','unique:users,email'],
             'password' => ['required','string','min:8'],
             'role' => ['required', Rule::in(['user','admin'])],
+            'tier' => ['nullable', Rule::in(User::allowedTiers())],
         ]);
 
         $user = User::create([
@@ -87,6 +88,7 @@ class AdminUserController extends Controller
             'email' => strtolower($validated['email']),
             'password' => Hash::make($validated['password']),
             'role' => $validated['role'],
+            'tier' => $validated['tier'] ?? User::TIER_MEMBER,
         ]);
 
         // ✅ kalau mau debug, taruh SEBELUM return
@@ -114,6 +116,7 @@ class AdminUserController extends Controller
             'email' => ['sometimes','email','max:190', Rule::unique('users','email')->ignore($user->id)],
             'password' => ['sometimes','nullable','string','min:8'],
             'role' => ['sometimes', Rule::in(['user','admin'])],
+            'tier' => ['sometimes', Rule::in(User::allowedTiers())],
         ]);
 
         if (array_key_exists('email', $validated)) {

@@ -113,7 +113,10 @@ class AdminWalletController extends Controller
     {
         $perPage = (int) ($request->query('per_page', 50));
 
-        $entries = LedgerEntry::with(['transaction', 'wallet'])
+        $entries = LedgerEntry::with([
+            'transaction',
+            'wallet.user:id,name,email'
+        ])
             ->orderByDesc('id')
             ->paginate($perPage);
 
