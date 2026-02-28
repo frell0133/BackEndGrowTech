@@ -61,13 +61,13 @@ class UserOrderController extends Controller
             return $this->fail('Product belum dipublish', 422);
         }
 
-        // Harga: tier_pricing[role] -> tier_pricing['member'] -> price
-        $role = (string) ($user->role ?? 'member');
+        // ✅ Harga: tier_pricing[user.tier] -> tier_pricing['member'] -> first tier_pricing -> price
+        $tierKey = (string) ($user->tier ?? 'member');
         $tier = (array) ($product->tier_pricing ?? []);
         $unitPrice = 0;
 
         if (!empty($tier)) {
-            $unitPrice = (int) ($tier[$role] ?? 0);
+            $unitPrice = (int) ($tier[$tierKey] ?? 0);
             if ($unitPrice <= 0) $unitPrice = (int) ($tier['member'] ?? 0);
             if ($unitPrice <= 0) {
                 $vals = array_values($tier);
@@ -75,7 +75,10 @@ class UserOrderController extends Controller
             }
         }
         if ($unitPrice <= 0) $unitPrice = (int) ($product->price ?? 0);
-        if ($unitPrice <= 0) return $this->fail('Harga product belum diset (tier_pricing/price kosong)', 422);
+
+        if ($unitPrice <= 0) {
+            return $this->fail('Harga product belum diset (tier_pricing/price kosong)', 422);
+        }
 
         $subtotal = (float) ($unitPrice * $qty);
 
@@ -249,6 +252,7 @@ class UserOrderController extends Controller
                     }
 
                     $locked->update(['status' => OrderStatus::FULFILLED->value]);
+
                     // ✅ kirim invoice email (queue + fallback sync) setelah transaksi commit
                     $this->dispatchInvoiceEmailAfterCommit(
                         (int) $locked->id,

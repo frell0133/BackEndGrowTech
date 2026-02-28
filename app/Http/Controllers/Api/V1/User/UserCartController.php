@@ -66,14 +66,22 @@ class UserCartController extends Controller
         return 0;
     }
 
-    private function resolveUnitPrice(Product $product, string $role): int
+    /**
+     * Ambil harga unit berdasarkan tier user (member/reseller/vip).
+     * Fallback:
+     * - jika tier user tidak ada => coba member
+     * - jika masih 0 => ambil value pertama dari tier_pricing
+     * - jika masih 0 => fallback product.price
+     */
+    private function resolveUnitPrice(Product $product, string $tierKey): int
     {
         $tier = (array) ($product->tier_pricing ?? []);
         $unitPrice = 0;
 
         if (!empty($tier)) {
-            $unitPrice = (int) ($tier[$role] ?? 0);
+            $unitPrice = (int) ($tier[$tierKey] ?? 0);
             if ($unitPrice <= 0) $unitPrice = (int) ($tier['member'] ?? 0);
+
             if ($unitPrice <= 0) {
                 $vals = array_values($tier);
                 $unitPrice = (int) ($vals[0] ?? 0);
@@ -94,7 +102,8 @@ class UserCartController extends Controller
 
         $cart = $this->cartForUser((int) $user->id);
 
-        $role = (string) ($user->role ?? 'member');
+        // ✅ tier untuk pricing (bukan role)
+        $tierKey = (string) ($user->tier ?? 'member');
         $taxPercent = $this->getTaxPercent(); // default 0
 
         $items = CartItem::query()
@@ -105,7 +114,7 @@ class UserCartController extends Controller
                 'product.subcategory',
             ])
             ->get()
-            ->map(function (CartItem $item) use ($role) {
+            ->map(function (CartItem $item) use ($tierKey) {
                 $p = $item->product;
 
                 $stock = License::query()
@@ -117,16 +126,7 @@ class UserCartController extends Controller
 
                 $unitPrice = 0;
                 if ($p) {
-                    $tier = (array) ($p->tier_pricing ?? []);
-                    if (!empty($tier)) {
-                        $unitPrice = (int) ($tier[$role] ?? 0);
-                        if ($unitPrice <= 0) $unitPrice = (int) ($tier['member'] ?? 0);
-                        if ($unitPrice <= 0) {
-                            $vals = array_values($tier);
-                            $unitPrice = (int) ($vals[0] ?? 0);
-                        }
-                    }
-                    if ($unitPrice <= 0) $unitPrice = (int) ($p->price ?? 0);
+                    $unitPrice = $this->resolveUnitPrice($p, $tierKey);
                 }
 
                 $qty = (int) ($item->qty ?? 1);
@@ -157,7 +157,7 @@ class UserCartController extends Controller
             'items' => $items,
             'summary' => [
                 'subtotal' => $subtotal,
-                'tier' => $role,
+                'tier' => $tierKey,
                 'discount_total' => $discountTotal,
                 'tax_percent' => $taxPercent,
                 'tax_amount' => $taxAmount,
@@ -265,7 +265,8 @@ class UserCartController extends Controller
             'voucher_code' => ['nullable', 'string', 'max:50'],
         ]);
 
-        $role = (string) ($user->role ?? 'member');
+        // ✅ tier untuk pricing (bukan role)
+        $tierKey = (string) ($user->tier ?? 'member');
         $taxPercent = $this->getTaxPercent();
 
         $cartItems = CartItem::query()
@@ -297,7 +298,7 @@ class UserCartController extends Controller
                 ]);
             }
 
-            $unit = $this->resolveUnitPrice($p, $role);
+            $unit = $this->resolveUnitPrice($p, $tierKey);
             if ($unit <= 0) {
                 return $this->fail('Harga product belum diset (tier_pricing/price kosong)', 422, [
                     'product_id' => (int) $ci->product_id,
@@ -305,7 +306,7 @@ class UserCartController extends Controller
             }
         }
 
-        $response = DB::transaction(function () use ($cart, $cartItems, $role, $taxPercent, $v, $user) {
+        $response = DB::transaction(function () use ($cart, $cartItems, $tierKey, $taxPercent, $v, $user) {
 
             $computedItems = [];
             $subtotal = 0.0;
@@ -313,7 +314,7 @@ class UserCartController extends Controller
             foreach ($cartItems as $ci) {
                 $p = $ci->product;
                 $qty = (int) ($ci->qty ?? 1);
-                $unitPrice = $this->resolveUnitPrice($p, $role);
+                $unitPrice = $this->resolveUnitPrice($p, $tierKey);
 
                 $line = (float) ($unitPrice * $qty);
                 $subtotal += $line;
@@ -403,7 +404,7 @@ class UserCartController extends Controller
             CartItem::query()->where('cart_id', (int) $cart->id)->delete();
 
             return $this->ok([
-                'order' => $order->fresh()->load(['items.product','vouchers']),
+                'order' => $order->fresh()->load(['items.product', 'vouchers']),
             ]);
         });
 
@@ -421,7 +422,8 @@ class UserCartController extends Controller
             'voucher_code' => ['nullable', 'string', 'max:50'],
         ]);
 
-        $role = (string) ($user->role ?? 'member');
+        // ✅ tier untuk pricing (bukan role)
+        $tierKey = (string) ($user->tier ?? 'member');
         $taxPercent = $this->getTaxPercent();
 
         $cartItems = CartItem::query()
@@ -444,7 +446,7 @@ class UserCartController extends Controller
                 'mode' => 'order',
                 'order' => $lastOrder,
                 'items' => $lastOrder->items,
-                'tier' => $role,
+                'tier' => $tierKey,
                 'summary' => [
                     'subtotal' => (float) $lastOrder->subtotal,
                     'discount_total' => (float) $lastOrder->discount_total,
@@ -477,7 +479,7 @@ class UserCartController extends Controller
                 ]);
             }
 
-            $unit = $this->resolveUnitPrice($p, $role);
+            $unit = $this->resolveUnitPrice($p, $tierKey);
             if ($unit <= 0) {
                 return $this->fail('Harga product belum diset (tier_pricing/price kosong)', 422, [
                     'product_id' => (int) $ci->product_id,
@@ -491,7 +493,7 @@ class UserCartController extends Controller
         foreach ($cartItems as $ci) {
             $p = $ci->product;
             $qty = (int) ($ci->qty ?? 1);
-            $unitPrice = $this->resolveUnitPrice($p, $role);
+            $unitPrice = $this->resolveUnitPrice($p, $tierKey);
 
             $line = (float) ($unitPrice * $qty);
             $subtotal += $line;
@@ -502,7 +504,7 @@ class UserCartController extends Controller
                 'unit_price' => (float) $unitPrice,
                 'line_subtotal' => (float) $line,
                 'product' => $p,
-                'tier' => $role,
+                'tier' => $tierKey,
             ];
         }
 
@@ -548,7 +550,7 @@ class UserCartController extends Controller
             'items' => $items,
             'summary' => [
                 'subtotal' => $subtotal,
-                'tier' => $role,
+                'tier' => $tierKey,
                 'discount_total' => $discountTotal,
                 'tax_percent' => $taxPercent,
                 'tax_amount' => $taxAmount,
