@@ -13,32 +13,72 @@ use App\Models\OrderItem;
 use App\Models\Payment;
 use App\Models\Product;
 use App\Models\Voucher;
+use App\Models\Setting;
 use App\Services\LedgerService;
 use App\Services\MidtransService;
 use App\Services\OrderFulfillmentService;
 use App\Support\ApiResponse;
-use App\Jobs\SendInvoiceEmailJob;
 use App\Http\Controllers\Controller;
-use Illuminate\Support\Facades\Log;
 use App\Support\DispatchesInvoiceEmail;
 
 class UserOrderController extends Controller
 {
     use ApiResponse, DispatchesInvoiceEmail;
 
-    /**
-     * POST /api/v1/orders (BUY NOW)
-     * Body:
-     * {
-     *   "product_id": 1,
-     *   "qty": 1,
-     *   "voucher_code": "1212" // optional
-     * }
-     *
-     * NOTE:
-     * - Untuk Opsi B (multi item), cart checkout pakai endpoint /cart/checkout
-     * - Endpoint ini tetap dipakai untuk "Buy Now" single product
-     */
+    // =========================
+    // Helpers: settings
+    // =========================
+    private function getTaxPercent(): int
+    {
+        $row = Setting::query()
+            ->where('group', 'payment')
+            ->where('key', 'tax_percent')
+            ->first();
+
+        if (!$row) return 0;
+
+        $val = $row->value;
+
+        if (is_string($val)) {
+            $decoded = json_decode($val, true);
+            if (json_last_error() === JSON_ERROR_NONE) $val = $decoded;
+        }
+
+        if (is_array($val)) return (int) ($val['percent'] ?? 0);
+        if (is_numeric($val)) return (int) $val;
+
+        return 0;
+    }
+
+    private function getGatewayFeePercent(): float
+    {
+        $row = Setting::query()
+            ->where('group', 'payment')
+            ->where('key', 'fee_percent')
+            ->first();
+
+        if (!$row) return 0.0;
+
+        $val = $row->value;
+
+        if (is_string($val)) {
+            $decoded = json_decode($val, true);
+            if (json_last_error() === JSON_ERROR_NONE) $val = $decoded;
+        }
+
+        if (is_array($val)) {
+            $v = $val['percent'] ?? $val['value'] ?? 0;
+            return is_numeric($v) ? (float) $v : 0.0;
+        }
+
+        if (is_numeric($val)) return (float) $val;
+
+        return 0.0;
+    }
+
+    // =========================
+    // POST /api/v1/orders (BUY NOW)
+    // =========================
     public function store(Request $request)
     {
         $user = $request->user();
@@ -61,7 +101,7 @@ class UserOrderController extends Controller
             return $this->fail('Product belum dipublish', 422);
         }
 
-        // ✅ Harga: tier_pricing[user.tier] -> tier_pricing['member'] -> first tier_pricing -> price
+        // ✅ tier pricing
         $tierKey = (string) ($user->tier ?? 'member');
         $tier = (array) ($product->tier_pricing ?? []);
         $unitPrice = 0;
@@ -114,14 +154,25 @@ class UserOrderController extends Controller
                 if ($discountTotal > $subtotal) $discountTotal = $subtotal;
             }
 
-            $taxPercent = 0; // default (nanti bisa kamu samakan ke setting juga kalau mau)
+            // ✅ tax dari setting
+            $taxPercent = $this->getTaxPercent();
             $taxAmount = 0.0;
+            if ($taxPercent > 0) {
+                $taxAmount = round($subtotal * ($taxPercent / 100), 2);
+            }
 
+            // ✅ base amount (wallet pakai ini)
             $amount = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
+
+            // ✅ fee gateway (midtrans customer bayar ini tambahan)
+            $feePercent = $this->getGatewayFeePercent();
+            $gatewayFeeAmount = 0.0;
+            if ($feePercent > 0) {
+                $gatewayFeeAmount = round($amount * ($feePercent / 100), 2);
+            }
 
             $invoice = 'INV-' . now()->format('Ymd') . '-' . Str::upper(Str::random(8));
 
-            // legacy fields masih kita isi untuk buy-now
             $order = Order::create([
                 'user_id' => (int) $user->id,
                 'product_id' => (int) $product->id,
@@ -132,11 +183,12 @@ class UserOrderController extends Controller
                 'discount_total' => (float) $discountTotal,
                 'tax_percent' => (int) $taxPercent,
                 'tax_amount' => (float) $taxAmount,
+                'gateway_fee_percent' => (float) $feePercent,
+                'gateway_fee_amount' => (float) $gatewayFeeAmount,
                 'amount' => (float) $amount,
                 'payment_gateway_code' => null,
             ]);
 
-            // ✅ buat order_items juga (supaya konsisten Opsi B)
             OrderItem::create([
                 'order_id' => (int) $order->id,
                 'product_id' => (int) $product->id,
@@ -155,15 +207,18 @@ class UserOrderController extends Controller
 
             return $this->ok([
                 'order' => $order->fresh()->load(['items.product', 'product', 'vouchers']),
+                'payment_gateway_summary' => [
+                    'fee_percent' => (float) $feePercent,
+                    'fee_amount' => (float) $gatewayFeeAmount,
+                    'total_payable' => (float) ($amount + $gatewayFeeAmount),
+                ],
             ]);
         });
     }
 
-    /**
-     * POST /api/v1/orders/{id}/payments
-     * Body:
-     * { "method": "midtrans" } atau { "method": "wallet" }
-     */
+    // =========================
+    // POST /api/v1/orders/{id}/payments
+    // =========================
     public function createPayment(
         Request $request,
         string $id,
@@ -217,10 +272,8 @@ class UserOrderController extends Controller
                     $amountInt = (int) round((float) $locked->amount);
                     if ($amountInt <= 0) return $this->fail('Amount invalid', 422);
 
-                    // debit saldo
                     $ledger->purchase((int) $user->id, $amountInt, 'PAY ORDER ' . $locked->invoice_number);
 
-                    // payment record
                     $payment = $locked->payment;
                     if (!$payment) {
                         $payment = Payment::create([
@@ -234,6 +287,7 @@ class UserOrderController extends Controller
                     } else {
                         $payment->update([
                             'gateway_code' => 'wallet',
+                            'amount' => (float) $locked->amount,
                             'status' => PaymentStatus::PAID->value,
                             'raw_callback' => array_merge((array) ($payment->raw_callback ?? []), ['method' => 'wallet']),
                         ]);
@@ -244,7 +298,6 @@ class UserOrderController extends Controller
                         'payment_gateway_code' => 'wallet',
                     ]);
 
-                    // fulfill multi-item
                     $res = $fulfillment->fulfillPaidOrder($locked->fresh());
 
                     if (!($res['ok'] ?? false)) {
@@ -253,7 +306,6 @@ class UserOrderController extends Controller
 
                     $locked->update(['status' => OrderStatus::FULFILLED->value]);
 
-                    // ✅ kirim invoice email (queue + fallback sync) setelah transaksi commit
                     $this->dispatchInvoiceEmailAfterCommit(
                         (int) $locked->id,
                         'wallet_paid',
@@ -267,7 +319,6 @@ class UserOrderController extends Controller
                         'fulfillment' => $res,
                     ]);
                 });
-
             } catch (\Illuminate\Validation\ValidationException $e) {
                 return $this->fail('Validation failed', 422, $e->errors());
             } catch (\Throwable $e) {
@@ -284,28 +335,51 @@ class UserOrderController extends Controller
                     ->lockForUpdate()
                     ->first();
 
+                // ✅ hitung gross = base + fee
+                $baseAmount = (float) $locked->amount;
+
+                $feeAmount = (float) ($locked->gateway_fee_amount ?? 0);
+                if ($feeAmount <= 0) {
+                    $feePercent = $this->getGatewayFeePercent();
+                    if ($feePercent > 0) {
+                        $feeAmount = round($baseAmount * ($feePercent / 100), 2);
+                        $locked->update([
+                            'gateway_fee_percent' => (float) $feePercent,
+                            'gateway_fee_amount' => (float) $feeAmount,
+                        ]);
+                    }
+                }
+
+                $gross = (float) ($baseAmount + $feeAmount);
+
                 $payment = $locked->payment;
                 if (!$payment) {
                     $payment = Payment::create([
                         'order_id' => (int) $locked->id,
                         'gateway_code' => 'midtrans',
                         'external_id' => (string) $locked->invoice_number,
-                        'amount' => (float) $locked->amount,
+                        'amount' => (float) $gross, // ✅ gross
                         'status' => PaymentStatus::INITIATED->value,
                         'raw_callback' => null,
                     ]);
+                } else {
+                    // ✅ kalau sudah ada payment, sync amount ke gross
+                    $payment->update([
+                        'gateway_code' => 'midtrans',
+                        'external_id' => (string) $locked->invoice_number,
+                        'amount' => (float) $gross,
+                    ]);
                 }
 
-                // ✅ PALING AMAN: 1 item_details saja, match ke gross_amount
                 $payload = [
                     'transaction_details' => [
                         'order_id' => (string) $locked->invoice_number,
-                        'gross_amount' => (int) round((float) $locked->amount),
+                        'gross_amount' => (int) round($gross),
                     ],
                     'item_details' => [
                         [
                             'id' => (string) $locked->invoice_number,
-                            'price' => (int) round((float) $locked->amount),
+                            'price' => (int) round($gross),
                             'quantity' => 1,
                             'name' => mb_substr('Growtech Order ' . (string) $locked->invoice_number, 0, 50),
                         ],
@@ -345,6 +419,11 @@ class UserOrderController extends Controller
                     'method' => 'midtrans',
                     'order' => $locked->fresh()->load(['items.product', 'product', 'vouchers', 'payment']),
                     'payment' => $payment->fresh(),
+                    'amounts' => [
+                        'base' => (float) $baseAmount,
+                        'fee' => (float) $feeAmount,
+                        'gross' => (float) $gross,
+                    ],
                     'snap' => [
                         'mode' => $snap['mode'] ?? null,
                         'token' => $snap['token'] ?? null,
@@ -352,15 +431,14 @@ class UserOrderController extends Controller
                     ],
                 ]);
             });
-
         } catch (\Throwable $e) {
             return $this->fail('Midtrans payment init failed', 500, $e->getMessage());
         }
     }
 
-    /**
-     * GET /api/v1/orders/{id}/payments
-     */
+    // =========================
+    // GET /api/v1/orders/{id}/payments
+    // =========================
     public function paymentStatus(Request $request, string $id)
     {
         $user = $request->user();
@@ -380,14 +458,17 @@ class UserOrderController extends Controller
             'invoice_number' => (string) $order->invoice_number,
             'order_status' => $status,
             'amount' => (string) $order->amount,
+            'gateway_fee_percent' => (float) ($order->gateway_fee_percent ?? 0),
+            'gateway_fee_amount' => (string) ($order->gateway_fee_amount ?? '0.00'),
+            'total_payable_gateway' => (string) ((float) $order->amount + (float) ($order->gateway_fee_amount ?? 0)),
             'payment' => $order->payment,
             'items' => $order->items,
         ]);
     }
 
-    /**
-     * GET /api/v1/orders
-     */
+    // =========================
+    // GET /api/v1/orders
+    // =========================
     public function index(Request $request)
     {
         $user = $request->user();
@@ -401,9 +482,9 @@ class UserOrderController extends Controller
         return $this->ok($data);
     }
 
-    /**
-     * GET /api/v1/orders/{id}
-     */
+    // =========================
+    // GET /api/v1/orders/{id}
+    // =========================
     public function show(Request $request, string $id)
     {
         $user = $request->user();
@@ -419,9 +500,9 @@ class UserOrderController extends Controller
         return $this->ok($order);
     }
 
-    /**
-     * POST /api/v1/orders/{id}/cancel
-     */
+    // =========================
+    // POST /api/v1/orders/{id}/cancel
+    // =========================
     public function cancel(Request $request, string $id)
     {
         $user = $request->user();
