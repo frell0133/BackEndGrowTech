@@ -119,33 +119,79 @@
           </tr>
 
           {{-- Summary --}}
+          @php
+            $subtotal = (float) ($order->subtotal ?? 0);
+            $discount = (float) ($order->discount_total ?? 0);
+            $taxPercent = (float) ($order->tax_percent ?? 0);
+            $taxAmount = (float) ($order->tax_amount ?? 0);
+
+            // base total (tanpa fee gateway) -> wallet total
+            $baseTotal = (float) ($order->amount ?? 0);
+
+            $feePercent = (float) ($order->gateway_fee_percent ?? 0);
+            $feeAmount = (float) ($order->gateway_fee_amount ?? 0);
+
+            // customer bayar base + fee jika via gateway
+            $gatewayTotal = $baseTotal + $feeAmount;
+
+            $method = strtolower((string) ($paymentMethod ?? ($order->payment_gateway_code ?? '')));
+            $isGateway = in_array($method, ['midtrans'], true);
+
+            $showFee = $isGateway && $feeAmount > 0;
+          @endphp
+
           <tr>
             <td style="padding:20px 40px 0;">
               <table style="margin-left:auto;min-width:320px;border-collapse:collapse;">
                 <tr>
                   <td style="padding:6px 0;font-size:13px;color:#888580;">Subtotal</td>
                   <td style="padding:6px 0 6px 24px;font-size:13px;color:#2d2a24;text-align:right;">
-                    Rp {{ number_format((float) ($order->subtotal ?? 0), 0, ',', '.') }}
+                    Rp {{ number_format($subtotal, 0, ',', '.') }}
                   </td>
                 </tr>
+
                 <tr>
                   <td style="padding:6px 0;font-size:13px;color:#888580;">Diskon</td>
                   <td style="padding:6px 0 6px 24px;font-size:13px;color:#2d2a24;text-align:right;">
-                    - Rp {{ number_format((float) ($order->discount_total ?? 0), 0, ',', '.') }}
+                    - Rp {{ number_format($discount, 0, ',', '.') }}
                   </td>
                 </tr>
+
                 <tr>
-                  <td style="padding:6px 0;font-size:13px;color:#888580;">Pajak ({{ (float) ($order->tax_percent ?? 0) }}%)</td>
+                  <td style="padding:6px 0;font-size:13px;color:#888580;">Pajak ({{ $taxPercent }}%)</td>
                   <td style="padding:6px 0 6px 24px;font-size:13px;color:#2d2a24;text-align:right;">
-                    Rp {{ number_format((float) ($order->tax_amount ?? 0), 0, ',', '.') }}
+                    Rp {{ number_format($taxAmount, 0, ',', '.') }}
                   </td>
                 </tr>
+
                 <tr>
-                  <td style="padding:10px 0 0;font-size:14px;color:#2d2a24;font-weight:700;">Total</td>
+                  <td style="padding:10px 0 0;font-size:14px;color:#2d2a24;font-weight:700;">
+                    Total
+                  </td>
                   <td style="padding:10px 0 0 24px;font-size:14px;color:#2d2a24;text-align:right;font-weight:700;">
-                    Rp {{ number_format((float) ($order->amount ?? 0), 0, ',', '.') }}
+                    Rp {{ number_format($baseTotal, 0, ',', '.') }}
                   </td>
                 </tr>
+
+                @if($showFee)
+                  <tr>
+                    <td style="padding:6px 0;font-size:13px;color:#888580;">
+                      Biaya Payment Gateway ({{ $feePercent }}%)
+                    </td>
+                    <td style="padding:6px 0 6px 24px;font-size:13px;color:#2d2a24;text-align:right;">
+                      Rp {{ number_format($feeAmount, 0, ',', '.') }}
+                    </td>
+                  </tr>
+
+                  <tr>
+                    <td style="padding:10px 0 0;font-size:14px;color:#2d2a24;font-weight:800;">
+                      Total Dibayar
+                    </td>
+                    <td style="padding:10px 0 0 24px;font-size:14px;color:#2d2a24;text-align:right;font-weight:800;">
+                      Rp {{ number_format($gatewayTotal, 0, ',', '.') }}
+                    </td>
+                  </tr>
+                @endif
               </table>
             </td>
           </tr>

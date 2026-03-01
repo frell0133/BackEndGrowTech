@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Order;
+use App\Models\Setting;
 use App\Services\BrevoMailService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -24,14 +25,36 @@ class SendInvoiceEmailJob implements ShouldQueue
         $this->orderId = $orderId;
     }
 
+    private function decodePercent($val): float
+    {
+        if (is_null($val)) return 0.0;
+
+        if (is_string($val)) {
+            $d = json_decode($val, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($d)) {
+                $p = $d['percent'] ?? 0;
+                return is_numeric($p) ? (float) $p : 0.0;
+            }
+            return is_numeric($val) ? (float) $val : 0.0;
+        }
+
+        if (is_array($val)) {
+            $p = $val['percent'] ?? 0;
+            return is_numeric($p) ? (float) $p : 0.0;
+        }
+
+        return is_numeric($val) ? (float) $val : 0.0;
+    }
+
     public function handle(BrevoMailService $brevo): void
     {
         $order = Order::query()
             ->with([
                 'user',
                 'product',       // legacy fallback
-                'items.product', // multi-item (opsi B)
+                'items.product', // multi-item
                 'payment',
+                'vouchers',
             ])
             ->find($this->orderId);
 
@@ -58,6 +81,7 @@ class SendInvoiceEmailJob implements ShouldQueue
             throw new \RuntimeException('Invoice email recipient is empty');
         }
 
+        // ===== items (multi-item) =====
         $items = $order->items;
 
         // fallback legacy single-product order
@@ -81,24 +105,66 @@ class SendInvoiceEmailJob implements ShouldQueue
                 'name' => $it->product->name ?? 'Product',
                 'qty' => (int) ($it->qty ?? 1),
                 'price' => (float) ($it->unit_price ?? 0),
-                'subtotal' => (float) ($it->line_subtotal ?? $it->line_total ?? 0),
+                'subtotal' => (float) ($it->line_subtotal ?? 0),
             ];
         })->values()->all();
 
+        // ===== payment status/method =====
         $paymentStatus = $order->payment?->status;
         if (is_object($paymentStatus)) {
             $paymentStatus = $paymentStatus->value ?? '-';
         }
+        $paymentStatus = $paymentStatus ?? '-';
 
         $paymentMethod = $order->payment?->gateway_code
             ?? $order->payment_gateway_code
             ?? '-';
 
+        // ===== fallback recalc (order lama) =====
+        try {
+            $rawTax = Setting::query()->where('group','payment')->where('key','tax_percent')->value('value');
+            $rawFee = Setting::query()->where('group','payment')->where('key','fee_percent')->value('value');
+
+            $settingTax = (float) $this->decodePercent($rawTax);
+            $settingFee = (float) $this->decodePercent($rawFee);
+
+            $subtotal = (float) ($order->subtotal ?? 0);
+            $discount = (float) ($order->discount_total ?? 0);
+
+            $taxPercent = (float) ($order->tax_percent ?? 0);
+            $taxAmount  = (float) ($order->tax_amount ?? 0);
+
+            if ($taxPercent <= 0 && $settingTax > 0 && $subtotal > 0) {
+                $taxPercent = $settingTax;
+                $taxAmount = round($subtotal * ($taxPercent / 100), 2);
+                $baseAmount = (float) max(0, ($subtotal + $taxAmount) - $discount);
+
+                $order->forceFill([
+                    'tax_percent' => (int) round($taxPercent),
+                    'tax_amount' => (float) $taxAmount,
+                    'amount' => (float) $baseAmount,
+                ])->save();
+            }
+
+            $feeAmount = (float) ($order->gateway_fee_amount ?? 0);
+            if ($feeAmount <= 0 && $settingFee > 0 && (float) $order->amount > 0) {
+                $feeAmount = round((float) $order->amount * ($settingFee / 100), 2);
+
+                $order->forceFill([
+                    'gateway_fee_percent' => (float) $settingFee,
+                    'gateway_fee_amount' => (float) $feeAmount,
+                ])->save();
+            }
+        } catch (\Throwable $ignored) {}
+
+        // refresh after possible recalc
+        $order->refresh();
+
         $html = view('emails.invoice', [
             'order' => $order,
             'items' => $mappedItems,
-            'paymentStatus' => $paymentStatus ?? '-',
-            'paymentMethod' => $paymentMethod ?? '-',
+            'paymentStatus' => $paymentStatus,
+            'paymentMethod' => $paymentMethod,
         ])->render();
 
         $subject = 'Invoice Pesanan ' . ($order->invoice_number ?? ('#' . $order->id));
