@@ -47,31 +47,52 @@ class UserCartController extends Controller
 
         $val = $row->value;
 
-        // kalau ternyata string JSON
         if (is_string($val)) {
             $decoded = json_decode($val, true);
-            if (json_last_error() === JSON_ERROR_NONE) {
-                $val = $decoded;
-            }
+            if (json_last_error() === JSON_ERROR_NONE) $val = $decoded;
         }
 
         if (is_array($val)) {
             return (int) ($val['percent'] ?? 0);
         }
 
-        if (is_numeric($val)) {
-            return (int) $val;
-        }
+        if (is_numeric($val)) return (int) $val;
 
         return 0;
     }
 
     /**
+     * Fee percent untuk payment gateway (mis. 0.7 artinya 0.7%).
+     * Disimpan di site_settings: group=payment, key=fee_percent.
+     */
+    private function getGatewayFeePercent(): float
+    {
+        $row = Setting::query()
+            ->where('group', 'payment')
+            ->where('key', 'fee_percent')
+            ->first();
+
+        if (!$row) return 0.0;
+
+        $val = $row->value;
+
+        if (is_string($val)) {
+            $decoded = json_decode($val, true);
+            if (json_last_error() === JSON_ERROR_NONE) $val = $decoded;
+        }
+
+        if (is_array($val)) {
+            $v = $val['percent'] ?? $val['value'] ?? 0;
+            return is_numeric($v) ? (float) $v : 0.0;
+        }
+
+        if (is_numeric($val)) return (float) $val;
+
+        return 0.0;
+    }
+
+    /**
      * Ambil harga unit berdasarkan tier user (member/reseller/vip).
-     * Fallback:
-     * - jika tier user tidak ada => coba member
-     * - jika masih 0 => ambil value pertama dari tier_pricing
-     * - jika masih 0 => fallback product.price
      */
     private function resolveUnitPrice(Product $product, string $tierKey): int
     {
@@ -102,17 +123,13 @@ class UserCartController extends Controller
 
         $cart = $this->cartForUser((int) $user->id);
 
-        // ✅ tier untuk pricing (bukan role)
         $tierKey = (string) ($user->tier ?? 'member');
-        $taxPercent = $this->getTaxPercent(); // default 0
+        $taxPercent = $this->getTaxPercent();
+        $feePercent = $this->getGatewayFeePercent();
 
         $items = CartItem::query()
             ->where('cart_id', $cart->id)
-            ->with([
-                'product',
-                'product.category',
-                'product.subcategory',
-            ])
+            ->with(['product', 'product.category', 'product.subcategory'])
             ->get()
             ->map(function (CartItem $item) use ($tierKey) {
                 $p = $item->product;
@@ -125,9 +142,7 @@ class UserCartController extends Controller
                 $canBuy = (bool) ($p?->is_active && $p?->is_published && $stock > 0);
 
                 $unitPrice = 0;
-                if ($p) {
-                    $unitPrice = $this->resolveUnitPrice($p, $tierKey);
-                }
+                if ($p) $unitPrice = $this->resolveUnitPrice($p, $tierKey);
 
                 $qty = (int) ($item->qty ?? 1);
 
@@ -143,7 +158,6 @@ class UserCartController extends Controller
             });
 
         $subtotal = (float) $items->sum('line_subtotal');
-
         $discountTotal = 0.0;
 
         $taxAmount = 0.0;
@@ -153,6 +167,11 @@ class UserCartController extends Controller
 
         $total = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
 
+        $gatewayFeeAmount = 0.0;
+        if ($feePercent > 0) {
+            $gatewayFeeAmount = round($total * ($feePercent / 100), 2);
+        }
+
         return $this->ok([
             'items' => $items,
             'summary' => [
@@ -161,7 +180,10 @@ class UserCartController extends Controller
                 'discount_total' => $discountTotal,
                 'tax_percent' => $taxPercent,
                 'tax_amount' => $taxAmount,
-                'total' => $total,
+                'total' => $total, // base (tanpa fee gateway)
+                'gateway_fee_percent' => (float) $feePercent,
+                'gateway_fee_amount' => (float) $gatewayFeeAmount,
+                'total_payable_gateway' => (float) ($total + $gatewayFeeAmount),
             ],
         ]);
     }
@@ -265,9 +287,9 @@ class UserCartController extends Controller
             'voucher_code' => ['nullable', 'string', 'max:50'],
         ]);
 
-        // ✅ tier untuk pricing (bukan role)
         $tierKey = (string) ($user->tier ?? 'member');
         $taxPercent = $this->getTaxPercent();
+        $feePercent = $this->getGatewayFeePercent();
 
         $cartItems = CartItem::query()
             ->where('cart_id', $cart->id)
@@ -306,7 +328,7 @@ class UserCartController extends Controller
             }
         }
 
-        $response = DB::transaction(function () use ($cart, $cartItems, $tierKey, $taxPercent, $v, $user) {
+        $response = DB::transaction(function () use ($cart, $cartItems, $tierKey, $taxPercent, $feePercent, $v, $user) {
 
             $computedItems = [];
             $subtotal = 0.0;
@@ -367,6 +389,11 @@ class UserCartController extends Controller
 
             $amount = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
 
+            $gatewayFeeAmount = 0.0;
+            if ($feePercent > 0) {
+                $gatewayFeeAmount = round($amount * ($feePercent / 100), 2);
+            }
+
             $invoice = 'INV-' . now()->format('Ymd') . '-' . Str::upper(Str::random(8));
 
             $order = Order::create([
@@ -379,7 +406,9 @@ class UserCartController extends Controller
                 'discount_total' => (float) $discountTotal,
                 'tax_percent' => (int) $taxPercent,
                 'tax_amount' => (float) $taxAmount,
-                'amount' => (float) $amount,
+                'gateway_fee_percent' => (float) $feePercent,
+                'gateway_fee_amount' => (float) $gatewayFeeAmount,
+                'amount' => (float) $amount, // base (tanpa fee gateway)
                 'payment_gateway_code' => null,
             ]);
 
@@ -405,6 +434,11 @@ class UserCartController extends Controller
 
             return $this->ok([
                 'order' => $order->fresh()->load(['items.product', 'vouchers']),
+                'payment_gateway_summary' => [
+                    'fee_percent' => (float) $feePercent,
+                    'fee_amount' => (float) $gatewayFeeAmount,
+                    'total_payable' => (float) ($amount + $gatewayFeeAmount),
+                ],
             ]);
         });
 
@@ -422,15 +456,16 @@ class UserCartController extends Controller
             'voucher_code' => ['nullable', 'string', 'max:50'],
         ]);
 
-        // ✅ tier untuk pricing (bukan role)
         $tierKey = (string) ($user->tier ?? 'member');
         $taxPercent = $this->getTaxPercent();
+        $feePercent = $this->getGatewayFeePercent();
 
         $cartItems = CartItem::query()
             ->where('cart_id', $cart->id)
             ->with(['product'])
             ->get();
 
+        // kalau cart kosong, fallback ke last order
         if ($cartItems->isEmpty()) {
             $lastOrder = \App\Models\Order::query()
                 ->where('user_id', $user->id)
@@ -438,9 +473,7 @@ class UserCartController extends Controller
                 ->latest('id')
                 ->first();
 
-            if (!$lastOrder) {
-                return $this->fail('Cart kosong', 422);
-            }
+            if (!$lastOrder) return $this->fail('Cart kosong', 422);
 
             return $this->ok([
                 'mode' => 'order',
@@ -453,6 +486,9 @@ class UserCartController extends Controller
                     'tax_percent' => (int) ($lastOrder->tax_percent ?? 0),
                     'tax_amount' => (float) $lastOrder->tax_amount,
                     'total' => (float) $lastOrder->amount,
+                    'gateway_fee_percent' => (float) ($lastOrder->gateway_fee_percent ?? 0),
+                    'gateway_fee_amount' => (float) ($lastOrder->gateway_fee_amount ?? 0),
+                    'total_payable_gateway' => (float) ((float) $lastOrder->amount + (float) ($lastOrder->gateway_fee_amount ?? 0)),
                 ],
             ]);
         }
@@ -545,6 +581,11 @@ class UserCartController extends Controller
 
         $total = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
 
+        $gatewayFeeAmount = 0.0;
+        if ($feePercent > 0) {
+            $gatewayFeeAmount = round($total * ($feePercent / 100), 2);
+        }
+
         return $this->ok([
             'mode' => 'cart',
             'items' => $items,
@@ -555,6 +596,9 @@ class UserCartController extends Controller
                 'tax_percent' => $taxPercent,
                 'tax_amount' => $taxAmount,
                 'total' => $total,
+                'gateway_fee_percent' => (float) $feePercent,
+                'gateway_fee_amount' => (float) $gatewayFeeAmount,
+                'total_payable_gateway' => (float) ($total + $gatewayFeeAmount),
             ],
         ]);
     }

@@ -22,7 +22,11 @@ class Order extends Model
         'discount_total',
         'tax_percent',
         'tax_amount',
+        // payment gateway fee (untuk nutup biaya/charge gateway)
+        'gateway_fee_percent',
+        'gateway_fee_amount',
         'payment_gateway_code',
+        'invoice_emailed_at',
     ];
 
     protected $casts = [
@@ -31,6 +35,8 @@ class Order extends Model
         'discount_total' => 'decimal:2',
         'tax_amount' => 'decimal:2',
         'tax_percent' => 'integer',
+        'gateway_fee_percent' => 'decimal:3',
+        'gateway_fee_amount' => 'decimal:2',
         'status' => OrderStatus::class,
         'invoice_emailed_at' => 'datetime',
     ];
@@ -40,7 +46,7 @@ class Order extends Model
         return $this->belongsTo(User::class);
     }
 
-    // legacy (boleh tetap ada)
+    // legacy
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);

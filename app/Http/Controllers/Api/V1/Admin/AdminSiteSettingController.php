@@ -37,6 +37,7 @@ class AdminSiteSettingController extends Controller
     public function upsert(Request $request)
     {
         $group = (string) $request->input('group');
+        $key   = (string) $request->input('key');
 
         $rules = [
             'group' => ['required','string','max:64'],
@@ -45,6 +46,7 @@ class AdminSiteSettingController extends Controller
             'is_public' => ['required','boolean'],
         ];
 
+        // Contact rules
         if ($group === 'contact') {
             $rules['value'] = ['required','array'];
             $rules['value.name'] = ['required','string'];
@@ -54,9 +56,16 @@ class AdminSiteSettingController extends Controller
             $rules['value.icon_url']  = ['required','string'];
         }
 
+        // ✅ Payment rules (fee_percent / tax_percent)
+        if ($group === 'payment' && in_array($key, ['fee_percent', 'tax_percent'], true)) {
+            // kita prefer format { "percent": 0.7 }
+            $rules['value'] = ['required','array'];
+            $rules['value.percent'] = ['required','numeric','min:0','max:100'];
+        }
+
         $data = $request->validate($rules);
 
-        // ✅ PENTING: simpan value sebagai JSON string supaya aman di DB (text/json/jsonb)
+        // simpan value sebagai JSON string
         $value = $data['value'];
         if (is_array($value) || is_object($value)) {
             $value = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
@@ -72,8 +81,8 @@ class AdminSiteSettingController extends Controller
             ]
         );
 
-    return response()->json(['success' => true, 'data' => ['saved' => true]]);
-}
+        return response()->json(['success' => true, 'data' => ['saved' => true]]);
+    }
 
     public function destroy(Request $request)
     {
