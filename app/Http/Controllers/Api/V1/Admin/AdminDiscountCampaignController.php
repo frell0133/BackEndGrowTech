@@ -38,23 +38,20 @@ class AdminDiscountCampaignController extends Controller
                 ->pluck('target_id');
         })->unique()->values();
 
-        // ✅ FIX: SubCategory (bukan Subcategory)
         $subMap = SubCategory::query()
             ->with('category:id,name')
             ->whereIn('id', $subIds)
             ->get()
             ->keyBy('id');
 
-        // inject resolved_subcategory agar Resource bisa baca
         $items->each(function ($c) use ($subMap) {
             $subTarget = $c->targets->firstWhere('target_type', 'subcategory');
-            $c->resolved_subcategory = $subTarget ? ($subMap[(int)$subTarget->target_id] ?? null) : null;
+            $c->resolved_subcategory = $subTarget ? ($subMap[(int) $subTarget->target_id] ?? null) : null;
         });
 
         $paginator->setCollection($items);
 
         return $this->ok([
-            // ✅ lebih aman: koleksi dari paginator (biar meta resource ga double)
             'data' => DiscountCampaignResource::collection($paginator->getCollection()),
             'pagination' => [
                 'current_page' => $paginator->currentPage(),
@@ -70,17 +67,29 @@ class AdminDiscountCampaignController extends Controller
         $campaign = DiscountCampaign::with(['targets'])->findOrFail($id);
 
         $subTarget = $campaign->targets->firstWhere('target_type', 'subcategory');
-        if ($subTarget) {
-            // ✅ FIX: SubCategory
-            $campaign->resolved_subcategory = SubCategory::with('category:id,name')
-                ->find((int) $subTarget->target_id);
-        } else {
-            $campaign->resolved_subcategory = null;
-        }
+        $campaign->resolved_subcategory = $subTarget
+            ? SubCategory::with('category:id,name')->find((int) $subTarget->target_id)
+            : null;
 
         return $this->ok(new DiscountCampaignResource($campaign));
     }
 
+    /**
+     * POST /api/v1/admin/discount-campaigns
+     * Body:
+     * {
+     *   "name": "Lebaran 2%",
+     *   "enabled": true,
+     *   "discount_type": "percent",
+     *   "discount_value": 2,
+     *   "stack_policy": "stackable",
+     *   "priority": 100,
+     *   "starts_at": "2026-03-01 00:00:00",
+     *   "ends_at": "2026-03-31 23:59:59",
+     *   "min_order_amount": 1,
+     *   "targets": [{"type":"subcategory","id":1}]
+     * }
+     */
     public function store(Request $request)
     {
         $v = $request->validate([
@@ -112,6 +121,7 @@ class AdminDiscountCampaignController extends Controller
             $v['slug'] = Str::slug($v['name']);
         }
 
+        // pisahkan targets dari payload utama
         $targets = $v['targets'] ?? [];
         unset($v['targets']);
 
@@ -125,24 +135,23 @@ class AdminDiscountCampaignController extends Controller
             ]);
         }
 
-        if ($subcategoryId) {
-            DiscountCampaignTarget::firstOrCreate([
-                'campaign_id' => $campaign->id,
-                'target_type' => 'subcategory',
-                'target_id' => (int) $subcategoryId,
-            ]);
-        }
+        // ✅ FIX: HAPUS BLOK $subcategoryId (karena tidak ada di store)
+        // if ($subcategoryId) { ... }  <-- ini penyebab 500
 
         $campaign->load('targets');
 
         $subTarget = $campaign->targets->firstWhere('target_type', 'subcategory');
         $campaign->resolved_subcategory = $subTarget
-            ? SubCategory::with('category:id,name')->find((int)$subTarget->target_id) // ✅ FIX
+            ? SubCategory::with('category:id,name')->find((int) $subTarget->target_id)
             : null;
 
         return $this->ok(new DiscountCampaignResource($campaign));
     }
 
+    /**
+     * PATCH /api/v1/admin/discount-campaigns/{id}
+     * Bisa update campaign fields dan/atau replace targets
+     */
     public function update(Request $request, int $id)
     {
         $campaign = DiscountCampaign::with('targets')->findOrFail($id);
@@ -167,23 +176,36 @@ class AdminDiscountCampaignController extends Controller
             'usage_limit_total' => ['sometimes','nullable','integer','min:1'],
             'usage_limit_per_user' => ['sometimes','nullable','integer','min:1'],
 
+            // legacy: kalau FE lama masih kirim subcategory_id
             'subcategory_id' => ['sometimes','nullable','integer','min:1'],
 
+            // new: targets replace
             'targets' => ['sometimes','array'],
             'targets.*.type' => ['required','in:category,subcategory,product'],
             'targets.*.id' => ['required','integer','min:1'],
         ]);
 
+        // auto slug kalau name berubah dan slug tidak dikirim
         if (array_key_exists('name', $v) && (!array_key_exists('slug', $v) || $v['slug'] === null)) {
             $v['slug'] = Str::slug($v['name']);
         }
 
+        // ambil info legacy subcategory_id
         $subcategoryId = $v['subcategory_id'] ?? null;
         $hasSubKey = array_key_exists('subcategory_id', $v);
         unset($v['subcategory_id']);
 
+        // ambil targets untuk replace
+        $targets = null;
+        if (array_key_exists('targets', $v)) {
+            $targets = $v['targets'];
+            unset($v['targets']);
+        }
+
+        // update field campaign
         $campaign->update($v);
 
+        // legacy: kalau FE lama masih pakai subcategory_id, maka replace target subcategory
         if ($hasSubKey) {
             DiscountCampaignTarget::query()
                 ->where('campaign_id', $campaign->id)
@@ -199,10 +221,13 @@ class AdminDiscountCampaignController extends Controller
             }
         }
 
-        if (array_key_exists('targets', $v)) {
-            DiscountCampaignTarget::where('campaign_id', $campaign->id)->delete();
+        // kalau targets dikirim => replace semua target
+        if (is_array($targets)) {
+            DiscountCampaignTarget::query()
+                ->where('campaign_id', $campaign->id)
+                ->delete();
 
-            foreach ($v['targets'] as $t) {
+            foreach ($targets as $t) {
                 DiscountCampaignTarget::create([
                     'campaign_id' => $campaign->id,
                     'target_type' => $t['type'],
@@ -215,7 +240,7 @@ class AdminDiscountCampaignController extends Controller
 
         $subTarget = $campaign->targets->firstWhere('target_type', 'subcategory');
         $campaign->resolved_subcategory = $subTarget
-            ? SubCategory::with('category:id,name')->find((int)$subTarget->target_id) // ✅ FIX
+            ? SubCategory::with('category:id,name')->find((int) $subTarget->target_id)
             : null;
 
         return $this->ok(new DiscountCampaignResource($campaign));
