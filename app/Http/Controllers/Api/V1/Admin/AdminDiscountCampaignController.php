@@ -121,7 +121,6 @@ class AdminDiscountCampaignController extends Controller
             $v['slug'] = Str::slug($v['name']);
         }
 
-        // pisahkan targets dari payload utama
         $targets = $v['targets'] ?? [];
         unset($v['targets']);
 
@@ -134,9 +133,6 @@ class AdminDiscountCampaignController extends Controller
                 'target_id' => (int) $t['id'],
             ]);
         }
-
-        // ✅ FIX: HAPUS BLOK $subcategoryId (karena tidak ada di store)
-        // if ($subcategoryId) { ... }  <-- ini penyebab 500
 
         $campaign->load('targets');
 
