@@ -17,6 +17,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use App\Services\DiscountCampaignService;
 
 class UserCartController extends Controller
 {
@@ -293,7 +294,7 @@ class UserCartController extends Controller
 
         $cartItems = CartItem::query()
             ->where('cart_id', $cart->id)
-            ->with(['product'])
+            ->with(['product']) // product sudah punya category_id/subcategory_id column
             ->get();
 
         if ($cartItems->isEmpty()) return $this->fail('Cart kosong', 422);
@@ -328,7 +329,7 @@ class UserCartController extends Controller
             }
         }
 
-        $response = DB::transaction(function () use ($cart, $cartItems, $tierKey, $taxPercent, $feePercent, $v, $user) {
+        return DB::transaction(function () use ($cart, $cartItems, $tierKey, $taxPercent, $feePercent, $v, $user) {
 
             $computedItems = [];
             $subtotal = 0.0;
@@ -343,6 +344,8 @@ class UserCartController extends Controller
 
                 $computedItems[] = [
                     'product_id' => (int) $p->id,
+                    'category_id' => isset($p->category_id) ? (int) $p->category_id : null,
+                    'subcategory_id' => isset($p->subcategory_id) ? (int) $p->subcategory_id : null,
                     'qty' => $qty,
                     'unit_price' => (float) $unitPrice,
                     'line_subtotal' => (float) $line,
@@ -352,12 +355,32 @@ class UserCartController extends Controller
             }
 
             $discountTotal = 0.0;
+
+            // ✅ CAMPAIGN DISCOUNT (based on tier price)
+            $campaignSvc = app(DiscountCampaignService::class);
+            $campaignResult = $campaignSvc->compute(
+                (int) $user->id,
+                $computedItems,
+                (float) $subtotal
+            );
+
+            $campaignDiscountTotal = (float) ($campaignResult['total_discount'] ?? 0.0);
+            if ($campaignDiscountTotal > $subtotal) $campaignDiscountTotal = $subtotal;
+
+            $discountTotal += $campaignDiscountTotal;
+
+            // ✅ VOUCHER DISCOUNT (lock + quota only paid/fulfilled)
             $voucher = null;
+            $voucherDiscount = 0.0;
 
             if (!empty($v['voucher_code'])) {
                 $code = strtoupper(trim((string) $v['voucher_code']));
 
-                $voucher = Voucher::query()->where('code', $code)->first();
+                $voucher = Voucher::query()
+                    ->where('code', $code)
+                    ->lockForUpdate()
+                    ->first();
+
                 if (!$voucher) return $this->fail('Voucher tidak ditemukan', 404);
                 if (!$voucher->is_active) return $this->fail('Voucher tidak aktif', 422);
                 if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
@@ -367,20 +390,28 @@ class UserCartController extends Controller
                     return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
                 }
                 if ($voucher->quota !== null) {
-                    $used = $voucher->orders()->count();
+                    $used = $voucher->orders()
+                        ->whereIn('status', [OrderStatus::PAID->value, OrderStatus::FULFILLED->value])
+                        ->count();
+
                     if ($used >= (int) $voucher->quota) {
                         return $this->fail('Kuota voucher sudah habis', 422);
                     }
                 }
 
                 if ($voucher->type == 'percent') {
-                    $discountTotal = (float) floor($subtotal * ((float) $voucher->value / 100));
+                    $voucherDiscount = (float) floor($subtotal * ((float) $voucher->value / 100));
                 } else {
-                    $discountTotal = (float) $voucher->value;
+                    $voucherDiscount = (float) $voucher->value;
                 }
 
-                if ($discountTotal > $subtotal) $discountTotal = $subtotal;
+                if ($voucherDiscount > $subtotal) $voucherDiscount = $subtotal;
+
+                $discountTotal += $voucherDiscount;
             }
+
+            // jangan lebih dari subtotal
+            if ($discountTotal > $subtotal) $discountTotal = $subtotal;
 
             $taxAmount = 0.0;
             if ($taxPercent > 0) {
@@ -403,7 +434,7 @@ class UserCartController extends Controller
                 'status' => OrderStatus::CREATED->value,
                 'qty' => null,
                 'subtotal' => (float) $subtotal,
-                'discount_total' => (float) $discountTotal,
+                'discount_total' => (float) $discountTotal, // ✅ campaign + voucher
                 'tax_percent' => (int) $taxPercent,
                 'tax_amount' => (float) $taxAmount,
                 'gateway_fee_percent' => (float) $feePercent,
@@ -424,16 +455,32 @@ class UserCartController extends Controller
                 ]);
             }
 
+            // attach voucher pivot
             if ($voucher) {
                 $order->vouchers()->syncWithoutDetaching([
-                    $voucher->id => ['discount_amount' => (float) $discountTotal],
+                    $voucher->id => ['discount_amount' => (float) $voucherDiscount],
                 ]);
+            }
+
+            // attach campaigns pivot (butuh relasi Order::discountCampaigns())
+            if (!empty($campaignResult['applied'])) {
+                foreach ($campaignResult['applied'] as $ac) {
+                    $order->discountCampaigns()->attach((int) $ac['id'], [
+                        'discount_amount' => (float) $ac['discount_amount'],
+                    ]);
+                }
             }
 
             CartItem::query()->where('cart_id', (int) $cart->id)->delete();
 
             return $this->ok([
-                'order' => $order->fresh()->load(['items.product', 'vouchers']),
+                'order' => $order->fresh()->load(['items.product', 'vouchers', 'discountCampaigns']),
+                'discount_breakdown' => [
+                    'campaign_discount_total' => (float) $campaignDiscountTotal,
+                    'voucher_discount_total' => (float) $voucherDiscount,
+                    'discount_total' => (float) $discountTotal,
+                    'applied_campaigns' => $campaignResult['applied'] ?? [],
+                ],
                 'payment_gateway_summary' => [
                     'fee_percent' => (float) $feePercent,
                     'fee_amount' => (float) $gatewayFeeAmount,
@@ -441,8 +488,6 @@ class UserCartController extends Controller
                 ],
             ]);
         });
-
-        return $response;
     }
 
     public function checkoutPreview(Request $request)
@@ -467,7 +512,7 @@ class UserCartController extends Controller
 
         // kalau cart kosong, fallback ke last order
         if ($cartItems->isEmpty()) {
-            $lastOrder = \App\Models\Order::query()
+            $lastOrder = Order::query()
                 ->where('user_id', $user->id)
                 ->with(['items.product'])
                 ->latest('id')
@@ -524,6 +569,7 @@ class UserCartController extends Controller
         }
 
         $items = [];
+        $computedItems = [];
         $subtotal = 0.0;
 
         foreach ($cartItems as $ci) {
@@ -542,10 +588,33 @@ class UserCartController extends Controller
                 'product' => $p,
                 'tier' => $tierKey,
             ];
+
+            $computedItems[] = [
+                'product_id' => (int) $p->id,
+                'category_id' => isset($p->category_id) ? (int) $p->category_id : null,
+                'subcategory_id' => isset($p->subcategory_id) ? (int) $p->subcategory_id : null,
+                'qty' => $qty,
+                'unit_price' => (float) $unitPrice,
+                'line_subtotal' => (float) $line,
+            ];
         }
 
         $discountTotal = 0.0;
 
+        // ✅ campaign discount
+        $campaignSvc = app(DiscountCampaignService::class);
+        $campaignResult = $campaignSvc->compute(
+            (int) $user->id,
+            $computedItems,
+            (float) $subtotal
+        );
+        $campaignDiscountTotal = (float) ($campaignResult['total_discount'] ?? 0.0);
+        if ($campaignDiscountTotal > $subtotal) $campaignDiscountTotal = $subtotal;
+
+        $discountTotal += $campaignDiscountTotal;
+
+        // ✅ voucher discount (preview: no lock; quota check still ok)
+        $voucherDiscount = 0.0;
         if (!empty($v['voucher_code'])) {
             $code = strtoupper(trim((string) $v['voucher_code']));
 
@@ -559,20 +628,27 @@ class UserCartController extends Controller
                 return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
             }
             if ($voucher->quota !== null) {
-                $used = $voucher->orders()->count();
+                $used = $voucher->orders()
+                    ->whereIn('status', [OrderStatus::PAID->value, OrderStatus::FULFILLED->value])
+                    ->count();
+
                 if ($used >= (int) $voucher->quota) {
                     return $this->fail('Kuota voucher sudah habis', 422);
                 }
             }
 
             if ($voucher->type === 'percent') {
-                $discountTotal = (float) floor($subtotal * ((float) $voucher->value / 100));
+                $voucherDiscount = (float) floor($subtotal * ((float) $voucher->value / 100));
             } else {
-                $discountTotal = (float) $voucher->value;
+                $voucherDiscount = (float) $voucher->value;
             }
 
-            if ($discountTotal > $subtotal) $discountTotal = $subtotal;
+            if ($voucherDiscount > $subtotal) $voucherDiscount = $subtotal;
+
+            $discountTotal += $voucherDiscount;
         }
+
+        if ($discountTotal > $subtotal) $discountTotal = $subtotal;
 
         $taxAmount = 0.0;
         if ($taxPercent > 0) {
@@ -589,6 +665,12 @@ class UserCartController extends Controller
         return $this->ok([
             'mode' => 'cart',
             'items' => $items,
+            'discount_breakdown' => [
+                'campaign_discount_total' => (float) $campaignDiscountTotal,
+                'voucher_discount_total' => (float) $voucherDiscount,
+                'discount_total' => (float) $discountTotal,
+                'applied_campaigns' => $campaignResult['applied'] ?? [],
+            ],
             'summary' => [
                 'subtotal' => $subtotal,
                 'tier' => $tierKey,

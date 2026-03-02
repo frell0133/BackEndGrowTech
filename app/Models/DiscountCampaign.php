@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class DiscountCampaign extends Model
 {
@@ -56,5 +57,15 @@ class DiscountCampaign extends Model
                 $m->slug = Str::slug($m->name);
             }
         });
+    }
+    
+    public function orders(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            \App\Models\Order::class,
+            'order_discount_campaigns',
+            'campaign_id',
+            'order_id'
+        )->withPivot(['discount_amount'])->withTimestamps();
     }
 }

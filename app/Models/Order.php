@@ -78,4 +78,14 @@ class Order extends Model
     {
         return $this->hasMany(\App\Models\Delivery::class);
     }
+
+    public function discountCampaigns(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            \App\Models\DiscountCampaign::class,
+            'order_discount_campaigns',
+            'order_id',
+            'campaign_id'
+        )->withPivot(['discount_amount'])->withTimestamps();
+    }
 }

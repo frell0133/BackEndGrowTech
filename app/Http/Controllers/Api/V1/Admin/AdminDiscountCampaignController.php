@@ -104,7 +104,7 @@ class AdminDiscountCampaignController extends Controller
             'usage_limit_per_user' => ['nullable','integer','min:1'],
 
             'targets' => ['nullable','array'],
-            'targets.*.type' => ['required','in:subcategory,product'],
+            'targets.*.type' => ['required','in:category,subcategory,product'],
             'targets.*.id' => ['required','integer','min:1'],
         ]);
 
@@ -170,7 +170,7 @@ class AdminDiscountCampaignController extends Controller
             'subcategory_id' => ['sometimes','nullable','integer','min:1'],
 
             'targets' => ['sometimes','array'],
-            'targets.*.type' => ['required','in:subcategory,product'],
+            'targets.*.type' => ['required','in:category,subcategory,product'],
             'targets.*.id' => ['required','integer','min:1'],
         ]);
 
@@ -234,7 +234,7 @@ class AdminDiscountCampaignController extends Controller
 
         $v = $request->validate([
             'targets' => ['required','array','min:1'],
-            'targets.*.type' => ['required','in:subcategory,product'],
+            'targets.*.type' => ['required','in:category,subcategory,product'],
             'targets.*.id' => ['required','integer','min:1'],
         ]);
 
@@ -255,7 +255,7 @@ class AdminDiscountCampaignController extends Controller
 
         $v = $request->validate([
             'targets' => ['required','array','min:1'],
-            'targets.*.type' => ['required','in:subcategory,product'],
+            'targets.*.type' => ['required','in:category,subcategory,product'],
             'targets.*.id' => ['required','integer','min:1'],
         ]);
 
