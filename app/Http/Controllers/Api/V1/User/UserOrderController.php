@@ -21,10 +21,9 @@ use App\Services\DiscountCampaignService;
 use App\Support\ApiResponse;
 use App\Http\Controllers\Controller;
 use App\Support\DispatchesInvoiceEmail;
-
-use App\Models\Referral;
 use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
+use App\Models\Referral;
 
 class UserOrderController extends Controller
 {
