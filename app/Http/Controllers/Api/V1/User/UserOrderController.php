@@ -17,10 +17,14 @@ use App\Models\Setting;
 use App\Services\LedgerService;
 use App\Services\MidtransService;
 use App\Services\OrderFulfillmentService;
-use App\Services\DiscountCampaignService; 
+use App\Services\DiscountCampaignService;
 use App\Support\ApiResponse;
 use App\Http\Controllers\Controller;
 use App\Support\DispatchesInvoiceEmail;
+
+use App\Models\Referral;
+use App\Models\ReferralSetting;
+use App\Models\ReferralTransaction;
 
 class UserOrderController extends Controller
 {
@@ -196,23 +200,73 @@ class UserOrderController extends Controller
                 $discountTotal += $voucherDiscount;
             }
 
+            // =========================
+            // ✅ REFERRAL DISCOUNT (NULL-SAFE)
+            // =========================
+            $referralDiscount = 0.0;
+            $referrerId = null;
+
+            $settings = ReferralSetting::current();
+            if ($settings && $settings->isActiveNow()) {
+
+                $relation = Referral::query()
+                    ->where('user_id', (int) $user->id)
+                    ->first();
+
+                if ($relation && $relation->locked_at) {
+
+                    // minimal order
+                    if ((int)$settings->min_order_amount <= 0 || (float)$subtotal >= (float)$settings->min_order_amount) {
+
+                        // limit penggunaan per user (pending/valid)
+                        $usedByUser = ReferralTransaction::query()
+                            ->where('user_id', (int) $user->id)
+                            ->whereIn('status', ['pending', 'valid'])
+                            ->count();
+
+                        if ((int)$settings->max_uses_per_user <= 0 || $usedByUser < (int)$settings->max_uses_per_user) {
+
+                            // hitung diskon
+                            if ($settings->discount_type === 'fixed') {
+                                $referralDiscount = (float) ((int)$settings->discount_value);
+                            } else { // percent
+                                $referralDiscount = (float) floor((float)$subtotal * ((int)$settings->discount_value) / 100);
+                            }
+
+                            // max diskon
+                            if ((int)$settings->discount_max_amount > 0) {
+                                $referralDiscount = min($referralDiscount, (float)((int)$settings->discount_max_amount));
+                            }
+
+                            // tidak boleh lebih dari subtotal
+                            $referralDiscount = min($referralDiscount, (float)$subtotal);
+
+                            if ($referralDiscount > 0) {
+                                $discountTotal += $referralDiscount;
+                                $referrerId = (int) $relation->referred_by;
+                            }
+                        }
+                    }
+                }
+            }
+
             if ($discountTotal > $subtotal) $discountTotal = $subtotal;
 
             // ✅ tax dari setting
             $taxPercent = $this->getTaxPercent();
             $taxAmount = 0.0;
             if ($taxPercent > 0) {
-                $taxAmount = round($subtotal * ($taxPercent / 100), 2);
+                $taxAmount = round((float)$subtotal * ((float)$taxPercent / 100), 2);
             }
 
             // ✅ base amount (wallet pakai ini)
-            $amount = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
+            $amount = (float) max(0, ((float)$subtotal + (float)$taxAmount) - (float)$discountTotal);
 
             // ✅ fee gateway (midtrans customer bayar ini tambahan)
             $feePercent = $this->getGatewayFeePercent();
             $gatewayFeeAmount = 0.0;
             if ($feePercent > 0) {
-                $gatewayFeeAmount = round($amount * ($feePercent / 100), 2);
+                $gatewayFeeAmount = round((float)$amount * ((float)$feePercent / 100), 2);
             }
 
             $invoice = 'INV-' . now()->format('Ymd') . '-' . Str::upper(Str::random(8));
@@ -224,7 +278,7 @@ class UserOrderController extends Controller
                 'status' => OrderStatus::CREATED->value,
                 'qty' => (int) $qty,
                 'subtotal' => (float) $subtotal,
-                'discount_total' => (float) $discountTotal, // ✅ campaign + voucher
+                'discount_total' => (float) $discountTotal,
                 'tax_percent' => (int) $taxPercent,
                 'tax_amount' => (float) $taxAmount,
                 'gateway_fee_percent' => (float) $feePercent,
@@ -232,6 +286,20 @@ class UserOrderController extends Controller
                 'amount' => (float) $amount,
                 'payment_gateway_code' => null,
             ]);
+
+            // ✅ referral transaction (pending) jika diskon referral dipakai
+            if ($referralDiscount > 0 && $referrerId) {
+                ReferralTransaction::create([
+                    'referrer_id' => (int) $referrerId,
+                    'user_id' => (int) $user->id,
+                    'order_id' => (int) $order->id,
+                    'status' => 'pending',
+                    'order_amount' => (int) round((float) $order->amount),
+                    'discount_amount' => (int) round((float) $referralDiscount),
+                    'commission_amount' => 0,
+                    'occurred_at' => null,
+                ]);
+            }
 
             OrderItem::create([
                 'order_id' => (int) $order->id,
@@ -264,6 +332,7 @@ class UserOrderController extends Controller
                 'discount_breakdown' => [
                     'campaign_discount_total' => (float) $campaignDiscountTotal,
                     'voucher_discount_total' => (float) $voucherDiscount,
+                    'referral_discount_total' => (float) $referralDiscount,
                     'discount_total' => (float) $discountTotal,
                     'applied_campaigns' => $campaignResult['applied'] ?? [],
                 ],
@@ -402,7 +471,7 @@ class UserOrderController extends Controller
                 if ($feeAmount <= 0) {
                     $feePercent = $this->getGatewayFeePercent();
                     if ($feePercent > 0) {
-                        $feeAmount = round($baseAmount * ($feePercent / 100), 2);
+                        $feeAmount = round((float)$baseAmount * ((float)$feePercent / 100), 2);
                         $locked->update([
                             'gateway_fee_percent' => (float) $feePercent,
                             'gateway_fee_amount' => (float) $feeAmount,
@@ -423,7 +492,6 @@ class UserOrderController extends Controller
                         'raw_callback' => null,
                     ]);
                 } else {
-                    // ✅ kalau sudah ada payment, sync amount ke gross
                     $payment->update([
                         'gateway_code' => 'midtrans',
                         'external_id' => (string) $locked->invoice_number,

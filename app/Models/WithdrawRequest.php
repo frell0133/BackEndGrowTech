@@ -13,12 +13,21 @@ class WithdrawRequest extends Model
         'status',
         'payout_details',
         'processed_at',
+
+        'approved_at',
+        'rejected_at',
+        'paid_at',
+        'reject_reason',
     ];
 
     protected $casts = [
         'amount' => 'decimal:2',
         'payout_details' => 'array',
         'processed_at' => 'datetime',
+
+        'approved_at' => 'datetime',
+        'rejected_at' => 'datetime',
+        'paid_at' => 'datetime'
     ];
 
     public function user(): BelongsTo

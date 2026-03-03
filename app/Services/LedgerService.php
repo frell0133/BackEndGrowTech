@@ -29,15 +29,15 @@ class LedgerService
         return $wallet;
     }
 
-    // Helper: apply perubahan saldo berdasarkan direction
+    // ✅ Helper: apply perubahan saldo berdasarkan direction (FLOAT SAFE)
     private function applyBalance(Wallet $wallet, string $direction, int $amount): array
     {
-        $before = (int) $wallet->balance;
+        $before = (float) $wallet->balance;
 
         if ($direction === 'DEBIT') {
-            $after = $before - $amount;
+            $after = $before - (float) $amount;
         } else { // CREDIT
-            $after = $before + $amount;
+            $after = $before + (float) $amount;
         }
 
         return [$before, $after];
@@ -54,14 +54,13 @@ class LedgerService
             if ($idempotencyKey) {
                 $existing = LedgerTransaction::where('idempotency_key', $idempotencyKey)->first();
                 if ($existing) {
-                    return $existing; // idempotent: tidak dobel menambah saldo
+                    return $existing; // idempotent
                 }
             }
 
             $userWallet = $this->getOrCreateUserWallet($userId);
             $cashWallet = $this->getSystemWallet('SYSTEM_CASH');
 
-            // lock wallet untuk hindari race condition
             $userWallet = Wallet::whereKey($userWallet->id)->lockForUpdate()->first();
             $cashWallet = Wallet::whereKey($cashWallet->id)->lockForUpdate()->first();
 
@@ -86,7 +85,6 @@ class LedgerService
             ]);
 
             // Entry 2: system cash DEBIT
-            // (DEBIT = saldo berkurang sesuai aturan kita)
             [$cbefore, $cafter] = $this->applyBalance($cashWallet, 'DEBIT', $amount);
             $cashWallet->update(['balance' => $cafter]);
 
@@ -117,7 +115,7 @@ class LedgerService
             $userWallet = Wallet::whereKey($userWallet->id)->lockForUpdate()->first();
             $revenueWallet = Wallet::whereKey($revenueWallet->id)->lockForUpdate()->first();
 
-            if ($userWallet->balance < $amount) {
+            if ((float)$userWallet->balance < (float)$amount) {
                 throw ValidationException::withMessages(['balance' => 'Saldo tidak cukup']);
             }
 
@@ -156,7 +154,8 @@ class LedgerService
             return $tx;
         });
     }
-    // ADMIN TOPUP: user CREDIT ONLY (tanpa SYSTEM_CASH)
+
+    // ADMIN TOPUP: user CREDIT ONLY
     public function adminTopup(int $userId, int $amount, ?string $idempotencyKey = null, ?string $note = null): LedgerTransaction
     {
         if ($amount <= 0) {
@@ -171,18 +170,15 @@ class LedgerService
             }
 
             $userWallet = $this->getOrCreateUserWallet($userId);
-
-            // lock wallet agar aman
             $userWallet = Wallet::whereKey($userWallet->id)->lockForUpdate()->first();
 
             $tx = LedgerTransaction::create([
-                'type' => 'TOPUP',         // biar konsisten dengan sistem kamu
+                'type' => 'TOPUP',
                 'status' => 'SUCCESS',
                 'idempotency_key' => $idempotencyKey,
                 'note' => $note,
             ]);
 
-            // Entry: user CREDIT saja
             [$before, $after] = $this->applyBalance($userWallet, 'CREDIT', $amount);
             $userWallet->update(['balance' => $after]);
 
@@ -193,6 +189,77 @@ class LedgerService
                 'amount' => $amount,
                 'balance_before' => $before,
                 'balance_after' => $after,
+            ]);
+
+            return $tx;
+        });
+    }
+
+    // ✅ TRANSFER WALLET -> WALLET
+    public function transferWalletToWallet(
+        int $fromWalletId,
+        int $toWalletId,
+        int $amount,
+        string $type,
+        ?string $idempotencyKey = null,
+        ?string $note = null,
+        ?string $referenceType = null,
+        ?int $referenceId = null
+    ): LedgerTransaction {
+        if ($amount <= 0) {
+            throw ValidationException::withMessages(['amount' => 'Amount harus > 0']);
+        }
+
+        return DB::transaction(function () use (
+            $fromWalletId, $toWalletId, $amount, $type,
+            $idempotencyKey, $note, $referenceType, $referenceId
+        ) {
+            if ($idempotencyKey) {
+                $existing = LedgerTransaction::where('idempotency_key', $idempotencyKey)->first();
+                if ($existing) return $existing;
+            }
+
+            $from = Wallet::whereKey($fromWalletId)->lockForUpdate()->firstOrFail();
+            $to   = Wallet::whereKey($toWalletId)->lockForUpdate()->firstOrFail();
+
+            if ((float)$from->balance < (float)$amount) {
+                throw ValidationException::withMessages(['balance' => 'Saldo tidak cukup']);
+            }
+
+            // IMPORTANT: $type harus enum valid: TOPUP/PURCHASE/WITHDRAW/REFERRAL/ADJUST/REFUND
+            $tx = LedgerTransaction::create([
+                'type' => $type,
+                'status' => 'SUCCESS',
+                'idempotency_key' => $idempotencyKey,
+                'reference_type' => $referenceType,
+                'reference_id' => $referenceId,
+                'note' => $note,
+            ]);
+
+            // from DEBIT
+            [$fbefore, $fafter] = $this->applyBalance($from, 'DEBIT', $amount);
+            $from->update(['balance' => $fafter]);
+
+            LedgerEntry::create([
+                'ledger_transaction_id' => $tx->id,
+                'wallet_id' => $from->id,
+                'direction' => 'DEBIT',
+                'amount' => $amount,
+                'balance_before' => $fbefore,
+                'balance_after' => $fafter,
+            ]);
+
+            // to CREDIT
+            [$tbefore, $tafter] = $this->applyBalance($to, 'CREDIT', $amount);
+            $to->update(['balance' => $tafter]);
+
+            LedgerEntry::create([
+                'ledger_transaction_id' => $tx->id,
+                'wallet_id' => $to->id,
+                'direction' => 'CREDIT',
+                'amount' => $amount,
+                'balance_before' => $tbefore,
+                'balance_after' => $tafter,
             ]);
 
             return $tx;
