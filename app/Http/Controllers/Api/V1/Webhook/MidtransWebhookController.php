@@ -15,7 +15,6 @@ use App\Services\OrderFulfillmentService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use App\Jobs\SendInvoiceEmailJob;
 use App\Support\DispatchesInvoiceEmail;
 
 class MidtransWebhookController extends Controller
@@ -106,13 +105,11 @@ class MidtransWebhookController extends Controller
                         return;
                     }
 
-                    // simpan callback ke kolom yang benar
                     $lockedTopup->raw_callback = $payload;
                     $lockedTopup->external_id = $payload['transaction_id'] ?? null;
                     $lockedTopup->status = $mapped;
                     $lockedTopup->save();
 
-                    // belum paid → stop
                     if (!$isPaid || $mapped !== 'paid') {
                         return;
                     }
@@ -120,7 +117,7 @@ class MidtransWebhookController extends Controller
                     $userId = (int) $lockedTopup->user_id;
                     $amount = (int) $lockedTopup->amount;
 
-                    // ✅ posting ledger + update wallet balance via LedgerService
+                    // posting ledger
                     $ledger->topup(
                         $userId,
                         $amount,
@@ -149,21 +146,16 @@ class MidtransWebhookController extends Controller
             }
         }
 
-
         /**
          * ==========================================================
          * B) ORDER PRODUCT + REFERRAL + FULFILL
          * ==========================================================
          */
         $order = Order::query()
-            // match utama: invoice_number (paling umum)
             ->where('invoice_number', $orderId)
-
-            // fallback: match via payment.external_id
             ->orWhereHas('payment', function ($q) use ($orderId) {
                 $q->where('external_id', $orderId);
             })
-
             ->with('payment')
             ->first();
 
@@ -202,7 +194,7 @@ class MidtransWebhookController extends Controller
 
                 $current = $lockedOrder->status?->value ?? (string)$lockedOrder->status;
 
-                // idempotent: kalau sudah paid/fulfilled/refunded, stop
+                // idempotent: kalau sudah final, stop
                 if (in_array($current, [OrderStatus::PAID->value, OrderStatus::FULFILLED->value, OrderStatus::REFUNDED->value], true)) {
                     Log::info('MIDTRANS DUPLICATE ORDER (ALREADY FINAL)', [
                         'midtrans_order_id' => $orderId,
@@ -264,64 +256,69 @@ class MidtransWebhookController extends Controller
                 }
 
                 /**
-                 * REFERRAL COMMISSION
+                 * ==========================================================
+                 * REFERRAL COMMISSION -> MASUK KE WALLET KOMISI (IDR_COMMISSION)
+                 * ==========================================================
                  */
-                $tx = ReferralTransaction::query()
-                    ->where('order_id', $lockedOrder->id)
+                $refTx = ReferralTransaction::query()
+                    ->where('order_id', (int) $lockedOrder->id)
                     ->lockForUpdate()
                     ->first();
 
-                if ($tx && $tx->status !== 'valid') {
+                if ($refTx && $refTx->status !== 'valid') {
+
                     $settings = ReferralSetting::current();
 
-                    if (!$settings->enabled) {
-                        $tx->status = 'invalid';
-                        $tx->occurred_at = now();
-                        $tx->save();
+                    if (!$settings || !($settings->enabled ?? false)) {
+                        $refTx->status = 'invalid';
+                        $refTx->occurred_at = now();
+                        $refTx->save();
                     } else {
-                        // pakai amount yang benar
                         $orderAmount = (int) round((float) ($lockedOrder->amount ?? 0));
 
                         $commission = 0;
-                        if ($settings->commission_type === 'fixed') {
-                            $commission = (int) $settings->commission_value;
+                        if (($settings->commission_type ?? 'percent') === 'fixed') {
+                            $commission = (int) ($settings->commission_value ?? 0);
                         } else {
-                            $commission = (int) floor($orderAmount * ((int) $settings->commission_value) / 100);
+                            $pct = (int) ($settings->commission_value ?? 0);
+                            $commission = (int) floor($orderAmount * $pct / 100);
                         }
                         $commission = max(0, $commission);
 
-                        $tx->status = 'valid';
-                        $tx->order_amount = $orderAmount;
-                        $tx->commission_amount = $commission;
-                        $tx->occurred_at = now();
-                        $tx->save();
+                        $refTx->status = 'valid';
+                        $refTx->order_amount = $orderAmount;
+                        $refTx->commission_amount = $commission;
+                        $refTx->occurred_at = now();
+                        $refTx->save();
 
                         if ($commission > 0) {
-                            DB::table('wallets')
-                                ->where('user_id', (int) $tx->referrer_id)
-                                ->increment('balance', $commission);
-
-                            $ledger->topup(
-                                userId: (int) $tx->referrer_id,
-                                amount: (int) $commission,
-                                reference: 'REFERRAL:' . $lockedOrder->id,
-                                meta: [
-                                    'type' => 'referral_commission',
-                                    'order_id' => $lockedOrder->id,
-                                    'buyer_user_id' => $tx->user_id,
-                                    'midtrans_order_id' => $orderId,
-                                    'transaction_status' => $transactionStatus,
-                                    'payment_type' => $paymentType,
-                                    'transaction_id' => $transactionId,
-                                    'settlement_time' => $settlementTime,
-                                ]
+                            $ledger->creditReferralCommissionToCommissionWallet(
+                                referrerUserId: (int) $refTx->referrer_id,
+                                commissionAmount: (int) $commission,
+                                idempotencyKey: 'REF_COMMISSION:' . (int) $refTx->id,
+                                note: 'Referral commission -> IDR_COMMISSION (Midtrans Paid)',
+                                referenceType: 'referral_transaction',
+                                referenceId: (int) $refTx->id
                             );
+
+                            Log::info('REFERRAL COMMISSION CREDITED TO COMMISSION WALLET', [
+                                'order_db_id' => (int) $lockedOrder->id,
+                                'referral_tx_id' => (int) $refTx->id,
+                                'referrer_id' => (int) $refTx->referrer_id,
+                                'commission' => (int) $commission,
+                                'wallet_currency' => 'IDR_COMMISSION',
+                                'midtrans_order_id' => $orderId,
+                                'transaction_status' => $transactionStatus,
+                                'payment_type' => $paymentType,
+                                'transaction_id' => $transactionId,
+                                'settlement_time' => $settlementTime,
+                            ]);
                         }
                     }
                 }
 
                 /**
-                 * FULFILL (ambil license & buat delivery)
+                 * FULFILL
                  */
                 $res = $fulfillment->fulfillPaidOrder($lockedOrder->fresh());
 
@@ -334,11 +331,10 @@ class MidtransWebhookController extends Controller
                     return;
                 }
 
-                // tandai fulfilled (enum)
                 $lockedOrder->status = OrderStatus::FULFILLED->value;
                 $lockedOrder->save();
 
-                // ✅ kirim invoice email (queue + fallback sync) setelah commit
+                // send invoice email after commit
                 $this->dispatchInvoiceEmailAfterCommit(
                     (int) $lockedOrder->id,
                     'midtrans_paid',
@@ -362,4 +358,3 @@ class MidtransWebhookController extends Controller
         }
     }
 }
-    

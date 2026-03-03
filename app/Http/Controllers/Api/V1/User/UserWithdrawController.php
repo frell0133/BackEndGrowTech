@@ -15,7 +15,7 @@ class UserWithdrawController extends Controller
 
     /**
      * POST /api/v1/withdraws
-     * body: { "amount": 1000, "payout_details": { ...optional... } }
+     * body: { "amount": 1000, "payout_details": {...optional...} }
      */
     public function store(Request $request, LedgerService $ledger)
     {
@@ -29,15 +29,18 @@ class UserWithdrawController extends Controller
 
         $amount = (int) $v['amount'];
 
+        // optional: minimal WD dari settings
         $settings = ReferralSetting::current();
         $minWd = (int) ($settings->min_withdrawal ?? 0);
         if ($minWd > 0 && $amount < $minWd) {
             return $this->fail("Minimal withdraw adalah {$minWd}", 422);
         }
 
-        $wallet = $ledger->getOrCreateUserWallet((int) $user->id);
-        if ((float)$wallet->balance < (float)$amount) {
-            return $this->fail('Saldo tidak cukup', 422);
+        // ✅ SALDO DIAMBIL DARI WALLET KOMISI
+        $commissionWallet = $ledger->getOrCreateUserCommissionWallet((int) $user->id);
+
+        if ((float)$commissionWallet->balance < (float)$amount) {
+            return $this->fail('Saldo komisi tidak cukup', 422);
         }
 
         $wr = WithdrawRequest::create([
@@ -48,7 +51,7 @@ class UserWithdrawController extends Controller
         ]);
 
         return $this->ok([
-            'message' => 'Withdraw request berhasil dibuat',
+            'message' => 'Withdraw request (convert komisi -> wallet) berhasil dibuat',
             'withdraw' => $wr,
         ]);
     }

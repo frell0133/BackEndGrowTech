@@ -10,7 +10,11 @@ use Illuminate\Validation\ValidationException;
 
 class LedgerService
 {
-    // Helper: ambil / bikin wallet user
+    // =========================
+    // Wallet helpers
+    // =========================
+
+    // Wallet utama untuk belanja
     public function getOrCreateUserWallet(int $userId): Wallet
     {
         return Wallet::firstOrCreate(
@@ -19,7 +23,16 @@ class LedgerService
         );
     }
 
-    // Helper: ambil system wallet by code
+    // Wallet komisi/referral (saldo withdraw)
+    public function getOrCreateUserCommissionWallet(int $userId): Wallet
+    {
+        return Wallet::firstOrCreate(
+            ['user_id' => $userId, 'currency' => 'IDR_COMMISSION'],
+            ['balance' => 0, 'status' => 'ACTIVE']
+        );
+    }
+
+    // System wallet by code (kalau masih dipakai)
     public function getSystemWallet(string $code): Wallet
     {
         $wallet = Wallet::where('code', $code)->first();
@@ -29,7 +42,9 @@ class LedgerService
         return $wallet;
     }
 
-    // ✅ Helper: apply perubahan saldo berdasarkan direction (FLOAT SAFE)
+    // =========================
+    // Balance helper (FLOAT SAFE)
+    // =========================
     private function applyBalance(Wallet $wallet, string $direction, int $amount): array
     {
         $before = (float) $wallet->balance;
@@ -43,7 +58,10 @@ class LedgerService
         return [$before, $after];
     }
 
-    // TOPUP: user CREDIT, system_cash DEBIT
+    // =========================
+    // TOPUP: wallet utama user CREDIT (opsional system cash DEBIT)
+    // Signature disesuaikan dengan controller kamu
+    // =========================
     public function topup(int $userId, int $amount, ?string $idempotencyKey = null, ?string $note = null): LedgerTransaction
     {
         if ($amount <= 0) {
@@ -51,11 +69,10 @@ class LedgerService
         }
 
         return DB::transaction(function () use ($userId, $amount, $idempotencyKey, $note) {
+
             if ($idempotencyKey) {
                 $existing = LedgerTransaction::where('idempotency_key', $idempotencyKey)->first();
-                if ($existing) {
-                    return $existing; // idempotent
-                }
+                if ($existing) return $existing;
             }
 
             $userWallet = $this->getOrCreateUserWallet($userId);
@@ -71,7 +88,7 @@ class LedgerService
                 'note' => $note,
             ]);
 
-            // Entry 1: user CREDIT
+            // user CREDIT
             [$ubefore, $uafter] = $this->applyBalance($userWallet, 'CREDIT', $amount);
             $userWallet->update(['balance' => $uafter]);
 
@@ -84,7 +101,7 @@ class LedgerService
                 'balance_after' => $uafter,
             ]);
 
-            // Entry 2: system cash DEBIT
+            // system cash DEBIT
             [$cbefore, $cafter] = $this->applyBalance($cashWallet, 'DEBIT', $amount);
             $cashWallet->update(['balance' => $cafter]);
 
@@ -101,7 +118,9 @@ class LedgerService
         });
     }
 
-    // PURCHASE: user DEBIT, system revenue CREDIT
+    // =========================
+    // PURCHASE: wallet utama user DEBIT
+    // =========================
     public function purchase(int $userId, int $amount, ?string $note = null): LedgerTransaction
     {
         if ($amount <= 0) {
@@ -155,7 +174,9 @@ class LedgerService
         });
     }
 
-    // ADMIN TOPUP: user CREDIT ONLY
+    // =========================
+    // ADMIN TOPUP: wallet utama CREDIT only
+    // =========================
     public function adminTopup(int $userId, int $amount, ?string $idempotencyKey = null, ?string $note = null): LedgerTransaction
     {
         if ($amount <= 0) {
@@ -195,7 +216,10 @@ class LedgerService
         });
     }
 
-    // ✅ TRANSFER WALLET -> WALLET
+    // =========================
+    // TRANSFER WALLET -> WALLET (umum)
+    // type harus enum valid: TOPUP/PURCHASE/WITHDRAW/REFERRAL/ADJUST/REFUND
+    // =========================
     public function transferWalletToWallet(
         int $fromWalletId,
         int $toWalletId,
@@ -226,7 +250,6 @@ class LedgerService
                 throw ValidationException::withMessages(['balance' => 'Saldo tidak cukup']);
             }
 
-            // IMPORTANT: $type harus enum valid: TOPUP/PURCHASE/WITHDRAW/REFERRAL/ADJUST/REFUND
             $tx = LedgerTransaction::create([
                 'type' => $type,
                 'status' => 'SUCCESS',
@@ -264,5 +287,80 @@ class LedgerService
 
             return $tx;
         });
+    }
+
+    // =========================
+    // CREDIT KOMISI REFERRAL -> WALLET KOMISI (IDR_COMMISSION)
+    // =========================
+    public function creditReferralCommissionToCommissionWallet(
+        int $referrerUserId,
+        int $commissionAmount,
+        string $idempotencyKey,
+        ?string $note = null,
+        ?string $referenceType = 'referral_transaction',
+        ?int $referenceId = null
+    ): LedgerTransaction {
+        if ($commissionAmount <= 0) {
+            throw ValidationException::withMessages(['amount' => 'Commission harus > 0']);
+        }
+
+        return DB::transaction(function () use (
+            $referrerUserId, $commissionAmount, $idempotencyKey, $note, $referenceType, $referenceId
+        ) {
+            $existing = LedgerTransaction::where('idempotency_key', $idempotencyKey)->first();
+            if ($existing) return $existing;
+
+            $wallet = $this->getOrCreateUserCommissionWallet($referrerUserId);
+            $wallet = Wallet::whereKey($wallet->id)->lockForUpdate()->first();
+
+            $tx = LedgerTransaction::create([
+                'type' => 'REFERRAL',
+                'status' => 'SUCCESS',
+                'idempotency_key' => $idempotencyKey,
+                'reference_type' => $referenceType,
+                'reference_id' => $referenceId,
+                'note' => $note ?? 'Referral commission -> IDR_COMMISSION',
+            ]);
+
+            [$before, $after] = $this->applyBalance($wallet, 'CREDIT', $commissionAmount);
+            $wallet->update(['balance' => $after]);
+
+            LedgerEntry::create([
+                'ledger_transaction_id' => $tx->id,
+                'wallet_id' => $wallet->id,
+                'direction' => 'CREDIT',
+                'amount' => $commissionAmount,
+                'balance_before' => $before,
+                'balance_after' => $after,
+            ]);
+
+            return $tx;
+        });
+    }
+
+    // =========================
+    // APPROVE WITHDRAW: pindahkan IDR_COMMISSION -> IDR (wallet belanja)
+    // =========================
+    public function approveWithdrawCommissionToMain(
+        int $userId,
+        int $amount,
+        string $idempotencyKey,
+        ?string $note = null,
+        ?string $referenceType = 'withdraw_request',
+        ?int $referenceId = null
+    ): LedgerTransaction {
+        $commissionWallet = $this->getOrCreateUserCommissionWallet($userId);
+        $mainWallet = $this->getOrCreateUserWallet($userId);
+
+        return $this->transferWalletToWallet(
+            fromWalletId: (int) $commissionWallet->id,
+            toWalletId: (int) $mainWallet->id,
+            amount: (int) $amount,
+            type: 'WITHDRAW',
+            idempotencyKey: $idempotencyKey,
+            note: $note ?? 'Approve withdraw: IDR_COMMISSION -> IDR',
+            referenceType: $referenceType,
+            referenceId: $referenceId
+        );
     }
 }
