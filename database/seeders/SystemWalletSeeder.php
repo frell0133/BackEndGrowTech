@@ -13,6 +13,7 @@ class SystemWalletSeeder extends Seeder
             ['code' => 'SYSTEM_CASH', 'balance' => 0],
             ['code' => 'SYSTEM_REVENUE', 'balance' => 0],
             ['code' => 'SYSTEM_PAYOUT', 'balance' => 0],
+            ['code' => 'GROWTECH', 'balance' => 0],
         ];
 
         foreach ($systemWallets as $sw) {
