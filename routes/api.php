@@ -217,6 +217,7 @@ Route::prefix('v1')->group(function () {
         Route::get('referral', [UserReferralController::class, 'dashboard']);
         Route::post('referral/attach', [UserReferralController::class, 'attach'])->middleware('referral.attach.guard');
         Route::post('referral/preview-discount', [UserReferralController::class, 'previewDiscount']);
+        Route::get('referral/preview-discount', [UserReferralController::class, 'previewDiscount']);
 
         Route::get('favorites', [UserFavoriteController::class, 'index']);
         Route::post('favorites', [UserFavoriteController::class, 'store']);
