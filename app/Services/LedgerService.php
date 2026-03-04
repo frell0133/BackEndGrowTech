@@ -363,4 +363,77 @@ class LedgerService
             referenceId: $referenceId
         );
     }
+
+    public function getOrCreateSystemWallet(string $currency = 'IDR')
+    {
+        // Sesuaikan field & model jika di project kamu nama kolomnya beda.
+        // Umumnya ada Wallet model dengan owner_type/owner_id atau is_system flag.
+        return \App\Models\Wallet::firstOrCreate([
+            'owner_type' => 'system',
+            'owner_id' => 0,
+            'currency' => $currency,
+        ], [
+            'balance' => 0,
+        ]);
+    }
+
+    /**
+     * Approve WD: pindahkan saldo dari wallet utama user (IDR) ke wallet system (GROWTECH)
+     */
+    public function approveWithdrawToSystemWallet(
+        int $userId,
+        int $amount,
+        string $idempotencyKey,
+        string $note,
+        string $referenceType,
+        int $referenceId,
+        string $currency = 'IDR'
+    ): void {
+        if ($amount <= 0) return;
+
+        // ✅ idempotent
+        $exists = \App\Models\LedgerEntry::query()
+            ->where('idempotency_key', $idempotencyKey)
+            ->exists();
+        if ($exists) return;
+
+        $userWallet = $this->getOrCreateUserWallet($userId);
+        $systemWallet = $this->getOrCreateSystemWallet($currency);
+
+        // ✅ pastikan saldo cukup (double safety)
+        if ((float)$userWallet->balance < (float)$amount) {
+            throw new \RuntimeException('Saldo user tidak cukup untuk approve WD');
+        }
+
+        // debit user
+        $userWallet->balance = (float)$userWallet->balance - (float)$amount;
+        $userWallet->save();
+
+        // credit system
+        $systemWallet->balance = (float)$systemWallet->balance + (float)$amount;
+        $systemWallet->save();
+
+        // catat ledger (2 entry atau 1 entry sesuai schema kamu)
+        \App\Models\LedgerEntry::create([
+            'wallet_id' => $userWallet->id,
+            'direction' => 'debit',
+            'amount' => (float)$amount,
+            'note' => $note,
+            'reference_type' => $referenceType,
+            'reference_id' => $referenceId,
+            'idempotency_key' => $idempotencyKey,
+            'meta' => ['to' => 'system', 'currency' => $currency],
+        ]);
+
+        \App\Models\LedgerEntry::create([
+            'wallet_id' => $systemWallet->id,
+            'direction' => 'credit',
+            'amount' => (float)$amount,
+            'note' => $note,
+            'reference_type' => $referenceType,
+            'reference_id' => $referenceId,
+            'idempotency_key' => $idempotencyKey . ':SYS',
+            'meta' => ['from_user_id' => $userId, 'currency' => $currency],
+        ]);
+    }
 }

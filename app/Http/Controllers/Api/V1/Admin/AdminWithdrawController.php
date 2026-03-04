@@ -54,12 +54,13 @@ class AdminWithdrawController extends Controller
 
             $idem = 'WD_APPROVE:' . $wr->id;
 
-            // ✅ BENAR: pindah saldo dari IDR_COMMISSION -> IDR (wallet utama user)
+            // ✅ FIX: convert komisi -> saldo wallet utama user
+            // IDR_COMMISSION -> IDR
             $ledger->approveWithdrawCommissionToMain(
                 userId: (int) $wr->user_id,
                 amount: (int) $amount,
                 idempotencyKey: $idem,
-                note: 'Approve withdraw: komisi -> saldo wallet utama',
+                note: 'Approve withdraw: IDR_COMMISSION -> IDR (saldo GrowTech)',
                 referenceType: 'withdraw_request',
                 referenceId: (int) $wr->id
             );
@@ -70,12 +71,12 @@ class AdminWithdrawController extends Controller
             $wr->save();
 
             return $this->ok([
-                'message' => 'Withdraw approved. Komisi dipindah ke saldo wallet user.',
+                'message' => 'Withdraw approved. Saldo GrowTech user bertambah (convert komisi).',
                 'withdraw' => $wr->fresh(),
             ]);
         });
     }
-
+    
     /**
      * POST /api/v1/admin/withdraws/{id}/reject
      */

@@ -15,7 +15,7 @@ class UserWithdrawController extends Controller
 
     /**
      * POST /api/v1/withdraws
-     * body: { "amount": 1000, "payout_details": {...optional...} }
+     * body: { "amount": 1000, "payout_details": { ...optional... } }
      */
     public function store(Request $request, LedgerService $ledger)
     {
@@ -39,7 +39,7 @@ class UserWithdrawController extends Controller
         $commissionWallet = $ledger->getOrCreateUserCommissionWallet((int) $user->id);
         $commissionBalance = (int) floor((float)$commissionWallet->balance);
 
-        // ✅ hitung total pending WD user (biar tidak bisa double request)
+        // ✅ total pending WD user
         $pendingTotal = (int) floor((float) WithdrawRequest::query()
             ->where('user_id', (int) $user->id)
             ->where('status', 'pending')
@@ -63,19 +63,16 @@ class UserWithdrawController extends Controller
         ]);
 
         return $this->ok([
-            'message' => 'Withdraw request berhasil dibuat (menunggu approval admin)',
+            'message' => 'Withdraw request (convert komisi -> wallet) berhasil dibuat',
             'withdraw' => $wr,
             'balance' => [
                 'commission_balance' => $commissionBalance,
                 'pending_total' => $pendingTotal,
                 'available' => $available,
-            ]
+            ],
         ]);
     }
 
-    /**
-     * GET /api/v1/withdraws
-     */
     public function index(Request $request)
     {
         $user = $request->user();
@@ -89,9 +86,6 @@ class UserWithdrawController extends Controller
         return $this->ok($q);
     }
 
-    /**
-     * GET /api/v1/withdraws/{id}
-     */
     public function show(string $id, Request $request)
     {
         $user = $request->user();
