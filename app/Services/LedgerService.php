@@ -23,7 +23,7 @@ class LedgerService
         );
     }
 
-    // Wallet komisi/referral (saldo withdraw)
+    // Wallet komisi/referral (saldo WD)
     public function getOrCreateUserCommissionWallet(int $userId): Wallet
     {
         return Wallet::firstOrCreate(
@@ -32,35 +32,33 @@ class LedgerService
         );
     }
 
-    // System wallet by code (kalau masih dipakai)
-    public function getSystemWallet(string $code): Wallet
+    // System wallet by code (SYSTEM_CASH, SYSTEM_REVENUE, SYSTEM_PAYOUT, dll)
+    public function getSystemWallet(string $code, string $currency = 'IDR'): Wallet
     {
-        $wallet = Wallet::where('code', $code)->first();
-        if (!$wallet) {
-            throw ValidationException::withMessages(['wallet' => "System wallet {$code} belum ada. Jalankan seeder."]);
-        }
-        return $wallet;
+        return Wallet::firstOrCreate(
+            ['code' => $code, 'currency' => $currency],
+            ['balance' => 0, 'status' => 'ACTIVE']
+        );
     }
 
     // =========================
-    // Balance helper (FLOAT SAFE)
+    // Balance helper (INTEGER SAFE)
     // =========================
-    private function applyBalance(Wallet $wallet, string $direction, int $amount): array
+    private function applyBalanceInt(Wallet $wallet, string $direction, int $amount): array
     {
-        $before = (float) $wallet->balance;
+        $before = (int) $wallet->balance;
 
         if ($direction === 'DEBIT') {
-            $after = $before - (float) $amount;
+            $after = $before - $amount;
         } else { // CREDIT
-            $after = $before + (float) $amount;
+            $after = $before + $amount;
         }
 
         return [$before, $after];
     }
 
     // =========================
-    // TOPUP: wallet utama user CREDIT (opsional system cash DEBIT)
-    // Signature disesuaikan dengan controller kamu
+    // TOPUP: user wallet CREDIT + system cash DEBIT
     // =========================
     public function topup(int $userId, int $amount, ?string $idempotencyKey = null, ?string $note = null): LedgerTransaction
     {
@@ -89,7 +87,7 @@ class LedgerService
             ]);
 
             // user CREDIT
-            [$ubefore, $uafter] = $this->applyBalance($userWallet, 'CREDIT', $amount);
+            [$ubefore, $uafter] = $this->applyBalanceInt($userWallet, 'CREDIT', $amount);
             $userWallet->update(['balance' => $uafter]);
 
             LedgerEntry::create([
@@ -102,7 +100,7 @@ class LedgerService
             ]);
 
             // system cash DEBIT
-            [$cbefore, $cafter] = $this->applyBalance($cashWallet, 'DEBIT', $amount);
+            [$cbefore, $cafter] = $this->applyBalanceInt($cashWallet, 'DEBIT', $amount);
             $cashWallet->update(['balance' => $cafter]);
 
             LedgerEntry::create([
@@ -119,7 +117,7 @@ class LedgerService
     }
 
     // =========================
-    // PURCHASE: wallet utama user DEBIT
+    // PURCHASE: user wallet DEBIT + system revenue CREDIT
     // =========================
     public function purchase(int $userId, int $amount, ?string $note = null): LedgerTransaction
     {
@@ -134,7 +132,7 @@ class LedgerService
             $userWallet = Wallet::whereKey($userWallet->id)->lockForUpdate()->first();
             $revenueWallet = Wallet::whereKey($revenueWallet->id)->lockForUpdate()->first();
 
-            if ((float)$userWallet->balance < (float)$amount) {
+            if ((int)$userWallet->balance < $amount) {
                 throw ValidationException::withMessages(['balance' => 'Saldo tidak cukup']);
             }
 
@@ -145,7 +143,7 @@ class LedgerService
             ]);
 
             // user DEBIT
-            [$ubefore, $uafter] = $this->applyBalance($userWallet, 'DEBIT', $amount);
+            [$ubefore, $uafter] = $this->applyBalanceInt($userWallet, 'DEBIT', $amount);
             $userWallet->update(['balance' => $uafter]);
 
             LedgerEntry::create([
@@ -158,7 +156,7 @@ class LedgerService
             ]);
 
             // system revenue CREDIT
-            [$rbefore, $rafter] = $this->applyBalance($revenueWallet, 'CREDIT', $amount);
+            [$rbefore, $rafter] = $this->applyBalanceInt($revenueWallet, 'CREDIT', $amount);
             $revenueWallet->update(['balance' => $rafter]);
 
             LedgerEntry::create([
@@ -175,7 +173,7 @@ class LedgerService
     }
 
     // =========================
-    // ADMIN TOPUP: wallet utama CREDIT only
+    // ADMIN TOPUP: user wallet CREDIT only
     // =========================
     public function adminTopup(int $userId, int $amount, ?string $idempotencyKey = null, ?string $note = null): LedgerTransaction
     {
@@ -200,7 +198,7 @@ class LedgerService
                 'note' => $note,
             ]);
 
-            [$before, $after] = $this->applyBalance($userWallet, 'CREDIT', $amount);
+            [$before, $after] = $this->applyBalanceInt($userWallet, 'CREDIT', $amount);
             $userWallet->update(['balance' => $after]);
 
             LedgerEntry::create([
@@ -217,8 +215,7 @@ class LedgerService
     }
 
     // =========================
-    // TRANSFER WALLET -> WALLET (umum)
-    // type harus enum valid: TOPUP/PURCHASE/WITHDRAW/REFERRAL/ADJUST/REFUND
+    // TRANSFER WALLET -> WALLET (generic)
     // =========================
     public function transferWalletToWallet(
         int $fromWalletId,
@@ -246,7 +243,7 @@ class LedgerService
             $from = Wallet::whereKey($fromWalletId)->lockForUpdate()->firstOrFail();
             $to   = Wallet::whereKey($toWalletId)->lockForUpdate()->firstOrFail();
 
-            if ((float)$from->balance < (float)$amount) {
+            if ((int)$from->balance < $amount) {
                 throw ValidationException::withMessages(['balance' => 'Saldo tidak cukup']);
             }
 
@@ -260,7 +257,7 @@ class LedgerService
             ]);
 
             // from DEBIT
-            [$fbefore, $fafter] = $this->applyBalance($from, 'DEBIT', $amount);
+            [$fbefore, $fafter] = $this->applyBalanceInt($from, 'DEBIT', $amount);
             $from->update(['balance' => $fafter]);
 
             LedgerEntry::create([
@@ -273,7 +270,7 @@ class LedgerService
             ]);
 
             // to CREDIT
-            [$tbefore, $tafter] = $this->applyBalance($to, 'CREDIT', $amount);
+            [$tbefore, $tafter] = $this->applyBalanceInt($to, 'CREDIT', $amount);
             $to->update(['balance' => $tafter]);
 
             LedgerEntry::create([
@@ -322,7 +319,7 @@ class LedgerService
                 'note' => $note ?? 'Referral commission -> IDR_COMMISSION',
             ]);
 
-            [$before, $after] = $this->applyBalance($wallet, 'CREDIT', $commissionAmount);
+            [$before, $after] = $this->applyBalanceInt($wallet, 'CREDIT', $commissionAmount);
             $wallet->update(['balance' => $after]);
 
             LedgerEntry::create([
@@ -339,7 +336,7 @@ class LedgerService
     }
 
     // =========================
-    // APPROVE WITHDRAW: pindahkan IDR_COMMISSION -> IDR (wallet belanja)
+    // APPROVE WD KOMISI: pindahkan IDR_COMMISSION -> IDR
     // =========================
     public function approveWithdrawCommissionToMain(
         int $userId,
@@ -349,6 +346,10 @@ class LedgerService
         ?string $referenceType = 'withdraw_request',
         ?int $referenceId = null
     ): LedgerTransaction {
+        if ($amount <= 0) {
+            throw ValidationException::withMessages(['amount' => 'Amount harus > 0']);
+        }
+
         $commissionWallet = $this->getOrCreateUserCommissionWallet($userId);
         $mainWallet = $this->getOrCreateUserWallet($userId);
 
@@ -362,78 +363,5 @@ class LedgerService
             referenceType: $referenceType,
             referenceId: $referenceId
         );
-    }
-
-    public function getOrCreateSystemWallet(string $currency = 'IDR')
-    {
-        // Sesuaikan field & model jika di project kamu nama kolomnya beda.
-        // Umumnya ada Wallet model dengan owner_type/owner_id atau is_system flag.
-        return \App\Models\Wallet::firstOrCreate([
-            'owner_type' => 'system',
-            'owner_id' => 0,
-            'currency' => $currency,
-        ], [
-            'balance' => 0,
-        ]);
-    }
-
-    /**
-     * Approve WD: pindahkan saldo dari wallet utama user (IDR) ke wallet system (GROWTECH)
-     */
-    public function approveWithdrawToSystemWallet(
-        int $userId,
-        int $amount,
-        string $idempotencyKey,
-        string $note,
-        string $referenceType,
-        int $referenceId,
-        string $currency = 'IDR'
-    ): void {
-        if ($amount <= 0) return;
-
-        // ✅ idempotent
-        $exists = \App\Models\LedgerEntry::query()
-            ->where('idempotency_key', $idempotencyKey)
-            ->exists();
-        if ($exists) return;
-
-        $userWallet = $this->getOrCreateUserWallet($userId);
-        $systemWallet = $this->getOrCreateSystemWallet($currency);
-
-        // ✅ pastikan saldo cukup (double safety)
-        if ((float)$userWallet->balance < (float)$amount) {
-            throw new \RuntimeException('Saldo user tidak cukup untuk approve WD');
-        }
-
-        // debit user
-        $userWallet->balance = (float)$userWallet->balance - (float)$amount;
-        $userWallet->save();
-
-        // credit system
-        $systemWallet->balance = (float)$systemWallet->balance + (float)$amount;
-        $systemWallet->save();
-
-        // catat ledger (2 entry atau 1 entry sesuai schema kamu)
-        \App\Models\LedgerEntry::create([
-            'wallet_id' => $userWallet->id,
-            'direction' => 'debit',
-            'amount' => (float)$amount,
-            'note' => $note,
-            'reference_type' => $referenceType,
-            'reference_id' => $referenceId,
-            'idempotency_key' => $idempotencyKey,
-            'meta' => ['to' => 'system', 'currency' => $currency],
-        ]);
-
-        \App\Models\LedgerEntry::create([
-            'wallet_id' => $systemWallet->id,
-            'direction' => 'credit',
-            'amount' => (float)$amount,
-            'note' => $note,
-            'reference_type' => $referenceType,
-            'reference_id' => $referenceId,
-            'idempotency_key' => $idempotencyKey . ':SYS',
-            'meta' => ['from_user_id' => $userId, 'currency' => $currency],
-        ]);
     }
 }

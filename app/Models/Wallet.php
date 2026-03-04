@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Wallet extends Model
 {
@@ -10,7 +11,11 @@ class Wallet extends Model
         'user_id', 'code', 'balance', 'currency', 'status',
     ];
 
-    public function user()
+    protected $casts = [
+        'balance' => 'integer',
+    ];
+
+    public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }

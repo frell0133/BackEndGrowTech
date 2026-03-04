@@ -18,6 +18,9 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use App\Services\DiscountCampaignService;
+use App\Models\ReferralSetting;
+use App\Models\ReferralTransaction;
+use App\Models\Referral;
 
 class UserCartController extends Controller
 {
@@ -115,6 +118,57 @@ class UserCartController extends Controller
         }
 
         return (int) $unitPrice;
+    }
+
+    private function computeReferralDiscountForUser(int $userId, float $subtotal): array
+    {
+        $settings = ReferralSetting::current();
+        if (!$settings || !$settings->isActiveNow()) {
+            return ['discount' => 0.0, 'referrer_id' => null];
+        }
+
+        $relation = Referral::query()
+            ->where('user_id', $userId)
+            ->first();
+
+        if (!$relation || !$relation->locked_at) {
+            return ['discount' => 0.0, 'referrer_id' => null];
+        }
+
+        if ((int)$settings->min_order_amount > 0 && (float)$subtotal < (float)$settings->min_order_amount) {
+            return ['discount' => 0.0, 'referrer_id' => null];
+        }
+
+        $usedByUser = ReferralTransaction::query()
+            ->where('user_id', $userId)
+            ->whereIn('status', ['pending', 'valid'])
+            ->count();
+
+        if ((int)$settings->max_uses_per_user > 0 && $usedByUser >= (int)$settings->max_uses_per_user) {
+            return ['discount' => 0.0, 'referrer_id' => null];
+        }
+
+        $referralDiscount = 0.0;
+        if (($settings->discount_type ?? 'percent') === 'fixed') {
+            $referralDiscount = (float) ((int)$settings->discount_value);
+        } else {
+            $referralDiscount = (float) floor((float)$subtotal * ((int)$settings->discount_value) / 100);
+        }
+
+        if ((int)$settings->discount_max_amount > 0) {
+            $referralDiscount = min($referralDiscount, (float)((int)$settings->discount_max_amount));
+        }
+
+        $referralDiscount = min($referralDiscount, (float)$subtotal);
+
+        if ($referralDiscount <= 0) {
+            return ['discount' => 0.0, 'referrer_id' => null];
+        }
+
+        return [
+            'discount' => (float) $referralDiscount,
+            'referrer_id' => (int) $relation->referred_by,
+        ];
     }
 
     public function show(Request $request)
@@ -411,6 +465,19 @@ class UserCartController extends Controller
             }
 
             // jangan lebih dari subtotal
+            // ✅ REFERRAL DISCOUNT (cart)
+            $referralDiscount = 0.0;
+            $referrerId = null;
+
+            $ref = $this->computeReferralDiscountForUser((int) $user->id, (float) $subtotal);
+            $referralDiscount = (float) ($ref['discount'] ?? 0.0);
+            $referrerId = $ref['referrer_id'] ?? null;
+
+            if ($referralDiscount > 0 && $referrerId) {
+                $discountTotal += $referralDiscount;
+            }
+
+            // jangan lebih dari subtotal
             if ($discountTotal > $subtotal) $discountTotal = $subtotal;
 
             $taxAmount = 0.0;
@@ -442,6 +509,20 @@ class UserCartController extends Controller
                 'amount' => (float) $amount, // base (tanpa fee gateway)
                 'payment_gateway_code' => null,
             ]);
+
+            // ✅ referral transaction (pending) jika diskon referral dipakai
+            if ($referralDiscount > 0 && $referrerId) {
+                ReferralTransaction::create([
+                    'referrer_id' => (int) $referrerId,
+                    'user_id' => (int) $user->id,
+                    'order_id' => (int) $order->id,
+                    'status' => 'pending',
+                    'order_amount' => (int) round((float) $order->amount),
+                    'discount_amount' => (int) round((float) $referralDiscount),
+                    'commission_amount' => 0,
+                    'occurred_at' => null,
+                ]);
+            }
 
             foreach ($computedItems as $it) {
                 OrderItem::create([
@@ -478,6 +559,7 @@ class UserCartController extends Controller
                 'discount_breakdown' => [
                     'campaign_discount_total' => (float) $campaignDiscountTotal,
                     'voucher_discount_total' => (float) $voucherDiscount,
+                    'referral_discount_total' => (float) $referralDiscount,
                     'discount_total' => (float) $discountTotal,
                     'applied_campaigns' => $campaignResult['applied'] ?? [],
                 ],
@@ -648,6 +730,18 @@ class UserCartController extends Controller
             $discountTotal += $voucherDiscount;
         }
 
+        // ✅ REFERRAL DISCOUNT (preview)
+        $referralDiscount = 0.0;
+        $referrerId = null;
+
+        $ref = $this->computeReferralDiscountForUser((int) $user->id, (float) $subtotal);
+        $referralDiscount = (float) ($ref['discount'] ?? 0.0);
+        $referrerId = $ref['referrer_id'] ?? null;
+
+        if ($referralDiscount > 0 && $referrerId) {
+            $discountTotal += $referralDiscount;
+        }
+
         if ($discountTotal > $subtotal) $discountTotal = $subtotal;
 
         $taxAmount = 0.0;
@@ -668,6 +762,7 @@ class UserCartController extends Controller
             'discount_breakdown' => [
                 'campaign_discount_total' => (float) $campaignDiscountTotal,
                 'voucher_discount_total' => (float) $voucherDiscount,
+                'referral_discount_total' => (float) $referralDiscount,
                 'discount_total' => (float) $discountTotal,
                 'applied_campaigns' => $campaignResult['applied'] ?? [],
             ],
