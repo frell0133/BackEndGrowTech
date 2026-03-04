@@ -25,6 +25,9 @@ use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
 use App\Models\Referral;
 
+// ✅ NEW: service untuk komisi referral saat PAID (wallet/midtrans)
+use App\Services\ReferralCommissionService;
+
 class UserOrderController extends Controller
 {
     use ApiResponse, DispatchesInvoiceEmail;
@@ -200,7 +203,7 @@ class UserOrderController extends Controller
             }
 
             // =========================
-            // ✅ REFERRAL DISCOUNT (NULL-SAFE)
+            // ✅ REFERRAL DISCOUNT
             // =========================
             $referralDiscount = 0.0;
             $referrerId = null;
@@ -214,10 +217,8 @@ class UserOrderController extends Controller
 
                 if ($relation && $relation->locked_at) {
 
-                    // minimal order
                     if ((int)$settings->min_order_amount <= 0 || (float)$subtotal >= (float)$settings->min_order_amount) {
 
-                        // limit penggunaan per user (pending/valid)
                         $usedByUser = ReferralTransaction::query()
                             ->where('user_id', (int) $user->id)
                             ->whereIn('status', ['pending', 'valid'])
@@ -225,19 +226,16 @@ class UserOrderController extends Controller
 
                         if ((int)$settings->max_uses_per_user <= 0 || $usedByUser < (int)$settings->max_uses_per_user) {
 
-                            // hitung diskon
                             if ($settings->discount_type === 'fixed') {
                                 $referralDiscount = (float) ((int)$settings->discount_value);
-                            } else { // percent
+                            } else {
                                 $referralDiscount = (float) floor((float)$subtotal * ((int)$settings->discount_value) / 100);
                             }
 
-                            // max diskon
                             if ((int)$settings->discount_max_amount > 0) {
                                 $referralDiscount = min($referralDiscount, (float)((int)$settings->discount_max_amount));
                             }
 
-                            // tidak boleh lebih dari subtotal
                             $referralDiscount = min($referralDiscount, (float)$subtotal);
 
                             if ($referralDiscount > 0) {
@@ -251,7 +249,7 @@ class UserOrderController extends Controller
 
             if ($discountTotal > $subtotal) $discountTotal = $subtotal;
 
-            // ✅ tax dari setting
+            // ✅ tax
             $taxPercent = $this->getTaxPercent();
             $taxAmount = 0.0;
             if ($taxPercent > 0) {
@@ -261,7 +259,7 @@ class UserOrderController extends Controller
             // ✅ base amount (wallet pakai ini)
             $amount = (float) max(0, ((float)$subtotal + (float)$taxAmount) - (float)$discountTotal);
 
-            // ✅ fee gateway (midtrans customer bayar ini tambahan)
+            // ✅ fee gateway
             $feePercent = $this->getGatewayFeePercent();
             $gatewayFeeAmount = 0.0;
             if ($feePercent > 0) {
@@ -310,14 +308,12 @@ class UserOrderController extends Controller
                 'product_slug' => (string) ($product->slug ?? null),
             ]);
 
-            // attach voucher pivot (nilai diskon voucher saja)
             if ($voucher) {
                 $order->vouchers()->syncWithoutDetaching([
                     $voucher->id => ['discount_amount' => (float) $voucherDiscount],
                 ]);
             }
 
-            // attach campaign pivot
             if (!empty($campaignResult['applied'])) {
                 foreach ($campaignResult['applied'] as $ac) {
                     $order->discountCampaigns()->attach((int) $ac['id'], [
@@ -426,6 +422,13 @@ class UserOrderController extends Controller
                         'payment_gateway_code' => 'wallet',
                     ]);
 
+                    // ✅ FIX UTAMA: komisi referral juga diproses saat wallet PAID
+                    app(ReferralCommissionService::class)->handleOrderPaid(
+                        $locked->fresh(),
+                        $ledger,
+                        ['method' => 'wallet']
+                    );
+
                     $res = $fulfillment->fulfillPaidOrder($locked->fresh());
 
                     if (!($res['ok'] ?? false)) {
@@ -463,7 +466,6 @@ class UserOrderController extends Controller
                     ->lockForUpdate()
                     ->first();
 
-                // ✅ hitung gross = base + fee
                 $baseAmount = (float) $locked->amount;
 
                 $feeAmount = (float) ($locked->gateway_fee_amount ?? 0);
@@ -486,7 +488,7 @@ class UserOrderController extends Controller
                         'order_id' => (int) $locked->id,
                         'gateway_code' => 'midtrans',
                         'external_id' => (string) $locked->invoice_number,
-                        'amount' => (float) $gross, // ✅ gross
+                        'amount' => (float) $gross,
                         'status' => PaymentStatus::INITIATED->value,
                         'raw_callback' => null,
                     ]);
@@ -499,31 +501,28 @@ class UserOrderController extends Controller
                 }
 
                 $payload = [
-                        'transaction_details' => [
-                            'order_id' => (string) $locked->invoice_number,
-                            'gross_amount' => (int) round($gross),
+                    'transaction_details' => [
+                        'order_id' => (string) $locked->invoice_number,
+                        'gross_amount' => (int) round($gross),
+                    ],
+                    'item_details' => [
+                        [
+                            'id' => (string) $locked->invoice_number,
+                            'price' => (int) round($gross),
+                            'quantity' => 1,
+                            'name' => mb_substr('Growtech Order ' . (string) $locked->invoice_number, 0, 50),
                         ],
-
-                        'item_details' => [
-                            [
-                                'id' => (string) $locked->invoice_number,
-                                'price' => (int) round($gross),
-                                'quantity' => 1,
-                                'name' => mb_substr('Growtech Order ' . (string) $locked->invoice_number, 0, 50),
-                            ],
-                        ],
-
-                        'customer_details' => [
-                            'first_name' => (string) ($user->name ?? 'Customer'),
-                            'email' => (string) ($user->email ?? 'customer@example.com'),
-                        ],
-
-                        'callbacks' => [
-                            'finish' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment',
-                            'error' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment/failed',
-                            'unfinish' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment/process',
-                        ],
-                    ];
+                    ],
+                    'customer_details' => [
+                        'first_name' => (string) ($user->name ?? 'Customer'),
+                        'email' => (string) ($user->email ?? 'customer@example.com'),
+                    ],
+                    'callbacks' => [
+                        'finish' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment',
+                        'error' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment/failed',
+                        'unfinish' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment/process',
+                    ],
+                ];
 
                 $snap = $midtrans->createSnapTransaction($payload);
 
@@ -601,9 +600,6 @@ class UserOrderController extends Controller
         ]);
     }
 
-    // =========================
-    // GET /api/v1/orders
-    // =========================
     public function index(Request $request)
     {
         $user = $request->user();
@@ -617,9 +613,6 @@ class UserOrderController extends Controller
         return $this->ok($data);
     }
 
-    // =========================
-    // GET /api/v1/orders/{id}
-    // =========================
     public function show(Request $request, string $id)
     {
         $user = $request->user();
@@ -635,9 +628,6 @@ class UserOrderController extends Controller
         return $this->ok($order);
     }
 
-    // =========================
-    // POST /api/v1/orders/{id}/cancel
-    // =========================
     public function cancel(Request $request, string $id)
     {
         $user = $request->user();
