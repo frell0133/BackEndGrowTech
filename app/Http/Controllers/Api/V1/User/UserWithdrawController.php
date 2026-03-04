@@ -29,18 +29,30 @@ class UserWithdrawController extends Controller
 
         $amount = (int) $v['amount'];
 
-        // optional: minimal WD dari settings
         $settings = ReferralSetting::current();
         $minWd = (int) ($settings->min_withdrawal ?? 0);
         if ($minWd > 0 && $amount < $minWd) {
             return $this->fail("Minimal withdraw adalah {$minWd}", 422);
         }
 
-        // ✅ SALDO DIAMBIL DARI WALLET KOMISI
+        // ✅ saldo komisi
         $commissionWallet = $ledger->getOrCreateUserCommissionWallet((int) $user->id);
+        $commissionBalance = (int) floor((float)$commissionWallet->balance);
 
-        if ((float)$commissionWallet->balance < (float)$amount) {
-            return $this->fail('Saldo komisi tidak cukup', 422);
+        // ✅ hitung total pending WD user (biar tidak bisa double request)
+        $pendingTotal = (int) floor((float) WithdrawRequest::query()
+            ->where('user_id', (int) $user->id)
+            ->where('status', 'pending')
+            ->sum('amount')
+        );
+
+        $available = max(0, $commissionBalance - $pendingTotal);
+
+        if ($amount > $available) {
+            return $this->fail(
+                "Saldo komisi tidak cukup. Available={$available} (saldo={$commissionBalance}, pending={$pendingTotal})",
+                422
+            );
         }
 
         $wr = WithdrawRequest::create([
@@ -51,8 +63,13 @@ class UserWithdrawController extends Controller
         ]);
 
         return $this->ok([
-            'message' => 'Withdraw request (convert komisi -> wallet) berhasil dibuat',
+            'message' => 'Withdraw request berhasil dibuat (menunggu approval admin)',
             'withdraw' => $wr,
+            'balance' => [
+                'commission_balance' => $commissionBalance,
+                'pending_total' => $pendingTotal,
+                'available' => $available,
+            ]
         ]);
     }
 

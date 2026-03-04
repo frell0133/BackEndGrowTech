@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\DB;
 use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
 
+// ✅ untuk Opsi A (ambil subtotal cart server-side)
 use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\Product;
@@ -42,7 +43,7 @@ class UserReferralController extends Controller
         if (!$user) return $this->fail('Unauthenticated', 401);
 
         $data = $request->validate([
-            'code' => ['required','string','max:50'],
+            'code' => ['required', 'string', 'max:50'],
         ]);
 
         $code = strtoupper(trim($data['code']));
@@ -56,7 +57,11 @@ class UserReferralController extends Controller
 
         return DB::transaction(function () use ($user, $referrer) {
 
-            $existing = Referral::query()->where('user_id', $user->id)->lockForUpdate()->first();
+            $existing = Referral::query()
+                ->where('user_id', $user->id)
+                ->lockForUpdate()
+                ->first();
+
             if ($existing && $existing->locked_at) {
                 return $this->fail('Referral sudah terkunci (hanya bisa sekali)', 409);
             }
@@ -69,14 +74,14 @@ class UserReferralController extends Controller
             return $this->ok([
                 'message' => 'Referral berhasil dipasang',
                 'referral' => $ref,
-                'referrer' => $referrer->only('id','name','email','referral_code'),
+                'referrer' => $referrer->only('id', 'name', 'email', 'referral_code'),
             ]);
         });
     }
 
-    // ==============================
-    // ✅ Opsi A helpers: subtotal dari cart (server-side)
-    // ==============================
+    // =========================================================
+    // ✅ Opsi A helpers: hitung subtotal dari cart server-side
+    // =========================================================
 
     private function cartForUser(int $userId): Cart
     {
@@ -120,10 +125,13 @@ class UserReferralController extends Controller
         foreach ($items as $item) {
             $p = $item->product;
             if (!$p) continue;
+
+            // ikut rule product publish/active
             if (!$p->is_active || !$p->is_published) continue;
 
             $qty = (int) ($item->qty ?? 1);
             $unit = $this->resolveUnitPrice($p, $tierKey);
+
             $subtotal += ($unit * $qty);
         }
 
@@ -135,18 +143,17 @@ class UserReferralController extends Controller
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
 
-        // ✅ amount sekarang OPTIONAL (kalau kosong -> ambil dari cart)
+        // ✅ amount OPTIONAL: kalau kosong -> ambil subtotal cart
         $data = $request->validate([
-            'amount' => ['nullable','integer','min:0'],
+            'amount' => ['nullable', 'integer', 'min:0'],
         ]);
 
         $amount = isset($data['amount']) ? (int) $data['amount'] : null;
 
-        // ✅ Opsi A: default hitung subtotal dari cart server-side
-        $source = 'request';
+        $amountSource = 'request';
         if ($amount === null) {
             $amount = $this->computeCartSubtotal($user);
-            $source = 'cart';
+            $amountSource = 'cart';
         }
 
         $settings = ReferralSetting::current();
@@ -155,7 +162,7 @@ class UserReferralController extends Controller
                 'eligible' => false,
                 'reason' => 'Referral campaign tidak aktif / sudah expired',
                 'amount' => $amount,
-                'amount_source' => $source, // ✅ info source
+                'amount_source' => $amountSource,
                 'discount_amount' => 0,
                 'final_amount' => $amount,
                 'settings' => $settings,
@@ -171,7 +178,21 @@ class UserReferralController extends Controller
                 'eligible' => false,
                 'reason' => 'User belum attach referral code',
                 'amount' => $amount,
-                'amount_source' => $source,
+                'amount_source' => $amountSource,
+                'discount_amount' => 0,
+                'final_amount' => $amount,
+                'settings' => $settings,
+            ]);
+        }
+
+        // ✅ kalau cart kosong dan min_order=0, ini akan eligible (diskon 0)
+        // biasanya lebih masuk akal: cart kosong => tidak eligible
+        if ($amount <= 0) {
+            return $this->ok([
+                'eligible' => false,
+                'reason' => 'Cart masih kosong',
+                'amount' => $amount,
+                'amount_source' => $amountSource,
                 'discount_amount' => 0,
                 'final_amount' => $amount,
                 'settings' => $settings,
@@ -183,16 +204,17 @@ class UserReferralController extends Controller
                 'eligible' => false,
                 'reason' => 'Minimal order belum terpenuhi',
                 'amount' => $amount,
-                'amount_source' => $source,
+                'amount_source' => $amountSource,
                 'discount_amount' => 0,
                 'final_amount' => $amount,
                 'settings' => $settings,
             ]);
         }
 
+        // limit penggunaan per user (pending/valid)
         $usedByUser = ReferralTransaction::query()
             ->where('user_id', $user->id)
-            ->whereIn('status', ['pending','valid'])
+            ->whereIn('status', ['pending', 'valid'])
             ->count();
 
         if ($settings->max_uses_per_user > 0 && $usedByUser >= (int) $settings->max_uses_per_user) {
@@ -200,7 +222,7 @@ class UserReferralController extends Controller
                 'eligible' => false,
                 'reason' => 'Limit penggunaan referral untuk user sudah habis',
                 'amount' => $amount,
-                'amount_source' => $source,
+                'amount_source' => $amountSource,
                 'discount_amount' => 0,
                 'final_amount' => $amount,
                 'settings' => $settings,
@@ -225,7 +247,7 @@ class UserReferralController extends Controller
             'eligible' => true,
             'reason' => null,
             'amount' => $amount,
-            'amount_source' => $source,
+            'amount_source' => $amountSource,
             'discount_amount' => $discount,
             'final_amount' => max(0, $amount - $discount),
             'referrer_id' => (int) $relation->referred_by,

@@ -52,19 +52,14 @@ class AdminWithdrawController extends Controller
             $amount = (int) round((float)$wr->amount);
             if ($amount <= 0) return $this->fail('Amount invalid', 422);
 
-            $userWallet = $ledger->getOrCreateUserWallet((int) $wr->user_id);
-            $growtechWallet = $ledger->getSystemWallet('GROWTECH');
-
             $idem = 'WD_APPROVE:' . $wr->id;
 
-            // ✅ WAJIB type enum yang valid: pakai 'WITHDRAW'
-            $ledger->transferWalletToWallet(
-                fromWalletId: (int) $userWallet->id,
-                toWalletId: (int) $growtechWallet->id,
+            // ✅ BENAR: pindah saldo dari IDR_COMMISSION -> IDR (wallet utama user)
+            $ledger->approveWithdrawCommissionToMain(
+                userId: (int) $wr->user_id,
                 amount: (int) $amount,
-                type: 'WITHDRAW',
                 idempotencyKey: $idem,
-                note: 'Approve withdraw -> masuk GROWTECH',
+                note: 'Approve withdraw: komisi -> saldo wallet utama',
                 referenceType: 'withdraw_request',
                 referenceId: (int) $wr->id
             );
@@ -75,7 +70,7 @@ class AdminWithdrawController extends Controller
             $wr->save();
 
             return $this->ok([
-                'message' => 'Withdraw approved. Saldo user masuk ke GROWTECH.',
+                'message' => 'Withdraw approved. Komisi dipindah ke saldo wallet user.',
                 'withdraw' => $wr->fresh(),
             ]);
         });
