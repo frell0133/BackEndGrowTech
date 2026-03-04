@@ -35,32 +35,27 @@ class AdminWithdrawController extends Controller
      * POST /api/v1/admin/withdraws/{id}/approve
      * ✅ auto pindah saldo user -> wallet sistem GROWTECH
      */
-    public function approve(Request $request, string $id, LedgerService $ledger)
+    public function approve(Request $request, string $id, \App\Services\LedgerService $ledger)
     {
-        return DB::transaction(function () use ($id, $ledger) {
-            $wr = WithdrawRequest::query()
+        return \Illuminate\Support\Facades\DB::transaction(function () use ($id, $ledger) {
+            $wr = \App\Models\WithdrawRequest::query()
                 ->where('id', (int)$id)
                 ->lockForUpdate()
                 ->first();
 
             if (!$wr) return $this->fail('Withdraw request tidak ditemukan', 404);
-
-            if ($wr->status !== 'pending') {
-                return $this->fail('Withdraw request bukan pending', 409);
-            }
+            if ($wr->status !== 'pending') return $this->fail('Withdraw request bukan pending', 409);
 
             $amount = (int) round((float)$wr->amount);
             if ($amount <= 0) return $this->fail('Amount invalid', 422);
 
-            $idem = 'WD_APPROVE:' . $wr->id;
-
-            // ✅ FIX: convert komisi -> saldo wallet utama user
-            // IDR_COMMISSION -> IDR
+            // ✅ FLOW YANG KAMU MAU:
+            // IDR_COMMISSION -> IDR (saldo GrowTech user bertambah)
             $ledger->approveWithdrawCommissionToMain(
                 userId: (int) $wr->user_id,
                 amount: (int) $amount,
-                idempotencyKey: $idem,
-                note: 'Approve withdraw: IDR_COMMISSION -> IDR (saldo GrowTech)',
+                idempotencyKey: 'WD_APPROVE:' . (int) $wr->id,
+                note: 'Approve WD: IDR_COMMISSION -> IDR (saldo GrowTech)',
                 referenceType: 'withdraw_request',
                 referenceId: (int) $wr->id
             );
@@ -71,12 +66,12 @@ class AdminWithdrawController extends Controller
             $wr->save();
 
             return $this->ok([
-                'message' => 'Withdraw approved. Saldo GrowTech user bertambah (convert komisi).',
+                'message' => 'Withdraw approved. Saldo GrowTech user bertambah dari komisi.',
                 'withdraw' => $wr->fresh(),
             ]);
         });
     }
-    
+
     /**
      * POST /api/v1/admin/withdraws/{id}/reject
      */

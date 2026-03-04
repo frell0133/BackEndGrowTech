@@ -499,23 +499,31 @@ class UserOrderController extends Controller
                 }
 
                 $payload = [
-                    'transaction_details' => [
-                        'order_id' => (string) $locked->invoice_number,
-                        'gross_amount' => (int) round($gross),
-                    ],
-                    'item_details' => [
-                        [
-                            'id' => (string) $locked->invoice_number,
-                            'price' => (int) round($gross),
-                            'quantity' => 1,
-                            'name' => mb_substr('Growtech Order ' . (string) $locked->invoice_number, 0, 50),
+                        'transaction_details' => [
+                            'order_id' => (string) $locked->invoice_number,
+                            'gross_amount' => (int) round($gross),
                         ],
-                    ],
-                    'customer_details' => [
-                        'first_name' => (string) ($user->name ?? 'Customer'),
-                        'email' => (string) ($user->email ?? 'customer@example.com'),
-                    ],
-                ];
+
+                        'item_details' => [
+                            [
+                                'id' => (string) $locked->invoice_number,
+                                'price' => (int) round($gross),
+                                'quantity' => 1,
+                                'name' => mb_substr('Growtech Order ' . (string) $locked->invoice_number, 0, 50),
+                            ],
+                        ],
+
+                        'customer_details' => [
+                            'first_name' => (string) ($user->name ?? 'Customer'),
+                            'email' => (string) ($user->email ?? 'customer@example.com'),
+                        ],
+
+                        'callbacks' => [
+                            'finish' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment',
+                            'error' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment/failed',
+                            'unfinish' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment/process',
+                        ],
+                    ];
 
                 $snap = $midtrans->createSnapTransaction($payload);
 

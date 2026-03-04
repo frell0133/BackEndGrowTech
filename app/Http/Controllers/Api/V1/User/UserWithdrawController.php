@@ -35,16 +35,15 @@ class UserWithdrawController extends Controller
             return $this->fail("Minimal withdraw adalah {$minWd}", 422);
         }
 
-        // ✅ saldo komisi
+        // ✅ SALDO SUMBER: wallet komisi (IDR_COMMISSION)
         $commissionWallet = $ledger->getOrCreateUserCommissionWallet((int) $user->id);
-        $commissionBalance = (int) floor((float)$commissionWallet->balance);
+        $commissionBalance = (int) floor((float) $commissionWallet->balance);
 
-        // ✅ total pending WD user
+        // ✅ anti double pending: total WD pending
         $pendingTotal = (int) floor((float) WithdrawRequest::query()
             ->where('user_id', (int) $user->id)
             ->where('status', 'pending')
-            ->sum('amount')
-        );
+            ->sum('amount'));
 
         $available = max(0, $commissionBalance - $pendingTotal);
 
@@ -63,7 +62,7 @@ class UserWithdrawController extends Controller
         ]);
 
         return $this->ok([
-            'message' => 'Withdraw request (convert komisi -> wallet) berhasil dibuat',
+            'message' => 'Withdraw request berhasil dibuat (menunggu approval admin)',
             'withdraw' => $wr,
             'balance' => [
                 'commission_balance' => $commissionBalance,
