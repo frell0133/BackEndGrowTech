@@ -23,7 +23,7 @@ class AdminReferralController extends Controller
      * Query:
      * - q=search email/name/referral_code (user atau referrer)
      * - user_id=filter by referred user (yang pakai kode)
-     * - referrer_id=filter by referrer (pemilik kode)
+     * - referrer_id=filter by referrer (pemilik kode)  -> field DB: referred_by
      * - date_from=YYYY-MM-DD (filter locked_at/created_at)
      * - date_to=YYYY-MM-DD
      * - per_page=20
@@ -83,35 +83,42 @@ class AdminReferralController extends Controller
             });
         }
 
-        $data = $query->latest('id')->paginate($perPage);
-
-        return $this->ok($data);
+        return $this->ok($query->latest('id')->paginate($perPage));
     }
 
     /**
      * ============================
-     * B) MONITORING (mockup)
+     * B) MONITORING (rekap per referrer)
      * ============================
      * GET /api/v1/admin/referrals/monitoring
      *
      * Query:
      * - q=search referrer name/email/referral_code
      * - per_page=20
+     *
+     * Return:
+     * - total_orders_used (jumlah transaksi referral)
+     * - total_users_used (jumlah buyer unik)
+     * - valid/pending/invalid
+     * - total_komisi
+     * - total_discount
      */
     public function monitoring(Request $request)
     {
         $perPage = (int) $request->query('per_page', 20);
         $q = trim((string) $request->query('q', ''));
 
-        // 1) agregasi transaksi referral (kalau ada)
+        // 1) agregasi transaksi referral
         $txAgg = ReferralTransaction::query()
             ->select([
                 'referrer_id',
-                DB::raw('COUNT(*)::int as total_referral'),
+                DB::raw('COUNT(*)::int as total_orders_used'),
+                DB::raw('COUNT(DISTINCT user_id)::int as total_users_used'),
                 DB::raw("SUM(CASE WHEN status='valid' THEN 1 ELSE 0 END)::int as valid"),
                 DB::raw("SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END)::int as pending"),
                 DB::raw("SUM(CASE WHEN status='invalid' THEN 1 ELSE 0 END)::int as invalid"),
                 DB::raw('COALESCE(SUM(commission_amount),0)::int as total_komisi'),
+                DB::raw('COALESCE(SUM(discount_amount),0)::int as total_discount'),
             ])
             ->groupBy('referrer_id');
 
@@ -133,30 +140,32 @@ class AdminReferralController extends Controller
                 'u.name',
                 'u.email',
                 'u.referral_code',
-                DB::raw('COALESCE(agg.total_referral,0)::int as total_referral'),
+                DB::raw('COALESCE(agg.total_orders_used,0)::int as total_orders_used'),
+                DB::raw('COALESCE(agg.total_users_used,0)::int as total_users_used'),
                 DB::raw('COALESCE(agg.valid,0)::int as valid'),
                 DB::raw('COALESCE(agg.pending,0)::int as pending'),
                 DB::raw('COALESCE(agg.invalid,0)::int as invalid'),
                 DB::raw('COALESCE(agg.total_komisi,0)::int as total_komisi'),
+                DB::raw('COALESCE(agg.total_discount,0)::int as total_discount'),
             ])
-            ->orderByDesc('total_referral')
+            ->orderByDesc('total_users_used')
+            ->orderByDesc('total_orders_used')
             ->orderByDesc('u.id');
 
         if ($q !== '') {
             $query->where(function ($w) use ($q) {
                 $w->where('u.name', 'ilike', "%{$q}%")
-                ->orWhere('u.email', 'ilike', "%{$q}%")
-                ->orWhere('u.referral_code', 'ilike', "%{$q}%");
+                  ->orWhere('u.email', 'ilike', "%{$q}%")
+                  ->orWhere('u.referral_code', 'ilike', "%{$q}%");
             });
         }
 
         return $this->ok($query->paginate($perPage));
     }
 
-
     /**
      * ============================
-     * C) DETAIL (mockup)
+     * C) DETAIL (untuk 1 referrer)
      * ============================
      * GET /api/v1/admin/referrals/{referrer_id}/detail
      *
@@ -164,6 +173,10 @@ class AdminReferralController extends Controller
      * - status=valid|pending|invalid
      * - q=search buyer name/email
      * - per_page=20
+     *
+     * Return:
+     * - summary
+     * - items: list transaksi referral (buyer, invoice, status, discount, komisi, tanggal)
      */
     public function detail(Request $request, int $referrer_id)
     {
@@ -177,56 +190,184 @@ class AdminReferralController extends Controller
         $summary = ReferralTransaction::query()
             ->where('referrer_id', $referrer->id)
             ->select([
-                DB::raw('COUNT(*)::int as total'),
+                DB::raw('COUNT(*)::int as total_orders_used'),
+                DB::raw('COUNT(DISTINCT user_id)::int as total_users_used'),
                 DB::raw("SUM(CASE WHEN status='valid' THEN 1 ELSE 0 END)::int as valid"),
                 DB::raw("SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END)::int as pending"),
                 DB::raw("SUM(CASE WHEN status='invalid' THEN 1 ELSE 0 END)::int as invalid"),
                 DB::raw('COALESCE(SUM(commission_amount),0)::int as total_komisi'),
+                DB::raw('COALESCE(SUM(discount_amount),0)::int as total_discount'),
             ])->first();
 
         $tx = ReferralTransaction::query()
             ->where('referrer_id', $referrer->id)
-            ->with(['user:id,name,email']);
+            ->with([
+                'user:id,name,email,referral_code',
+                'order:id,invoice_number,amount,discount_total,created_at',
+            ]);
 
         if ($status) $tx->where('status', $status);
 
         if ($q !== '') {
             $tx->whereHas('user', function ($u) use ($q) {
                 $u->where('name', 'ilike', "%{$q}%")
-                  ->orWhere('email', 'ilike', "%{$q}%");
+                  ->orWhere('email', 'ilike', "%{$q}%")
+                  ->orWhere('referral_code', 'ilike', "%{$q}%");
             });
         }
 
         $items = $tx->latest('id')->paginate($perPage);
 
-        // map agar sesuai mockup table: Nama, Email, Status, Komisi, Tanggal
+        // Map agar FE enak: buyer + invoice + status + discount + komisi + tanggal
         $itemsArr = $items->toArray();
         $itemsArr['data'] = collect($items->items())->map(function ($row) {
+            $tanggal = optional($row->occurred_at ?: $row->created_at)->toDateString();
+
             return [
-                'name' => $row->user?->name,
-                'email' => $row->user?->email,
+                'buyer' => [
+                    'id' => (int) $row->user_id,
+                    'name' => $row->user?->name,
+                    'email' => $row->user?->email,
+                ],
+                'order' => [
+                    'id' => (int) $row->order_id,
+                    'invoice_number' => $row->order?->invoice_number,
+                    'amount' => (int) ($row->order?->amount ?? 0),
+                    'discount_total' => (int) ($row->order?->discount_total ?? 0),
+                ],
                 'status' => $row->status,
-                'komisi' => (int) $row->commission_amount,
-                'tanggal' => optional($row->occurred_at ?: $row->created_at)->toDateString(),
+                'discount_amount' => (int) $row->discount_amount,
+                'commission_amount' => (int) $row->commission_amount,
+                'tanggal' => $tanggal,
             ];
         })->values();
 
         return $this->ok([
             'referrer' => [
-                'id' => $referrer->id,
+                'id' => (int) $referrer->id,
                 'name' => $referrer->name,
                 'email' => $referrer->email,
                 'referral_code' => $referrer->referral_code,
             ],
             'summary' => [
-                'total' => (int) ($summary->total ?? 0),
+                'total_orders_used' => (int) ($summary->total_orders_used ?? 0),
+                'total_users_used' => (int) ($summary->total_users_used ?? 0),
                 'valid' => (int) ($summary->valid ?? 0),
                 'pending' => (int) ($summary->pending ?? 0),
                 'invalid' => (int) ($summary->invalid ?? 0),
                 'total_komisi' => (int) ($summary->total_komisi ?? 0),
+                'total_discount' => (int) ($summary->total_discount ?? 0),
             ],
             'items' => $itemsArr,
         ]);
+    }
+
+    /**
+     * ============================
+     * D) HISTORY TRANSAKSI REFERRAL (GLOBAL)
+     * ============================
+     * GET /api/v1/admin/referrals/history
+     *
+     * Query:
+     * - status=pending|valid|invalid
+     * - referrer_id=
+     * - user_id= (buyer)
+     * - q=search buyer/referrer
+     * - date_from=YYYY-MM-DD
+     * - date_to=YYYY-MM-DD
+     * - per_page=20
+     */
+    public function history(Request $request)
+    {
+        $perPage = (int) $request->query('per_page', 20);
+        $status = $request->query('status');
+        $referrerId = $request->query('referrer_id');
+        $userId = $request->query('user_id');
+        $q = trim((string) $request->query('q', ''));
+        $dateFrom = $request->query('date_from');
+        $dateTo = $request->query('date_to');
+
+        $tx = ReferralTransaction::query()
+            ->with([
+                'user:id,name,email,referral_code',
+                'referrer:id,name,email,referral_code',
+                'order:id,invoice_number,amount,discount_total,created_at',
+            ]);
+
+        if ($status) $tx->where('status', $status);
+        if ($referrerId) $tx->where('referrer_id', (int) $referrerId);
+        if ($userId) $tx->where('user_id', (int) $userId);
+
+        if ($dateFrom) $tx->whereDate('created_at', '>=', $dateFrom);
+        if ($dateTo) $tx->whereDate('created_at', '<=', $dateTo);
+
+        if ($q !== '') {
+            $tx->where(function ($w) use ($q) {
+                $w->whereHas('user', function ($u) use ($q) {
+                    $u->where('name', 'ilike', "%{$q}%")
+                      ->orWhere('email', 'ilike', "%{$q}%")
+                      ->orWhere('referral_code', 'ilike', "%{$q}%");
+                })->orWhereHas('referrer', function ($r) use ($q) {
+                    $r->where('name', 'ilike', "%{$q}%")
+                      ->orWhere('email', 'ilike', "%{$q}%")
+                      ->orWhere('referral_code', 'ilike', "%{$q}%");
+                });
+            });
+        }
+
+        return $this->ok($tx->latest('id')->paginate($perPage));
+    }
+
+    /**
+     * ============================
+     * E) USAGE STATS (per referrer)
+     * ============================
+     * GET /api/v1/admin/referrals/usage-stats
+     *
+     * Return:
+     * - total_users_used (distinct buyer)
+     * - total_orders_used (count tx)
+     * - valid/pending/invalid
+     * - total_komisi
+     */
+    public function usageStats(Request $request)
+    {
+        $perPage = (int) $request->query('per_page', 20);
+        $q = trim((string) $request->query('q', ''));
+
+        $agg = ReferralTransaction::query()
+            ->select([
+                'referrer_id',
+                DB::raw('COUNT(*)::int as total_orders_used'),
+                DB::raw('COUNT(DISTINCT user_id)::int as total_users_used'),
+                DB::raw("SUM(CASE WHEN status='valid' THEN 1 ELSE 0 END)::int as valid"),
+                DB::raw("SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END)::int as pending"),
+                DB::raw("SUM(CASE WHEN status='invalid' THEN 1 ELSE 0 END)::int as invalid"),
+                DB::raw('COALESCE(SUM(commission_amount),0)::int as total_komisi'),
+            ])
+            ->groupBy('referrer_id');
+
+        $query = DB::query()
+            ->fromSub($agg, 'a')
+            ->join('users as u', 'u.id', '=', 'a.referrer_id')
+            ->select([
+                'u.id','u.name','u.email','u.referral_code',
+                'a.total_orders_used','a.total_users_used',
+                'a.valid','a.pending','a.invalid',
+                'a.total_komisi',
+            ])
+            ->orderByDesc('a.total_users_used')
+            ->orderByDesc('a.total_orders_used');
+
+        if ($q !== '') {
+            $query->where(function ($w) use ($q) {
+                $w->where('u.name', 'ilike', "%{$q}%")
+                  ->orWhere('u.email', 'ilike', "%{$q}%")
+                  ->orWhere('u.referral_code', 'ilike', "%{$q}%");
+            });
+        }
+
+        return $this->ok($query->paginate($perPage));
     }
 
     /**

@@ -218,6 +218,8 @@ Route::prefix('v1')->group(function () {
         Route::post('referral/attach', [UserReferralController::class, 'attach'])->middleware('referral.attach.guard');
         Route::post('referral/preview-discount', [UserReferralController::class, 'previewDiscount']);
         Route::get('referral/preview-discount', [UserReferralController::class, 'previewDiscount']);
+        Route::get('referrals/history', [AdminReferralController::class, 'history']);
+        Route::get('referrals/usage-stats', [AdminReferralController::class, 'usageStats']);
 
         Route::get('favorites', [UserFavoriteController::class, 'index']);
         Route::post('favorites', [UserFavoriteController::class, 'store']);
@@ -317,7 +319,8 @@ Route::prefix('v1')->group(function () {
         Route::post('referrals/{user_id}/force-unlock', [AdminReferralController::class, 'forceUnlock']);
         Route::get('referrals/monitoring', [AdminReferralController::class, 'monitoring']);
         Route::get('referrals/{referrer_id}/detail', [AdminReferralController::class, 'detail']);
-
+        Route::get('referrals/history', [AdminReferralController::class, 'history']);
+        Route::get('referrals/usage-stats', [AdminReferralController::class, 'usageStats']);
         Route::get('referral-settings', [AdminReferralSettingsController::class, 'show']);
         Route::put('referral-settings', [AdminReferralSettingsController::class, 'update']);
 

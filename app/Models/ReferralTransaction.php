@@ -14,6 +14,12 @@ class ReferralTransaction extends Model
     ];
 
     protected $casts = [
+        'referrer_id' => 'integer',
+        'user_id' => 'integer',
+        'order_id' => 'integer',
+        'order_amount' => 'integer',
+        'discount_amount' => 'integer',
+        'commission_amount' => 'integer',
         'occurred_at' => 'datetime',
     ];
 
@@ -25,5 +31,10 @@ class ReferralTransaction extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class, 'user_id');
+    }
+
+    public function order(): BelongsTo
+    {
+        return $this->belongsTo(Order::class, 'order_id');
     }
 }

@@ -12,10 +12,11 @@ use Illuminate\Support\Facades\DB;
 use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
 
-// ✅ untuk Opsi A (ambil subtotal cart server-side)
 use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\Product;
+
+use Illuminate\Support\Facades\Schema;
 
 class UserReferralController extends Controller
 {
@@ -138,6 +139,13 @@ class UserReferralController extends Controller
         return (int) max(0, $subtotal);
     }
 
+    /**
+     * =========================================================
+     * PREVIEW DISCOUNT (yang kamu punya) - aku rapihin safe check settings
+     * =========================================================
+     * GET /api/v1/referral/preview-discount
+     * Body optional: { amount: int } kalau kosong -> ambil subtotal cart
+     */
     public function previewDiscount(Request $request)
     {
         $user = $request->user();
@@ -148,7 +156,7 @@ class UserReferralController extends Controller
             'amount' => ['nullable', 'integer', 'min:0'],
         ]);
 
-        $amount = isset($data['amount']) ? (int) $data['amount'] : null;
+        $amount = array_key_exists('amount', $data) ? (int) $data['amount'] : null;
 
         $amountSource = 'request';
         if ($amount === null) {
@@ -157,7 +165,7 @@ class UserReferralController extends Controller
         }
 
         $settings = ReferralSetting::current();
-        if (!$settings->isActiveNow()) {
+        if (!$settings || !$settings->isActiveNow()) {
             return $this->ok([
                 'eligible' => false,
                 'reason' => 'Referral campaign tidak aktif / sudah expired',
@@ -185,8 +193,7 @@ class UserReferralController extends Controller
             ]);
         }
 
-        // ✅ kalau cart kosong dan min_order=0, ini akan eligible (diskon 0)
-        // biasanya lebih masuk akal: cart kosong => tidak eligible
+        // cart kosong => tidak eligible
         if ($amount <= 0) {
             return $this->ok([
                 'eligible' => false,
@@ -217,7 +224,7 @@ class UserReferralController extends Controller
             ->whereIn('status', ['pending', 'valid'])
             ->count();
 
-        if ($settings->max_uses_per_user > 0 && $usedByUser >= (int) $settings->max_uses_per_user) {
+        if ((int) $settings->max_uses_per_user > 0 && $usedByUser >= (int) $settings->max_uses_per_user) {
             return $this->ok([
                 'eligible' => false,
                 'reason' => 'Limit penggunaan referral untuk user sudah habis',
@@ -231,7 +238,7 @@ class UserReferralController extends Controller
 
         $discount = 0;
 
-        if ($settings->discount_type === 'percent') {
+        if (($settings->discount_type ?? 'percent') === 'percent') {
             $discount = (int) floor($amount * ((int) $settings->discount_value) / 100);
         } else {
             $discount = (int) $settings->discount_value;
@@ -248,10 +255,123 @@ class UserReferralController extends Controller
             'reason' => null,
             'amount' => $amount,
             'amount_source' => $amountSource,
-            'discount_amount' => $discount,
-            'final_amount' => max(0, $amount - $discount),
+            'discount_amount' => (int) $discount,
+            'final_amount' => (int) max(0, $amount - $discount),
             'referrer_id' => (int) $relation->referred_by,
             'settings' => $settings,
+        ]);
+    }
+
+    /**
+     * =========================================================
+     * ✅ USER: HISTORY referral digunakan (orang lain pakai kode saya)
+     * =========================================================
+     * GET /api/v1/referral/history
+     *
+     * Query:
+     * - status=pending|valid|invalid
+     * - q=search buyer name/email
+     * - date_from=YYYY-MM-DD
+     * - date_to=YYYY-MM-DD
+     * - per_page=20
+     */
+    public function history(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) return $this->fail('Unauthenticated', 401);
+
+        $perPage = (int) $request->query('per_page', 20);
+        $status = $request->query('status');
+        $q = trim((string) $request->query('q', ''));
+        $dateFrom = $request->query('date_from');
+        $dateTo = $request->query('date_to');
+
+        $tx = ReferralTransaction::query()
+            ->where('referrer_id', $user->id)
+            ->with([
+                'user:id,name,email,referral_code',
+                'order:id,invoice_number,amount,discount_total,created_at',
+            ]);
+
+        if ($status) $tx->where('status', $status);
+
+        if ($dateFrom) $tx->whereDate('created_at', '>=', $dateFrom);
+        if ($dateTo) $tx->whereDate('created_at', '<=', $dateTo);
+
+        if ($q !== '') {
+            $tx->whereHas('user', function ($u) use ($q) {
+                $u->where('name', 'ilike', "%{$q}%")
+                  ->orWhere('email', 'ilike', "%{$q}%")
+                  ->orWhere('referral_code', 'ilike', "%{$q}%");
+            });
+        }
+
+        $items = $tx->latest('id')->paginate($perPage);
+
+        // Map agar FE rapih
+        $itemsArr = $items->toArray();
+        $itemsArr['data'] = collect($items->items())->map(function ($row) {
+            $tanggal = optional($row->occurred_at ?: $row->created_at)->toDateString();
+
+            return [
+                'buyer' => [
+                    'id' => (int) $row->user_id,
+                    'name' => $row->user?->name,
+                    'email' => $row->user?->email,
+                ],
+                'order' => [
+                    'id' => (int) $row->order_id,
+                    'invoice_number' => $row->order?->invoice_number,
+                    'amount' => (int) ($row->order?->amount ?? 0),
+                    'discount_total' => (int) ($row->order?->discount_total ?? 0),
+                ],
+                'status' => $row->status,
+                'discount_amount' => (int) $row->discount_amount,
+                'commission_amount' => (int) $row->commission_amount,
+                'tanggal' => $tanggal,
+            ];
+        })->values();
+
+        return $this->ok([
+            'summary' => [
+                'total' => (int) $items->total(),
+            ],
+            'items' => $itemsArr,
+        ]);
+    }
+
+    /**
+     * =========================================================
+     * ✅ USER: USAGE stats (berapa orang pakai kode saya)
+     * =========================================================
+     * GET /api/v1/referral/usage
+     */
+    public function usage(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) return $this->fail('Unauthenticated', 401);
+
+        $summary = ReferralTransaction::query()
+            ->where('referrer_id', $user->id)
+            ->select([
+                DB::raw('COUNT(*)::int as total_orders_used'),
+                DB::raw('COUNT(DISTINCT user_id)::int as total_users_used'),
+                DB::raw("SUM(CASE WHEN status='valid' THEN 1 ELSE 0 END)::int as valid"),
+                DB::raw("SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END)::int as pending"),
+                DB::raw("SUM(CASE WHEN status='invalid' THEN 1 ELSE 0 END)::int as invalid"),
+                DB::raw('COALESCE(SUM(commission_amount),0)::int as total_komisi'),
+                DB::raw('COALESCE(SUM(discount_amount),0)::int as total_discount'),
+            ])->first();
+
+        return $this->ok([
+            'my_referral_code' => $user->referral_code,
+            'total_users_used' => (int) ($summary->total_users_used ?? 0),
+            'total_orders_used' => (int) ($summary->total_orders_used ?? 0),
+            'valid' => (int) ($summary->valid ?? 0),
+            'pending' => (int) ($summary->pending ?? 0),
+            'invalid' => (int) ($summary->invalid ?? 0),
+            'total_komisi' => (int) ($summary->total_komisi ?? 0),
+            'total_discount' => (int) ($summary->total_discount ?? 0),
         ]);
     }
 }
