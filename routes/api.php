@@ -49,6 +49,7 @@ use App\Http\Controllers\Api\V1\Admin\AdminReferralSettingsController;
 use App\Http\Controllers\Api\V1\Admin\AdminDiscountCampaignController;
 use App\Http\Controllers\Api\V1\Admin\AdminCategoryController;
 use App\Http\Controllers\Api\V1\Admin\AdminSubCategoryController;
+use App\Http\Controllers\Api\V1\Admin\AdminDashboardController;
 
 // Controllers (Public Catalog)
 use App\Http\Controllers\Api\V1\Public\CategoryController as PublicCategoryController;
@@ -388,6 +389,9 @@ Route::prefix('v1')->group(function () {
         Route::delete('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'destroy']);
         Route::post('discount-campaigns/{id}/targets', [AdminDiscountCampaignController::class, 'addTargets']);
         Route::delete('discount-campaigns/{id}/targets', [AdminDiscountCampaignController::class, 'removeTargets']);
+
+        // Dashboard (Admin Landing Page)
+        Route::get('dashboard/summary', [AdminDashboardController::class, 'summary']);
     });
 
     // =========================
