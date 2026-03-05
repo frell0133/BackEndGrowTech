@@ -102,4 +102,29 @@ class UserWithdrawController extends Controller
 
         return $this->ok($wr);
     }
+
+    public function balance(Request $request, LedgerService $ledger)
+    {
+        $user = $request->user();
+        if (!$user) return $this->fail('Unauthenticated', 401);
+
+        $commissionWallet = $ledger->getOrCreateUserCommissionWallet((int) $user->id);
+        $commissionBalance = (int) floor((float) $commissionWallet->balance);
+
+        $pendingTotal = (int) floor((float) WithdrawRequest::query()
+            ->where('user_id', (int) $user->id)
+            ->where('status', 'pending')
+            ->sum('amount')
+        );
+
+        $available = max(0, $commissionBalance - $pendingTotal);
+
+        return $this->ok([
+            'commission_balance' => $commissionBalance,
+            'pending_total' => $pendingTotal,
+            'available' => $available,
+            'currency' => $commissionWallet->currency, // biasanya IDR_COMMISSION
+            'wallet_id' => $commissionWallet->id,
+        ]);
+    }
 }

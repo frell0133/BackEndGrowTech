@@ -229,6 +229,7 @@ Route::prefix('v1')->group(function () {
         Route::post('withdraws', [UserWithdrawController::class, 'store']);
         Route::get('withdraws', [UserWithdrawController::class, 'index']);
         Route::get('withdraws/{id}', [UserWithdrawController::class, 'show']);
+        Route::get('withdraws/balance', [UserWithdrawController::class, 'balance']);
 
         // Voucher validate (User)
         Route::post('vouchers/validate', [UserVoucherController::class, 'validateCode']);
