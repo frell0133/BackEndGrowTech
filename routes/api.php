@@ -219,8 +219,8 @@ Route::prefix('v1')->group(function () {
         Route::post('referral/attach', [UserReferralController::class, 'attach'])->middleware('referral.attach.guard');
         Route::post('referral/preview-discount', [UserReferralController::class, 'previewDiscount']);
         Route::get('referral/preview-discount', [UserReferralController::class, 'previewDiscount']);
-        Route::get('referrals/history', [AdminReferralController::class, 'history']);
-        Route::get('referrals/usage-stats', [AdminReferralController::class, 'usageStats']);
+        // Route::get('referrals/history', [AdminReferralController::class, 'history']);
+        // Route::get('referrals/usage-stats', [AdminReferralController::class, 'usageStats']);
 
         Route::get('favorites', [UserFavoriteController::class, 'index']);
         Route::post('favorites', [UserFavoriteController::class, 'store']);
@@ -395,7 +395,7 @@ Route::prefix('v1')->group(function () {
     });
 
     // =========================
-    // 6) DEBUG (DEV ONLY)
+    // 6) DEBUG (DEV ONLY) Ketika Production Bisa di Hapus
     // =========================
     Route::get('_debug/db', function () {
         return response()->json([
