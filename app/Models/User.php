@@ -31,18 +31,19 @@ class User extends Authenticatable
      * @var list<string>
      */
     protected $fillable = [
-    'name',
-    'full_name',
-    'address',
-    'email',
-    'password',
-    'role',
-    'tier',
-    'referral_code',
-    'provider',
-    'provider_id',
-    'avatar',
-    'avatar_path',
+        'name',
+        'full_name',
+        'address',
+        'email',
+        'password',
+        'role',
+        'tier',
+        'referral_code',
+        'provider',
+        'provider_id',
+        'avatar',
+        'avatar_path',
+        'admin_role_id',
     ];
 
 
@@ -129,6 +130,43 @@ class User extends Authenticatable
     public function favorites()
     {
         return $this->hasMany(\App\Models\Favorite::class);
+    }
+
+    public function adminRole()
+    {
+        return $this->belongsTo(\App\Models\AdminRole::class, 'admin_role_id');
+    }
+
+    public function isAdmin(): bool
+    {
+        // admin panel kamu sekarang pakai middleware role:admin
+        // jadi admin harus:
+        // - role == 'admin'
+        // - admin_role_id terisi
+        return ($this->role === 'admin') && !is_null($this->admin_role_id);
+    }
+
+    public function isSuperAdmin(): bool
+    {
+        return $this->isAdmin() && ($this->adminRole?->is_super === true);
+    }
+
+    public function adminPermissionKeys(): array
+    {
+        if (!$this->isAdmin()) return [];
+        if ($this->isSuperAdmin()) return ['*'];
+
+        $this->loadMissing(['adminRole.permissions']);
+        return $this->adminRole?->permissions?->pluck('key')->values()->all() ?? [];
+    }
+
+    public function canAdmin(string $permissionKey): bool
+    {
+        if (!$this->isAdmin()) return false;
+        if ($this->isSuperAdmin()) return true;
+
+        $this->loadMissing(['adminRole.permissions']);
+        return $this->adminRole?->permissions?->contains('key', $permissionKey) ?? false;
     }
 
 }

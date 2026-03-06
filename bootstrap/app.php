@@ -28,6 +28,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'role' => \App\Http\Middleware\RoleMiddleware::class,
             'referral.attach.guard' => \App\Http\Middleware\ReferralAttachGuard::class,
+            'admin' => \App\Http\Middleware\EnsureAdminHasRole::class,
+            'admin.can' => \App\Http\Middleware\AdminCan::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

@@ -240,158 +240,212 @@ Route::prefix('v1')->group(function () {
     });
 
     // =========================
-    // 5) ADMIN AREA (AUTH + ROLE)
+    // 5) ADMIN AREA (AUTH + ROLE + RBAC)
     // =========================
-    Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(function () {
+    Route::middleware(['auth:sanctum', 'role:admin', 'admin'])->prefix('admin')->group(function () {
+
+        // Me (buat FE filter menu)
+        Route::get('me', [\App\Http\Controllers\Api\V1\Admin\AdminMeController::class, 'me']);
+
+        // ===== OWNER ONLY: manage roles/admins =====
+        Route::middleware('admin.can:manage_admins')->group(function () {
+            Route::get('permissions', [\App\Http\Controllers\Api\V1\Admin\AdminPermissionController::class, 'index']);
+
+            Route::get('admin-roles', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'index']);
+            Route::post('admin-roles', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'store']);
+            Route::patch('admin-roles/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'update']);
+            Route::delete('admin-roles/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'destroy']);
+
+            Route::get('admin-users', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'index']);
+            Route::post('admin-users/assign', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'assign']);
+            Route::post('admin-users/revoke', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'revoke']);
+        });
+
+        // ====== Dashboard ======
+        Route::middleware('admin.can:view_dashboard')->group(function () {
+            Route::get('dashboard/summary', [AdminDashboardController::class, 'summary']);
+        });
 
         // ====== Categories / Subcategories ======
-        Route::get('categories', [AdminCategoryController::class, 'index']);
-        Route::post('categories', [AdminCategoryController::class, 'store']);
-        Route::patch('categories/{id}', [AdminCategoryController::class, 'update']);
-        Route::delete('categories/{id}', [AdminCategoryController::class, 'destroy']);
+        Route::middleware('admin.can:manage_categories')->group(function () {
+            Route::get('categories', [AdminCategoryController::class, 'index']);
+            Route::post('categories', [AdminCategoryController::class, 'store']);
+            Route::patch('categories/{id}', [AdminCategoryController::class, 'update']);
+            Route::delete('categories/{id}', [AdminCategoryController::class, 'destroy']);
+        });
 
-        Route::get('subcategories', [AdminSubCategoryController::class, 'index']);
-        Route::post('subcategories', [AdminSubCategoryController::class, 'store']);
-        Route::patch('subcategories/{id}', [AdminSubCategoryController::class, 'update']);
-        Route::delete('subcategories/{id}', [AdminSubCategoryController::class, 'destroy']);
-        Route::post('subcategories/logo/sign', [AdminSubCategoryController::class, 'signLogoUpload']);
+        Route::middleware('admin.can:manage_subcategories')->group(function () {
+            Route::get('subcategories', [AdminSubCategoryController::class, 'index']);
+            Route::post('subcategories', [AdminSubCategoryController::class, 'store']);
+            Route::patch('subcategories/{id}', [AdminSubCategoryController::class, 'update']);
+            Route::delete('subcategories/{id}', [AdminSubCategoryController::class, 'destroy']);
+            Route::post('subcategories/logo/sign', [AdminSubCategoryController::class, 'signLogoUpload']);
+        });
 
         // Users
-        Route::get('users', [AdminUserController::class, 'index']);
-        Route::get('users/{id}', [AdminUserController::class, 'show']);
-        Route::patch('users/{id}', [AdminUserController::class, 'update']);
-        Route::get('users/{id}/ledger', [AdminUserController::class, 'ledger']);
-        Route::get('users/{id}/orders', [AdminUserController::class, 'orders']);
-        Route::get('users/{id}/referral', [AdminUserController::class, 'referral']);
-        Route::post('users', [AdminUserController::class, 'store']);
-        Route::delete('users/{id}', [AdminUserController::class, 'destroy']);
-        Route::post('users/{id}/restore', [AdminUserController::class, 'restore']);
+        Route::middleware('admin.can:manage_users')->group(function () {
+            Route::get('users', [AdminUserController::class, 'index']);
+            Route::get('users/{id}', [AdminUserController::class, 'show']);
+            Route::patch('users/{id}', [AdminUserController::class, 'update']);
+            Route::get('users/{id}/ledger', [AdminUserController::class, 'ledger']);
+            Route::get('users/{id}/orders', [AdminUserController::class, 'orders']);
+            Route::get('users/{id}/referral', [AdminUserController::class, 'referral']);
+            Route::post('users', [AdminUserController::class, 'store']);
+            Route::delete('users/{id}', [AdminUserController::class, 'destroy']);
+            Route::post('users/{id}/restore', [AdminUserController::class, 'restore']);
+        });
 
-        // Products (Admin CRUD)
-        Route::get('products', [AdminProductController::class, 'index']);
-        Route::post('products', [AdminProductController::class, 'store']);
-        Route::patch('products/{id}', [AdminProductController::class, 'update']);
-        Route::delete('products/{id}', [AdminProductController::class, 'destroy']);
-        Route::post('products/{id}/publish', [AdminProductController::class, 'publish']);
+        // Products
+        Route::middleware('admin.can:manage_products')->group(function () {
+            Route::get('products', [AdminProductController::class, 'index']);
+            Route::post('products', [AdminProductController::class, 'store']);
+            Route::patch('products/{id}', [AdminProductController::class, 'update']);
+            Route::delete('products/{id}', [AdminProductController::class, 'destroy']);
+            Route::post('products/{id}/publish', [AdminProductController::class, 'publish']);
+        });
 
-        // =========================
-        // Licenses / Inventory (Stock)
-        // =========================
-        Route::get('products/{id}/licenses', [AdminLicenseController::class, 'index']);
-        Route::get('products/{id}/licenses/summary', [AdminLicenseController::class, 'summary']);
-        Route::post('products/{id}/licenses', [AdminLicenseController::class, 'store']);
-        Route::post('products/{id}/licenses/upload', [AdminLicenseController::class, 'upload']);
+        // Licenses / Stock
+        Route::middleware('admin.can:manage_licenses')->group(function () {
+            Route::get('products/{id}/licenses', [AdminLicenseController::class, 'index']);
+            Route::get('products/{id}/licenses/summary', [AdminLicenseController::class, 'summary']);
+            Route::post('products/{id}/licenses', [AdminLicenseController::class, 'store']);
+            Route::post('products/{id}/licenses/upload', [AdminLicenseController::class, 'upload']);
 
-        Route::post('licenses/check-duplicates', [AdminLicenseController::class, 'checkDuplicates']);
-        Route::post('products/{id}/take-stock', [AdminLicenseController::class, 'takeStock']);
+            Route::post('licenses/check-duplicates', [AdminLicenseController::class, 'checkDuplicates']);
+            Route::post('products/{id}/take-stock', [AdminLicenseController::class, 'takeStock']);
 
-        Route::get('stock/proofs', [AdminLicenseController::class, 'proofList']);
-        Route::get('stock/proofs/{proof_id}', [AdminLicenseController::class, 'proofDownload']);
-        Route::get('stock/proofs/{proof_id}/json', [AdminLicenseController::class, 'proofDownloadJson']);
-        Route::get('stock/proofs/{proof_id}/csv', [AdminLicenseController::class, 'proofDownloadCsv']);
+            Route::get('stock/proofs', [AdminLicenseController::class, 'proofList']);
+            Route::get('stock/proofs/{proof_id}', [AdminLicenseController::class, 'proofDownload']);
+            Route::get('stock/proofs/{proof_id}/json', [AdminLicenseController::class, 'proofDownloadJson']);
+            Route::get('stock/proofs/{proof_id}/csv', [AdminLicenseController::class, 'proofDownloadCsv']);
+        });
 
-        // Orders (Admin)
-        Route::get('orders', [AdminOrderController::class, 'index']);
-        Route::get('orders/{id}', [AdminOrderController::class, 'show']);
-        Route::post('orders/{id}/mark-failed', [AdminOrderController::class, 'markFailed']);
-        Route::post('orders/{id}/refund', [AdminOrderController::class, 'refund']);
+        // Orders
+        Route::middleware('admin.can:manage_orders')->group(function () {
+            Route::get('orders', [AdminOrderController::class, 'index']);
+            Route::get('orders/{id}', [AdminOrderController::class, 'show']);
+            Route::post('orders/{id}/mark-failed', [AdminOrderController::class, 'markFailed']);
+            Route::post('orders/{id}/refund', [AdminOrderController::class, 'refund']);
+        });
 
         // Delivery (Admin)
-        Route::post('orders/{id}/delivery/resend', [AdminDeliveryController::class, 'resend']);
-        Route::post('orders/{id}/delivery/revoke', [AdminDeliveryController::class, 'revoke']);
+        Route::middleware('admin.can:manage_deliveries')->group(function () {
+            Route::post('orders/{id}/delivery/resend', [AdminDeliveryController::class, 'resend']);
+            Route::post('orders/{id}/delivery/revoke', [AdminDeliveryController::class, 'revoke']);
+        });
 
         // Payment gateways
-        Route::get('payment-gateways', [PaymentGatewayController::class, 'index']);
-        Route::post('payment-gateways', [PaymentGatewayController::class, 'store']);
-        Route::get('payment-gateways/{code}', [PaymentGatewayController::class, 'show']);
-        Route::patch('payment-gateways/{code}', [PaymentGatewayController::class, 'update']);
-        Route::delete('payment-gateways/{code}', [PaymentGatewayController::class, 'destroy']);
+        Route::middleware('admin.can:manage_payment_gateways')->group(function () {
+            Route::get('payment-gateways', [PaymentGatewayController::class, 'index']);
+            Route::post('payment-gateways', [PaymentGatewayController::class, 'store']);
+            Route::get('payment-gateways/{code}', [PaymentGatewayController::class, 'show']);
+            Route::patch('payment-gateways/{code}', [PaymentGatewayController::class, 'update']);
+            Route::delete('payment-gateways/{code}', [PaymentGatewayController::class, 'destroy']);
+        });
 
-        // Payments (User di Admin)
-        // Route::get('payments', [AdminPaymentController::class, 'index']);
+        // Wallet ops
+        Route::middleware('admin.can:manage_wallets')->group(function () {
+            Route::get('wallet/ledger', [AdminWalletController::class, 'ledger']);
+            Route::post('wallet/adjust', [AdminWalletController::class, 'adjust']);
+            Route::post('wallet/topup', [AdminWalletController::class, 'topup']);
+            Route::get('wallet/topups', [AdminWalletController::class, 'topups']);
+        });
 
-        // Wallet ops (Admin)
-        Route::get('wallet/ledger', [AdminWalletController::class, 'ledger']);
-        Route::post('wallet/adjust', [AdminWalletController::class, 'adjust']);
-        Route::post('wallet/topup', [AdminWalletController::class, 'topup']);
-        Route::get('wallet/topups', [AdminWalletController::class, 'topups']);
+        // Referrals + settings
+        Route::middleware('admin.can:manage_referrals')->group(function () {
+            Route::get('referrals', [AdminReferralController::class, 'index']);
+            Route::post('referrals/{user_id}/force-unlock', [AdminReferralController::class, 'forceUnlock']);
+            Route::get('referrals/monitoring', [AdminReferralController::class, 'monitoring']);
+            Route::get('referrals/{referrer_id}/detail', [AdminReferralController::class, 'detail']);
+            Route::get('referrals/history', [AdminReferralController::class, 'history']);
+            Route::get('referrals/usage-stats', [AdminReferralController::class, 'usageStats']);
+            Route::get('referral-settings', [AdminReferralSettingsController::class, 'show']);
+            Route::put('referral-settings', [AdminReferralSettingsController::class, 'update']);
+        });
 
-        // Referrals (Admin)
-        Route::get('referrals', [AdminReferralController::class, 'index']);
-        Route::post('referrals/{user_id}/force-unlock', [AdminReferralController::class, 'forceUnlock']);
-        Route::get('referrals/monitoring', [AdminReferralController::class, 'monitoring']);
-        Route::get('referrals/{referrer_id}/detail', [AdminReferralController::class, 'detail']);
-        Route::get('referrals/history', [AdminReferralController::class, 'history']);
-        Route::get('referrals/usage-stats', [AdminReferralController::class, 'usageStats']);
-        Route::get('referral-settings', [AdminReferralSettingsController::class, 'show']);
-        Route::put('referral-settings', [AdminReferralSettingsController::class, 'update']);
+        // Withdraws
+        Route::middleware('admin.can:manage_withdraws')->group(function () {
+            Route::get('withdraws', [AdminWithdrawController::class, 'index']);
+            Route::post('withdraws/{id}/approve', [AdminWithdrawController::class, 'approve']);
+            Route::post('withdraws/{id}/reject', [AdminWithdrawController::class, 'reject']);
+            Route::post('withdraws/{id}/mark-paid', [AdminWithdrawController::class, 'markPaid']);
+        });
 
-        // Withdraws (Admin)
-        Route::get('withdraws', [AdminWithdrawController::class, 'index']);
-        Route::post('withdraws/{id}/approve', [AdminWithdrawController::class, 'approve']);
-        Route::post('withdraws/{id}/reject', [AdminWithdrawController::class, 'reject']);
-        Route::post('withdraws/{id}/mark-paid', [AdminWithdrawController::class, 'markPaid']);
+        // Vouchers
+        Route::middleware('admin.can:manage_vouchers')->group(function () {
+            Route::get('vouchers', [AdminVoucherController::class, 'index']);
+            Route::post('vouchers', [AdminVoucherController::class, 'store']);
+            Route::get('vouchers/{id}', [AdminVoucherController::class, 'show']);
+            Route::patch('vouchers/{id}', [AdminVoucherController::class, 'update']);
+            Route::delete('vouchers/{id}', [AdminVoucherController::class, 'destroy']);
+            Route::get('vouchers/{id}/usage', [AdminVoucherController::class, 'usage']);
+        });
 
-        // Vouchers (Admin)
-        Route::get('vouchers', [AdminVoucherController::class, 'index']);
-        Route::post('vouchers', [AdminVoucherController::class, 'store']);
-        Route::get('vouchers/{id}', [AdminVoucherController::class, 'show']);
-        Route::patch('vouchers/{id}', [AdminVoucherController::class, 'update']);
-        Route::delete('vouchers/{id}', [AdminVoucherController::class, 'destroy']);
-        Route::get('vouchers/{id}/usage', [AdminVoucherController::class, 'usage']);
+        // Audit logs
+        Route::middleware('admin.can:view_audit_logs')->group(function () {
+            Route::get('audit-logs', [AdminAuditLogController::class, 'index']);
+            Route::get('audit-logs/{id}', [AdminAuditLogController::class, 'show']);
+        });
 
-        // Audit logs (Admin)
-        Route::get('audit-logs', [AdminAuditLogController::class, 'index']);
-        Route::get('audit-logs/{id}', [AdminAuditLogController::class, 'show']);
-
-        // Settings
-        Route::get('settings', [AdminSiteSettingController::class, 'index']);
-        Route::post('settings/upsert', [AdminSiteSettingController::class, 'upsert']);
-        Route::delete('settings', [AdminSiteSettingController::class, 'destroy']);
-        Route::post('settings/icon/sign', [AdminSiteSettingController::class, 'signIconUpload']);
+        // Site Settings
+        Route::middleware('admin.can:manage_site_settings')->group(function () {
+            Route::get('settings', [AdminSiteSettingController::class, 'index']);
+            Route::post('settings/upsert', [AdminSiteSettingController::class, 'upsert']);
+            Route::delete('settings', [AdminSiteSettingController::class, 'destroy']);
+            Route::post('settings/icon/sign', [AdminSiteSettingController::class, 'signIconUpload']);
+        });
 
         // Banners
-        Route::get('banners', [AdminBannerController::class, 'index']);
-        Route::post('banners', [AdminBannerController::class, 'store']);
-        Route::patch('banners/{banner}', [AdminBannerController::class, 'update']);
-        Route::post('banners/image/sign', [AdminBannerController::class, 'signImageUpload']);
-        Route::patch('banners/{banner}/image', [AdminBannerController::class, 'updateImage']);
-        Route::delete('banners/{banner}', [AdminBannerController::class, 'destroy']);
+        Route::middleware('admin.can:manage_banners')->group(function () {
+            Route::get('banners', [AdminBannerController::class, 'index']);
+            Route::post('banners', [AdminBannerController::class, 'store']);
+            Route::patch('banners/{banner}', [AdminBannerController::class, 'update']);
+            Route::post('banners/image/sign', [AdminBannerController::class, 'signImageUpload']);
+            Route::patch('banners/{banner}/image', [AdminBannerController::class, 'updateImage']);
+            Route::delete('banners/{banner}', [AdminBannerController::class, 'destroy']);
+        });
 
         // Popups
-        Route::get('popups', [AdminPopupController::class, 'index']);
-        Route::post('popups', [AdminPopupController::class, 'store']);
-        Route::get('popups/{popup}', [AdminPopupController::class, 'show'])->whereNumber('popup');
-        Route::patch('popups/{popup}', [AdminPopupController::class, 'update'])->whereNumber('popup');
-        Route::delete('popups/{popup}', [AdminPopupController::class, 'destroy'])->whereNumber('popup');
-
-        // Admin uploads sign (optional)
-        Route::post('uploads/sign', [SupabaseUploadController::class, 'sign']);
+        Route::middleware('admin.can:manage_popups')->group(function () {
+            Route::get('popups', [AdminPopupController::class, 'index']);
+            Route::post('popups', [AdminPopupController::class, 'store']);
+            Route::get('popups/{popup}', [AdminPopupController::class, 'show'])->whereNumber('popup');
+            Route::patch('popups/{popup}', [AdminPopupController::class, 'update'])->whereNumber('popup');
+            Route::delete('popups/{popup}', [AdminPopupController::class, 'destroy'])->whereNumber('popup');
+        });
 
         // Pages
-        Route::get('pages', [AdminPageController::class, 'index']);
-        Route::get('pages/slug/{slug}', [AdminPageController::class, 'showBySlug']);
-        Route::put('pages/slug/{slug}', [AdminPageController::class, 'upsertBySlug']);
-        Route::patch('pages/{id}', [AdminPageController::class, 'patch']);
-        Route::delete('pages/{id}', [AdminPageController::class, 'destroy']);
+        Route::middleware('admin.can:manage_pages')->group(function () {
+            Route::get('pages', [AdminPageController::class, 'index']);
+            Route::get('pages/slug/{slug}', [AdminPageController::class, 'showBySlug']);
+            Route::put('pages/slug/{slug}', [AdminPageController::class, 'upsertBySlug']);
+            Route::patch('pages/{id}', [AdminPageController::class, 'patch']);
+            Route::delete('pages/{id}', [AdminPageController::class, 'destroy']);
+        });
 
         // FAQs
-        Route::get('faqs', [AdminFaqController::class, 'index']);
-        Route::post('faqs', [AdminFaqController::class, 'store']);
-        Route::patch('faqs/{id}', [AdminFaqController::class, 'update']);
-        Route::delete('faqs/{id}', [AdminFaqController::class, 'destroy']);
+        Route::middleware('admin.can:manage_faqs')->group(function () {
+            Route::get('faqs', [AdminFaqController::class, 'index']);
+            Route::post('faqs', [AdminFaqController::class, 'store']);
+            Route::patch('faqs/{id}', [AdminFaqController::class, 'update']);
+            Route::delete('faqs/{id}', [AdminFaqController::class, 'destroy']);
+        });
 
         // Discount campaigns
-        Route::get('discount-campaigns', [AdminDiscountCampaignController::class, 'index']);
-        Route::post('discount-campaigns', [AdminDiscountCampaignController::class, 'store']);
-        Route::get('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'show']);
-        Route::patch('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'update']);
-        Route::delete('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'destroy']);
-        Route::post('discount-campaigns/{id}/targets', [AdminDiscountCampaignController::class, 'addTargets']);
-        Route::delete('discount-campaigns/{id}/targets', [AdminDiscountCampaignController::class, 'removeTargets']);
+        Route::middleware('admin.can:manage_discounts')->group(function () {
+            Route::get('discount-campaigns', [AdminDiscountCampaignController::class, 'index']);
+            Route::post('discount-campaigns', [AdminDiscountCampaignController::class, 'store']);
+            Route::get('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'show']);
+            Route::patch('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'update']);
+            Route::delete('discount-campaigns/{id}', [AdminDiscountCampaignController::class, 'destroy']);
+            Route::post('discount-campaigns/{id}/targets', [AdminDiscountCampaignController::class, 'addTargets']);
+            Route::delete('discount-campaigns/{id}/targets', [AdminDiscountCampaignController::class, 'removeTargets']);
+        });
 
-        // Dashboard (Admin Landing Page)
-        Route::get('dashboard/summary', [AdminDashboardController::class, 'summary']);
+        // Upload sign (optional) - batasi biar gak semua admin bisa abuse
+        Route::middleware('admin.can:manage_uploads')->group(function () {
+            Route::post('uploads/sign', [SupabaseUploadController::class, 'sign']);
+        });
     });
 
     // =========================

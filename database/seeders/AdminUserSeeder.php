@@ -4,13 +4,14 @@ namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
 use App\Models\User;
+use App\Models\AdminRole;
 use Illuminate\Support\Facades\Hash;
 
 class AdminUserSeeder extends Seeder
 {
     public function run(): void
     {
-        User::updateOrCreate(
+        $admin = User::updateOrCreate(
             ['email' => 'admin@local.test'],
             [
                 'name' => 'admin',
@@ -18,8 +19,15 @@ class AdminUserSeeder extends Seeder
                 'address' => 'Bandung, Jawa Barat',
                 'password' => Hash::make('Admin12345!'),
                 'role' => 'admin',
+                'tier' => 'member',
             ]
         );
+
+        $ownerRole = AdminRole::where('slug', 'owner')->first();
+        if ($ownerRole) {
+            $admin->admin_role_id = $ownerRole->id;
+            $admin->save();
+        }
 
         User::updateOrCreate(
             ['email' => 'user@local.test'],
@@ -29,8 +37,10 @@ class AdminUserSeeder extends Seeder
                 'address' => 'Jakarta',
                 'password' => Hash::make('User12345!'),
                 'role' => 'user',
+                'tier' => 'member',
             ]
         );
+
         User::updateOrCreate(
             ['email' => 'yashabima2@gmail.com'],
             [
@@ -39,6 +49,7 @@ class AdminUserSeeder extends Seeder
                 'address' => 'Bandung',
                 'password' => Hash::make('BimaYasha12345!'),
                 'role' => 'user',
+                'tier' => 'member',
             ]
         );
     }
