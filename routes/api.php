@@ -412,7 +412,7 @@ Route::prefix('v1')->group(function () {
             Route::get('popups/{popup}', [AdminPopupController::class, 'show'])->whereNumber('popup');
             Route::patch('popups/{popup}', [AdminPopupController::class, 'update'])->whereNumber('popup');
             Route::delete('popups/{popup}', [AdminPopupController::class, 'destroy'])->whereNumber('popup');
-        });
+        }); 
 
         // Pages
         Route::middleware('admin.can:manage_pages')->group(function () {
@@ -421,15 +421,15 @@ Route::prefix('v1')->group(function () {
             Route::put('pages/slug/{slug}', [AdminPageController::class, 'upsertBySlug']);
             Route::patch('pages/{id}', [AdminPageController::class, 'patch']);
             Route::delete('pages/{id}', [AdminPageController::class, 'destroy']);
-        });
-
+        }); 
+ 
         // FAQs
         Route::middleware('admin.can:manage_faqs')->group(function () {
             Route::get('faqs', [AdminFaqController::class, 'index']);
             Route::post('faqs', [AdminFaqController::class, 'store']);
             Route::patch('faqs/{id}', [AdminFaqController::class, 'update']);
             Route::delete('faqs/{id}', [AdminFaqController::class, 'destroy']);
-        });
+        }); 
 
         // Discount campaigns
         Route::middleware('admin.can:manage_discounts')->group(function () {
@@ -446,7 +446,7 @@ Route::prefix('v1')->group(function () {
         Route::middleware('admin.can:manage_uploads')->group(function () {
             Route::post('uploads/sign', [SupabaseUploadController::class, 'sign']);
         });
-    });
+    }); 
 
     // =========================
     // 6) DEBUG (DEV ONLY) Ketika Production Bisa di Hapus
@@ -458,7 +458,7 @@ Route::prefix('v1')->group(function () {
             'db_host' => config('database.connections.' . config('database.default') . '.host'),
             'app_env' => config('app.env'),
         ]);
-    });
+    }); 
 
     Route::get('_debug/frontend', function () {
         return response()->json([
@@ -466,7 +466,7 @@ Route::prefix('v1')->group(function () {
             'frontend_config' => config('app.frontend_url') ?? null,
             'app_env' => config('app.env'),
         ]);
-    });
+    }); 
 
     Route::get('_debug/env', function () {
         return response()->json([
