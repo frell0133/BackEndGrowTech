@@ -6,7 +6,16 @@ use Illuminate\Database\Eloquent\Model;
 
 class AdminPermission extends Model
 {
-    protected $fillable = ['key', 'label', 'group'];
+    protected $fillable = [
+        'key',
+        'label',
+        'group',
+        'is_protected',
+    ];
+
+    protected $casts = [
+        'is_protected' => 'boolean',
+    ];
 
     public function roles()
     {

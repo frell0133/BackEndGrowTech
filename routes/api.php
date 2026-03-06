@@ -278,8 +278,8 @@ Route::prefix('v1')->group(function () {
         // Me (buat FE filter menu)
         Route::get('me', [\App\Http\Controllers\Api\V1\Admin\AdminMeController::class, 'me']);
 
-        // ===== OWNER ONLY: manage roles/admins =====
-        Route::middleware('admin.can:manage_admins')->group(function () {
+       // ===== OWNER / SUPER ADMIN ONLY: manage roles/admins =====
+        Route::middleware('admin.super')->group(function () {
             Route::get('permissions', [\App\Http\Controllers\Api\V1\Admin\AdminPermissionController::class, 'index']);
 
             Route::get('admin-roles', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'index']);
@@ -288,6 +288,7 @@ Route::prefix('v1')->group(function () {
             Route::delete('admin-roles/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'destroy']);
 
             Route::get('admin-users', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'index']);
+            Route::get('admin-users/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'show']);
             Route::post('admin-users/assign', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'assign']);
             Route::post('admin-users/revoke', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'revoke']);
         });

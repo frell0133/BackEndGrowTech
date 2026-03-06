@@ -30,6 +30,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'referral.attach.guard' => \App\Http\Middleware\ReferralAttachGuard::class,
             'admin' => \App\Http\Middleware\EnsureAdminHasRole::class,
             'admin.can' => \App\Http\Middleware\AdminCan::class,
+            'admin.super' => \App\Http\Middleware\EnsureSuperAdmin::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
