@@ -278,7 +278,7 @@ Route::prefix('v1')->group(function () {
         // Me (buat FE filter menu)
         Route::get('me', [\App\Http\Controllers\Api\V1\Admin\AdminMeController::class, 'me']);
 
-       // ===== OWNER / SUPER ADMIN ONLY: manage roles/admins =====
+        // ===== OWNER / SUPER ADMIN ONLY: manage roles/admins =====
         Route::middleware('admin.super')->group(function () {
             Route::get('permissions', [\App\Http\Controllers\Api\V1\Admin\AdminPermissionController::class, 'index']);
 
