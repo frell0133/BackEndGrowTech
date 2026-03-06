@@ -19,10 +19,10 @@ class AdminUserSeeder extends Seeder
             [
                 'name' => 'owner',
                 'full_name' => 'Owner GrowTech Central',
-                'address' => 'Bandung, Jawa Barat',
+                'address' => 'Bandung',
                 'password' => Hash::make('Admin12345!'),
                 'role' => 'admin',
-                'tier' => 'member', // aman, tapi gak ngaruh ke admin panel
+                'tier' => 'member',
             ]
         );
 
