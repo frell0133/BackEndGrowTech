@@ -36,6 +36,7 @@ class AdminRoleController extends Controller
 
         if (!$role->is_super) {
             $keys = $data['permission_keys'] ?? [];
+            $keys = array_values(array_diff($keys, ['manage_admins']));
             $permIds = AdminPermission::whereIn('key', $keys)->pluck('id')->all();
             $role->permissions()->sync($permIds);
         }
@@ -64,6 +65,7 @@ class AdminRoleController extends Controller
             $role->permissions()->sync([]);
         } else if (array_key_exists('permission_keys', $data)) {
             $keys = $data['permission_keys'] ?? [];
+            $keys = array_values(array_diff($keys, ['manage_admins']));
             $permIds = AdminPermission::whereIn('key', $keys)->pluck('id')->all();
             $role->permissions()->sync($permIds);
         }

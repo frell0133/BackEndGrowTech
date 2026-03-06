@@ -244,6 +244,37 @@ Route::prefix('v1')->group(function () {
     // =========================
     Route::middleware(['auth:sanctum', 'role:admin', 'admin'])->prefix('admin')->group(function () {
 
+        // =========================
+        // RBAC / Manajemen Admin (OWNER ONLY)
+        // =========================
+        Route::middleware('admin.can:rbac.manage')->group(function () {
+
+            // list admin (untuk tabel "Admin mana saja")
+            Route::get('admin-users', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'index']);
+
+            // detail admin + permission aktif (saat klik 1 admin)
+            Route::get('admin-users/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'show']);
+
+            // permission catalog untuk checklist UI
+            Route::get('permissions', [\App\Http\Controllers\Api\V1\Admin\AdminPermissionController::class, 'index']);
+
+            // preset role list/CRUD (optional, untuk dropdown preset)
+            Route::get('admin-roles', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'index']);
+            Route::post('admin-roles', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'store']);
+            Route::patch('admin-roles/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'update']);
+            Route::delete('admin-roles/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'destroy']);
+
+            // apply preset role -> checklist otomatis ikut preset
+            Route::post('admin-users/{id}/apply-role', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'applyRole']);
+
+            // save custom checklist -> auto buat/update role custom_user_{id}
+            Route::post('admin-users/{id}/permissions', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'upsertPermissions']);
+
+            // assign/revoke admin (yang kamu sudah punya)
+            Route::post('admin-users/assign', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'assign']);
+            Route::post('admin-users/revoke', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'revoke']);
+        });
+
         // Me (buat FE filter menu)
         Route::get('me', [\App\Http\Controllers\Api\V1\Admin\AdminMeController::class, 'me']);
 
