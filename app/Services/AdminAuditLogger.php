@@ -116,12 +116,24 @@ class AdminAuditLogger
 
     public function snapshot(Model $model, bool $original = false): array
     {
-        if ($original) {
-            $clone = $model->newInstance([], true);
-            $clone->setRawAttributes($model->getOriginal(), true);
-            $data = $clone->attributesToArray();
-        } else {
-            $data = $model->attributesToArray();
+        $data = $original
+            ? $model->getRawOriginal()
+            : $model->getAttributes();
+
+        foreach ($data as $key => $value) {
+            if (is_string($value)) {
+                $trim = trim($value);
+
+                if ($trim !== '' && (
+                    str_starts_with($trim, '{') ||
+                    str_starts_with($trim, '[')
+                )) {
+                    $decoded = json_decode($value, true);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        $data[$key] = $decoded;
+                    }
+                }
+            }
         }
 
         return $this->sanitize($data);
