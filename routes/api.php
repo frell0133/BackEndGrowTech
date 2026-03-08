@@ -247,7 +247,7 @@ Route::prefix('v1')->group(function () {
         // =========================
         // RBAC / Manajemen Admin (OWNER ONLY)
         // =========================
-        Route::middleware('admin.can:manage_admins')->group(function () {
+        Route::middleware('admin.can:rbac.manage')->group(function () {
 
             // list admin (untuk tabel "Admin mana saja")
             Route::get('admin-users', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'index']);

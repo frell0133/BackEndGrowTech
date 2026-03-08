@@ -272,7 +272,7 @@ class AdminAuditLogger
 
     private function targetSummary(Model $model, array $descriptor): array
     {
-        $data = $model->attributesToArray();
+        $data = $this->snapshot($model);
         return $this->sanitize(Arr::only($data, $descriptor['identity'] ?? ['id']));
     }
 
