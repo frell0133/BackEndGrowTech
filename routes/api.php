@@ -244,43 +244,37 @@ Route::prefix('v1')->group(function () {
     // =========================
     Route::middleware(['auth:sanctum', 'role:admin', 'admin'])->prefix('admin')->group(function () {
 
+        // Me (buat FE filter menu)
+        Route::get('me', [\App\Http\Controllers\Api\V1\Admin\AdminMeController::class, 'me']);
+
         // Audit logs (owner / super admin only)
         Route::middleware('admin.super')->group(function () {
-            Route::get('audit-logs', [AdminAuditLogController::class, 'index']);
-            Route::get('audit-logs/{id}', [AdminAuditLogController::class, 'show']);
+            Route::get('audit-logs', [\App\Http\Controllers\Api\V1\Admin\AdminAuditLogController::class, 'index']);
+            Route::get('audit-logs/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminAuditLogController::class, 'show']);
+
+            // permission catalog untuk checklist UI
+            Route::get('permissions', [\App\Http\Controllers\Api\V1\Admin\AdminPermissionController::class, 'index']);
+
+            // preset role list/CRUD
+            Route::get('admin-roles', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'index']);
+            Route::post('admin-roles', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'store']);
+            Route::patch('admin-roles/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'update']);
+            Route::delete('admin-roles/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'destroy']);
+
+            // list/detail admin
+            Route::get('admin-users', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'index']);
+            Route::get('admin-users/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'show']);
+
+            // apply preset role
+            Route::post('admin-users/{id}/apply-role', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'applyRole']);
+
+            // save custom checklist
+            Route::post('admin-users/{id}/permissions', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'upsertPermissions']);
+
+            // assign / revoke
+            Route::post('admin-users/assign', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'assign']);
+            Route::post('admin-users/revoke', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'revoke']);
         });
-
-    // Me (buat FE filter menu)
-    Route::get('me', [\App\Http\Controllers\Api\V1\Admin\AdminMeController::class, 'me']);
-
-    // Audit logs (owner / super admin only)
-    Route::middleware('admin.super')->group(function () {
-        Route::get('audit-logs', [\App\Http\Controllers\Api\V1\Admin\AdminAuditLogController::class, 'index']);
-        Route::get('audit-logs/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminAuditLogController::class, 'show']);
-
-        // permission catalog untuk checklist UI
-        Route::get('permissions', [\App\Http\Controllers\Api\V1\Admin\AdminPermissionController::class, 'index']);
-
-        // preset role list/CRUD
-        Route::get('admin-roles', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'index']);
-        Route::post('admin-roles', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'store']);
-        Route::patch('admin-roles/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'update']);
-        Route::delete('admin-roles/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminRoleController::class, 'destroy']);
-
-        // list/detail admin
-        Route::get('admin-users', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'index']);
-        Route::get('admin-users/{id}', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'show']);
-
-        // apply preset role
-        Route::post('admin-users/{id}/apply-role', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'applyRole']);
-
-        // save custom checklist
-        Route::post('admin-users/{id}/permissions', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'upsertPermissions']);
-
-        // assign / revoke
-        Route::post('admin-users/assign', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'assign']);
-        Route::post('admin-users/revoke', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'revoke']);
-    });
 
         // ====== Dashboard ======
         Route::middleware('admin.can:view_dashboard')->group(function () {
@@ -400,12 +394,6 @@ Route::prefix('v1')->group(function () {
             Route::patch('vouchers/{id}', [AdminVoucherController::class, 'update']);
             Route::delete('vouchers/{id}', [AdminVoucherController::class, 'destroy']);
             Route::get('vouchers/{id}/usage', [AdminVoucherController::class, 'usage']);
-        });
-
-        // Audit logs
-        Route::middleware('admin.can:view_audit_logs')->group(function () {
-            Route::get('audit-logs', [AdminAuditLogController::class, 'index']);
-            Route::get('audit-logs/{id}', [AdminAuditLogController::class, 'show']);
         });
 
         // Site Settings
