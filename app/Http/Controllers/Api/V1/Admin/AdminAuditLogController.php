@@ -14,6 +14,7 @@ class AdminAuditLogController extends Controller
     public function index(Request $request)
     {
         $q = trim((string) $request->query('q', ''));
+        $scope = $request->query('scope'); // admin_request | admin_model
         $userId = $request->query('user_id');
         $action = $request->query('action');
         $entity = $request->query('entity');
@@ -25,6 +26,7 @@ class AdminAuditLogController extends Controller
 
         $logs = AuditLog::query()
             ->with(['user:id,name,full_name,email'])
+            ->when($scope, fn ($qq) => $qq->where('meta->scope', $scope))
             ->when($userId, fn ($qq) => $qq->where('user_id', (int) $userId))
             ->when($action, fn ($qq) => $qq->where('action', $action))
             ->when($entity, fn ($qq) => $qq->where('entity', $entity))
@@ -34,6 +36,7 @@ class AdminAuditLogController extends Controller
         if ($dateFrom) {
             $logs->whereDate('created_at', '>=', $dateFrom);
         }
+
         if ($dateTo) {
             $logs->whereDate('created_at', '<=', $dateTo);
         }
@@ -70,6 +73,8 @@ class AdminAuditLogController extends Controller
             return $this->fail('Audit log tidak ditemukan', 404);
         }
 
+        $meta = is_array($log->meta) ? $log->meta : [];
+
         return $this->ok([
             'id' => $log->id,
             'created_at' => $log->created_at,
@@ -82,7 +87,12 @@ class AdminAuditLogController extends Controller
             'action' => $log->action,
             'entity' => $log->entity,
             'entity_id' => $log->entity_id,
-            'meta' => $log->meta ?? [],
+            'scope' => data_get($meta, 'scope'),
+            'module' => data_get($meta, 'module'),
+            'status' => data_get($meta, 'status', 'success'),
+            'summary' => data_get($meta, 'summary'),
+            'target' => data_get($meta, 'target'),
+            'meta' => $meta,
         ]);
     }
 
@@ -102,6 +112,7 @@ class AdminAuditLogController extends Controller
             'action' => $log->action,
             'entity' => $log->entity,
             'entity_id' => $log->entity_id,
+            'scope' => data_get($meta, 'scope'),
             'module' => data_get($meta, 'module'),
             'status' => data_get($meta, 'status', 'success'),
             'summary' => data_get($meta, 'summary'),
