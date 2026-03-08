@@ -3,10 +3,11 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Support\ApiResponse;
-use App\Models\User;
-use App\Models\AdminRole;
 use App\Models\AdminPermission;
+use App\Models\AdminRole;
+use App\Models\User;
+use App\Services\AdminAuditLogger;
+use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -20,7 +21,7 @@ class AdminAdminUserController extends Controller
 
         $admins = User::query()
             ->where('role', 'admin')
-            ->with(['adminRole.permissions' => fn($qq) => $qq->orderBy('group')->orderBy('key')])
+            ->with(['adminRole.permissions' => fn ($qq) => $qq->orderBy('group')->orderBy('key')])
             ->when($q !== '', function ($qq) use ($q) {
                 $qq->where(function ($x) use ($q) {
                     $x->where('email', 'like', "%{$q}%")
@@ -34,7 +35,7 @@ class AdminAdminUserController extends Controller
         return $this->ok($admins);
     }
 
-    public function assign(Request $request)
+    public function assign(Request $request, AdminAuditLogger $audit)
     {
         $data = $request->validate([
             'user_id' => 'required|integer|exists:users,id',
@@ -43,67 +44,105 @@ class AdminAdminUserController extends Controller
 
         $actor = $request->user();
 
-        $user = User::with('adminRole')->findOrFail((int) $data['user_id']);
-        $role = AdminRole::findOrFail((int) $data['admin_role_id']);
+        $user = User::with('adminRole.permissions')->findOrFail((int) $data['user_id']);
+        $role = AdminRole::with('permissions')->findOrFail((int) $data['admin_role_id']);
 
-        // role super tidak boleh di-assign lewat endpoint umum
         if ((bool) $role->is_super) {
             return $this->fail('Role owner/super admin tidak boleh di-assign lewat endpoint ini', 422);
         }
 
-        // jangan ubah akun owner/super admin lewat endpoint umum
         if ($user->adminRole?->is_super) {
             return $this->fail('Akun owner/super admin tidak boleh diubah lewat endpoint ini', 422);
         }
 
-        // cegah self-downgrade / self-mutate yang berbahaya
         if ((int) $actor->id === (int) $user->id && $actor->adminRole?->is_super) {
             return $this->fail('Tidak boleh mengubah role akun sendiri lewat endpoint ini', 422);
         }
 
-        $user->role = 'admin';
-        $user->admin_role_id = $role->id;
-        $user->save();
+        $before = $this->adminUserSnapshot($user);
 
-        $user->load('adminRole.permissions');
+        DB::transaction(function () use ($request, $audit, $user, $role, $before) {
+            $user->role = 'admin';
+            $user->admin_role_id = $role->id;
+            $user->save();
 
-        return $this->ok($user);
+            $user->load('adminRole.permissions');
+
+            $audit->log(
+                request: $request,
+                action: 'admin.assign',
+                entity: 'users',
+                entityId: $user->id,
+                meta: [
+                    'module' => 'rbac',
+                    'summary' => 'Assign admin role ke user',
+                    'target' => [
+                        'user_id' => $user->id,
+                        'email' => $user->email,
+                        'admin_role_id' => $role->id,
+                        'admin_role_slug' => $role->slug,
+                    ],
+                    'before' => $before,
+                    'after' => $this->adminUserSnapshot($user),
+                ],
+            );
+        });
+
+        return $this->ok($user->fresh()->load('adminRole.permissions'));
     }
 
-    public function revoke(Request $request)
+    public function revoke(Request $request, AdminAuditLogger $audit)
     {
         $data = $request->validate([
             'user_id' => 'required|integer|exists:users,id',
         ]);
 
         $actor = $request->user();
-
-        $user = User::with('adminRole')->findOrFail((int) $data['user_id']);
+        $user = User::with('adminRole.permissions')->findOrFail((int) $data['user_id']);
 
         if (($user->role ?? null) !== 'admin') {
             return $this->fail('Target user bukan admin', 422);
         }
 
-        // owner/super admin tidak boleh direvoke lewat endpoint umum
         if ($user->adminRole?->is_super) {
             return $this->fail('Akun owner/super admin tidak boleh direvoke lewat endpoint ini', 422);
         }
 
-        // cegah self revoke
         if ((int) $actor->id === (int) $user->id) {
             return $this->fail('Tidak boleh merevoke akun sendiri', 422);
         }
 
-        $user->admin_role_id = null;
-        $user->role = 'user';
-        $user->save();
+        $before = $this->adminUserSnapshot($user);
+
+        DB::transaction(function () use ($request, $audit, $user, $before) {
+            $user->admin_role_id = null;
+            $user->role = 'user';
+            $user->save();
+
+            $audit->log(
+                request: $request,
+                action: 'admin.revoke',
+                entity: 'users',
+                entityId: $user->id,
+                meta: [
+                    'module' => 'rbac',
+                    'summary' => 'Revoke akses admin dari user',
+                    'target' => [
+                        'user_id' => $user->id,
+                        'email' => $user->email,
+                    ],
+                    'before' => $before,
+                    'after' => $this->adminUserSnapshot($user->fresh()),
+                ],
+            );
+        });
 
         return $this->ok(['revoked' => true]);
     }
 
     public function show(int $id)
     {
-        $user = User::with(['adminRole.permissions' => fn($q) => $q->orderBy('group')->orderBy('key')])
+        $user = User::with(['adminRole.permissions' => fn ($q) => $q->orderBy('group')->orderBy('key')])
             ->findOrFail($id);
 
         if (($user->role ?? null) !== 'admin') {
@@ -132,51 +171,66 @@ class AdminAdminUserController extends Controller
         ]);
     }
 
-    /**
-     * Apply preset role -> checklist otomatis ikut role tsb
-     * POST /api/v1/admin/admin-users/{id}/apply-role
-     * Body: { "admin_role_id": 3 }
-     */
-    public function applyRole(Request $request, int $id)
+    public function applyRole(Request $request, int $id, AdminAuditLogger $audit)
     {
         $data = $request->validate([
             'admin_role_id' => 'required|integer|exists:admin_roles,id',
         ]);
 
         $actor = $request->user();
-
-        $user = User::with('adminRole')->findOrFail($id);
+        $user = User::with('adminRole.permissions')->findOrFail($id);
 
         if (($user->role ?? null) !== 'admin') {
             return $this->fail('Target user bukan admin', 422);
         }
 
-        // jangan ubah owner lewat endpoint ini
         if ($user->adminRole?->is_super) {
             return $this->fail('Tidak boleh mengubah role owner/super admin lewat endpoint ini', 422);
         }
 
-        // cegah self mutate untuk super admin
         if ((int) $actor->id === (int) $user->id && $actor->adminRole?->is_super) {
             return $this->fail('Tidak boleh mengubah role akun sendiri lewat endpoint ini', 422);
         }
 
-        $role = AdminRole::findOrFail((int) $data['admin_role_id']);
+        $role = AdminRole::with('permissions')->findOrFail((int) $data['admin_role_id']);
 
-        // preset role tidak boleh role super
         if ((bool) $role->is_super) {
             return $this->fail('Role owner/super admin tidak boleh di-apply lewat endpoint ini', 422);
         }
 
-        // preset role tidak boleh custom role user lain
         if (str_starts_with((string) $role->slug, 'custom_user_')) {
             return $this->fail('Custom role tidak boleh dipakai sebagai preset', 422);
         }
 
-        $user->admin_role_id = $role->id;
-        $user->save();
+        $before = $this->adminUserSnapshot($user);
 
-        $user->load('adminRole.permissions');
+        DB::transaction(function () use ($request, $audit, $user, $role, $before) {
+            $user->admin_role_id = $role->id;
+            $user->save();
+            $user->load('adminRole.permissions');
+
+            $audit->log(
+                request: $request,
+                action: 'admin.apply_role',
+                entity: 'users',
+                entityId: $user->id,
+                meta: [
+                    'module' => 'rbac',
+                    'summary' => 'Apply preset role ke admin user',
+                    'target' => [
+                        'user_id' => $user->id,
+                        'email' => $user->email,
+                        'admin_role_id' => $role->id,
+                        'admin_role_slug' => $role->slug,
+                    ],
+                    'before' => $before,
+                    'after' => $this->adminUserSnapshot($user),
+                ],
+            );
+        });
+
+        $user = $user->fresh()->load('adminRole.permissions');
+        $role = $user->adminRole;
 
         return $this->ok([
             'user_id' => $user->id,
@@ -192,12 +246,7 @@ class AdminAdminUserController extends Controller
         ]);
     }
 
-    /**
-     * Save custom checklist -> auto buat/update role custom_user_{id}
-     * POST /api/v1/admin/admin-users/{id}/permissions
-     * Body: { "permission_keys": ["manage_products","manage_categories"] }
-     */
-    public function upsertPermissions(Request $request, int $id)
+    public function upsertPermissions(Request $request, int $id, AdminAuditLogger $audit)
     {
         $data = $request->validate([
             'permission_keys' => 'required|array',
@@ -205,35 +254,22 @@ class AdminAdminUserController extends Controller
         ]);
 
         $actor = $request->user();
-
-        $user = User::with('adminRole')->findOrFail($id);
+        $user = User::with('adminRole.permissions')->findOrFail($id);
 
         if (($user->role ?? null) !== 'admin') {
             return $this->fail('Target user bukan admin', 422);
         }
 
-        // jangan ubah owner lewat endpoint ini
         if ($user->adminRole?->is_super) {
             return $this->fail('Tidak boleh mengubah permission owner/super admin lewat endpoint ini', 422);
         }
 
-        // cegah self mutate untuk super admin
         if ((int) $actor->id === (int) $user->id && $actor->adminRole?->is_super) {
             return $this->fail('Tidak boleh mengubah permission akun sendiri lewat endpoint ini', 422);
         }
 
         $keys = array_values(array_unique($data['permission_keys'] ?? []));
 
-        // blok permission sensitif owner-only
-        $forbiddenKeys = ['rbac.manage', 'manage_admins'];
-        $forbiddenUsed = array_values(array_intersect($keys, $forbiddenKeys));
-        if (!empty($forbiddenUsed)) {
-            return $this->fail('Permission owner-only tidak boleh diberikan ke admin biasa', 422, [
-                'forbidden_permission_keys' => $forbiddenUsed,
-            ]);
-        }
-
-        // validasi key harus benar-benar ada
         $validKeys = AdminPermission::whereIn('key', $keys)->pluck('key')->all();
         $invalidKeys = array_values(array_diff($keys, $validKeys));
         if (!empty($invalidKeys)) {
@@ -242,7 +278,20 @@ class AdminAdminUserController extends Controller
             ]);
         }
 
-        return DB::transaction(function () use ($user, $keys) {
+        $protectedKeys = AdminPermission::whereIn('key', $keys)
+            ->where('is_protected', true)
+            ->pluck('key')
+            ->all();
+
+        if (!empty($protectedKeys)) {
+            return $this->fail('Permission protected tidak boleh diberikan ke admin biasa', 422, [
+                'protected_permission_keys' => array_values($protectedKeys),
+            ]);
+        }
+
+        $before = $this->adminUserSnapshot($user);
+
+        return DB::transaction(function () use ($request, $audit, $user, $keys, $before) {
             $slug = 'custom_user_' . $user->id;
 
             $role = AdminRole::updateOrCreate(
@@ -259,8 +308,26 @@ class AdminAdminUserController extends Controller
 
             $user->admin_role_id = $role->id;
             $user->save();
-
             $user->load('adminRole.permissions');
+
+            $audit->log(
+                request: $request,
+                action: 'admin.permissions_upsert',
+                entity: 'users',
+                entityId: $user->id,
+                meta: [
+                    'module' => 'rbac',
+                    'summary' => 'Update custom permission admin user',
+                    'target' => [
+                        'user_id' => $user->id,
+                        'email' => $user->email,
+                        'admin_role_id' => $role->id,
+                        'admin_role_slug' => $role->slug,
+                    ],
+                    'before' => $before,
+                    'after' => $this->adminUserSnapshot($user),
+                ],
+            );
 
             return $this->ok([
                 'user_id' => $user->id,
@@ -275,5 +342,31 @@ class AdminAdminUserController extends Controller
                 'permission_keys' => $user->adminPermissionKeys(),
             ]);
         });
+    }
+
+    private function adminUserSnapshot(User $user): array
+    {
+        $user->loadMissing(['adminRole.permissions']);
+
+        $role = $user->adminRole;
+        $roleSlug = $role?->slug ?? null;
+
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'full_name' => $user->full_name,
+            'email' => $user->email,
+            'role' => $user->role,
+            'tier' => $user->tier,
+            'access_mode' => ($roleSlug && str_starts_with($roleSlug, 'custom_user_')) ? 'custom' : 'preset',
+            'admin_role' => $role ? [
+                'id' => $role->id,
+                'name' => $role->name,
+                'slug' => $role->slug,
+                'is_super' => (bool) $role->is_super,
+                'is_system' => (bool) ($role->is_system ?? false),
+            ] : null,
+            'permission_keys' => $user->adminPermissionKeys(),
+        ];
     }
 }

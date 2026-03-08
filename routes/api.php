@@ -247,7 +247,7 @@ Route::prefix('v1')->group(function () {
         // =========================
         // RBAC / Manajemen Admin (OWNER ONLY)
         // =========================
-        Route::middleware('admin.can:rbac.manage')->group(function () {
+        Route::middleware('admin.can:manage_admins')->group(function () {
 
             // list admin (untuk tabel "Admin mana saja")
             Route::get('admin-users', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'index']);
@@ -273,6 +273,12 @@ Route::prefix('v1')->group(function () {
             // assign/revoke admin (yang kamu sudah punya)
             Route::post('admin-users/assign', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'assign']);
             Route::post('admin-users/revoke', [\App\Http\Controllers\Api\V1\Admin\AdminAdminUserController::class, 'revoke']);
+        });
+
+        // Audit logs (owner / super admin only)
+        Route::middleware('admin.super')->group(function () {
+            Route::get('audit-logs', [AdminAuditLogController::class, 'index']);
+            Route::get('audit-logs/{id}', [AdminAuditLogController::class, 'show']);
         });
 
         // Me (buat FE filter menu)

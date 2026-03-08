@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\WithdrawRequest;
+use App\Services\AdminAuditLogger;
 use App\Services\LedgerService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
@@ -13,16 +14,6 @@ class AdminWithdrawController extends Controller
 {
     use ApiResponse;
 
-    /**
-     * GET /api/v1/admin/withdraws
-     * Query:
-     * - status=pending|approved|paid|rejected
-     * - user_id=
-     * - q=search name/email
-     * - date_from=YYYY-MM-DD
-     * - date_to=YYYY-MM-DD
-     * - per_page=20
-     */
     public function index(Request $request)
     {
         $status = $request->query('status');
@@ -33,8 +24,8 @@ class AdminWithdrawController extends Controller
 
         $query = WithdrawRequest::query()
             ->with(['user:id,name,email'])
-            ->when($status, fn($qq) => $qq->where('status', $status))
-            ->when($userId, fn($qq) => $qq->where('user_id', (int)$userId));
+            ->when($status, fn ($qq) => $qq->where('status', $status))
+            ->when($userId, fn ($qq) => $qq->where('user_id', (int) $userId));
 
         if ($dateFrom) {
             $query->whereDate('created_at', '>=', $dateFrom);
@@ -46,7 +37,7 @@ class AdminWithdrawController extends Controller
         if ($q !== '') {
             $query->whereHas('user', function ($u) use ($q) {
                 $u->where('name', 'ilike', "%{$q}%")
-                  ->orWhere('email', 'ilike', "%{$q}%");
+                    ->orWhere('email', 'ilike', "%{$q}%");
             });
         }
 
@@ -57,15 +48,11 @@ class AdminWithdrawController extends Controller
         return $this->ok($data);
     }
 
-    /**
-     * GET /api/v1/admin/withdraws/{id}
-     * Detail 1 withdraw (optional, untuk modal/detail)
-     */
     public function show(string $id)
     {
         $wr = WithdrawRequest::query()
             ->with(['user:id,name,email'])
-            ->where('id', (int)$id)
+            ->where('id', (int) $id)
             ->first();
 
         if (!$wr) return $this->fail('Withdraw request tidak ditemukan', 404);
@@ -73,10 +60,6 @@ class AdminWithdrawController extends Controller
         return $this->ok(['withdraw' => $wr]);
     }
 
-    /**
-     * GET /api/v1/admin/withdraws/summary
-     * Count per status: pending/approved/paid/rejected
-     */
     public function summary()
     {
         $rows = WithdrawRequest::query()
@@ -98,27 +81,19 @@ class AdminWithdrawController extends Controller
         return $this->ok($map);
     }
 
-    /**
-     * POST /api/v1/admin/withdraws/{id}/approve
-     * ✅ FLOW: IDR_COMMISSION -> IDR (saldo GrowTech user bertambah)
-     *
-     * Optional query:
-     * - final=1  => langsung set status 'paid' (tanpa perlu markPaid)
-     */
-    public function approve(Request $request, string $id, LedgerService $ledger)
+    public function approve(Request $request, string $id, LedgerService $ledger, AdminAuditLogger $audit)
     {
         $final = (int) $request->query('final', 0) === 1;
 
-        return DB::transaction(function () use ($id, $ledger, $final) {
-
+        return DB::transaction(function () use ($id, $ledger, $final, $request, $audit) {
             $wr = WithdrawRequest::query()
-                ->where('id', (int)$id)
+                ->with(['user:id,name,email'])
+                ->where('id', (int) $id)
                 ->lockForUpdate()
                 ->first();
 
             if (!$wr) return $this->fail('Withdraw request tidak ditemukan', 404);
 
-            // ✅ idempotent: kalau sudah diproses, kembalikan data terbaru
             if ($wr->status !== 'pending') {
                 return $this->ok([
                     'message' => 'Withdraw sudah diproses sebelumnya',
@@ -126,10 +101,10 @@ class AdminWithdrawController extends Controller
                 ]);
             }
 
+            $before = $this->withdrawSnapshot($wr);
             $amount = (int) $wr->amount;
             if ($amount <= 0) return $this->fail('Amount invalid', 422);
 
-            // ✅ idempotent di ledger: idempotencyKey harus konsisten per withdraw id
             $ledger->approveWithdrawCommissionToMain(
                 userId: (int) $wr->user_id,
                 amount: (int) $amount,
@@ -139,7 +114,6 @@ class AdminWithdrawController extends Controller
                 referenceId: (int) $wr->id
             );
 
-            // status after approve
             $wr->approved_at = now();
             $wr->processed_at = now();
 
@@ -151,28 +125,48 @@ class AdminWithdrawController extends Controller
             }
 
             $wr->save();
+            $wr->refresh()->load(['user:id,name,email']);
+
+            $audit->log(
+                request: $request,
+                action: $final ? 'withdraw.approve_and_pay' : 'withdraw.approve',
+                entity: 'withdraw_requests',
+                entityId: $wr->id,
+                meta: [
+                    'module' => 'finance',
+                    'summary' => $final
+                        ? 'Approve withdraw dan langsung tandai paid'
+                        : 'Approve withdraw komisi ke saldo utama',
+                    'target' => [
+                        'withdraw_id' => $wr->id,
+                        'user_id' => $wr->user_id,
+                        'user_email' => $wr->user?->email,
+                        'amount' => (int) $wr->amount,
+                    ],
+                    'before' => $before,
+                    'after' => $this->withdrawSnapshot($wr),
+                ],
+            );
 
             return $this->ok([
                 'message' => $final
                     ? 'Withdraw approved & paid. Saldo GrowTech user bertambah dari komisi.'
                     : 'Withdraw approved. Saldo GrowTech user bertambah dari komisi.',
-                'withdraw' => $wr->fresh(),
+                'withdraw' => $wr,
             ]);
         });
     }
 
-    /**
-     * POST /api/v1/admin/withdraws/{id}/reject
-     */
-    public function reject(Request $request, string $id)
+    public function reject(Request $request, string $id, AdminAuditLogger $audit)
     {
         $v = $request->validate([
             'reason' => ['nullable', 'string', 'max:500'],
         ]);
 
-        return DB::transaction(function () use ($id, $v) {
+        return DB::transaction(function () use ($id, $v, $request, $audit) {
             $wr = WithdrawRequest::query()
-                ->where('id', (int)$id)
+                ->with(['user:id,name,email'])
+                ->where('id', (int) $id)
                 ->lockForUpdate()
                 ->first();
 
@@ -182,28 +176,47 @@ class AdminWithdrawController extends Controller
                 return $this->fail('Withdraw request bukan pending', 409);
             }
 
+            $before = $this->withdrawSnapshot($wr);
+
             $wr->status = 'rejected';
             $wr->rejected_at = now();
             $wr->processed_at = now();
             $wr->reject_reason = $v['reason'] ?? null;
             $wr->save();
+            $wr->refresh()->load(['user:id,name,email']);
+
+            $audit->log(
+                request: $request,
+                action: 'withdraw.reject',
+                entity: 'withdraw_requests',
+                entityId: $wr->id,
+                meta: [
+                    'module' => 'finance',
+                    'summary' => 'Reject withdraw request',
+                    'target' => [
+                        'withdraw_id' => $wr->id,
+                        'user_id' => $wr->user_id,
+                        'user_email' => $wr->user?->email,
+                        'amount' => (int) $wr->amount,
+                    ],
+                    'before' => $before,
+                    'after' => $this->withdrawSnapshot($wr),
+                ],
+            );
 
             return $this->ok([
                 'message' => 'Withdraw rejected',
-                'withdraw' => $wr->fresh(),
+                'withdraw' => $wr,
             ]);
         });
     }
 
-    /**
-     * POST /api/v1/admin/withdraws/{id}/mark-paid
-     * status: approved -> paid
-     */
-    public function markPaid(Request $request, string $id)
+    public function markPaid(Request $request, string $id, AdminAuditLogger $audit)
     {
-        return DB::transaction(function () use ($id) {
+        return DB::transaction(function () use ($id, $request, $audit) {
             $wr = WithdrawRequest::query()
-                ->where('id', (int)$id)
+                ->with(['user:id,name,email'])
+                ->where('id', (int) $id)
                 ->lockForUpdate()
                 ->first();
 
@@ -213,15 +226,56 @@ class AdminWithdrawController extends Controller
                 return $this->fail('Hanya bisa mark paid dari approved', 409);
             }
 
+            $before = $this->withdrawSnapshot($wr);
+
             $wr->status = 'paid';
             $wr->paid_at = now();
             $wr->processed_at = now();
             $wr->save();
+            $wr->refresh()->load(['user:id,name,email']);
+
+            $audit->log(
+                request: $request,
+                action: 'withdraw.mark_paid',
+                entity: 'withdraw_requests',
+                entityId: $wr->id,
+                meta: [
+                    'module' => 'finance',
+                    'summary' => 'Mark withdraw sebagai paid',
+                    'target' => [
+                        'withdraw_id' => $wr->id,
+                        'user_id' => $wr->user_id,
+                        'user_email' => $wr->user?->email,
+                        'amount' => (int) $wr->amount,
+                    ],
+                    'before' => $before,
+                    'after' => $this->withdrawSnapshot($wr),
+                ],
+            );
 
             return $this->ok([
                 'message' => 'Withdraw marked as paid',
-                'withdraw' => $wr->fresh(),
+                'withdraw' => $wr,
             ]);
         });
+    }
+
+    private function withdrawSnapshot(WithdrawRequest $wr): array
+    {
+        $wr->loadMissing(['user:id,name,email']);
+
+        return [
+            'id' => $wr->id,
+            'user_id' => $wr->user_id,
+            'user_name' => $wr->user?->name,
+            'user_email' => $wr->user?->email,
+            'amount' => (int) $wr->amount,
+            'status' => $wr->status,
+            'reject_reason' => $wr->reject_reason,
+            'approved_at' => optional($wr->approved_at)?->toISOString(),
+            'rejected_at' => optional($wr->rejected_at)?->toISOString(),
+            'paid_at' => optional($wr->paid_at)?->toISOString(),
+            'processed_at' => optional($wr->processed_at)?->toISOString(),
+        ];
     }
 }

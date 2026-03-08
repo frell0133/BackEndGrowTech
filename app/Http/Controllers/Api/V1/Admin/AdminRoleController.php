@@ -3,10 +3,10 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Support\ApiResponse;
-use App\Models\AdminRole;
 use App\Models\AdminPermission;
-use App\Models\AuditLog;
+use App\Models\AdminRole;
+use App\Services\AdminAuditLogger;
+use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -27,7 +27,7 @@ class AdminRoleController extends Controller
         return $this->ok($roles);
     }
 
-    public function store(Request $request)
+    public function store(Request $request, AdminAuditLogger $audit)
     {
         if ($request->hasAny(['is_super', 'is_system'])) {
             return $this->fail('Field is_super / is_system tidak boleh diubah dari endpoint ini', 422);
@@ -44,7 +44,6 @@ class AdminRoleController extends Controller
 
         $validKeys = AdminPermission::whereIn('key', $keys)->pluck('key')->all();
         $invalidKeys = array_values(array_diff($keys, $validKeys));
-
         if (!empty($invalidKeys)) {
             return $this->fail('Permission tidak valid', 422, [
                 'invalid_permission_keys' => $invalidKeys,
@@ -62,9 +61,7 @@ class AdminRoleController extends Controller
             ]);
         }
 
-        $actor = $request->user();
-
-        $role = DB::transaction(function () use ($actor, $data, $keys) {
+        $role = DB::transaction(function () use ($request, $audit, $data, $keys) {
             $role = AdminRole::create([
                 'name' => $data['name'],
                 'slug' => $data['slug'],
@@ -79,15 +76,21 @@ class AdminRoleController extends Controller
 
             $role->load(['permissions' => fn ($q) => $q->orderBy('group')->orderBy('key')]);
 
-            AuditLog::create([
-                'user_id' => $actor?->id,
-                'action' => 'create_role',
-                'entity' => 'admin_roles',
-                'entity_id' => $role->id,
-                'meta' => [
+            $audit->log(
+                request: $request,
+                action: 'admin_role.create',
+                entity: 'admin_roles',
+                entityId: $role->id,
+                meta: [
+                    'module' => 'rbac',
+                    'summary' => 'Membuat role admin baru',
+                    'target' => [
+                        'admin_role_id' => $role->id,
+                        'slug' => $role->slug,
+                    ],
                     'after' => $this->roleSnapshot($role),
                 ],
-            ]);
+            );
 
             return $role;
         });
@@ -95,7 +98,7 @@ class AdminRoleController extends Controller
         return $this->ok($role, 201);
     }
 
-    public function update(Request $request, int $id)
+    public function update(Request $request, int $id, AdminAuditLogger $audit)
     {
         $role = AdminRole::with('permissions')->findOrFail($id);
 
@@ -118,7 +121,6 @@ class AdminRoleController extends Controller
 
             $validKeys = AdminPermission::whereIn('key', $keys)->pluck('key')->all();
             $invalidKeys = array_values(array_diff($keys, $validKeys));
-
             if (!empty($invalidKeys)) {
                 return $this->fail('Permission tidak valid', 422, [
                     'invalid_permission_keys' => $invalidKeys,
@@ -137,10 +139,9 @@ class AdminRoleController extends Controller
             }
         }
 
-        $actor = $request->user();
         $before = $this->roleSnapshot($role);
 
-        DB::transaction(function () use ($actor, $role, $data, $before) {
+        DB::transaction(function () use ($request, $audit, $role, $data, $before) {
             if (array_key_exists('name', $data)) {
                 $role->name = $data['name'];
                 $role->save();
@@ -154,16 +155,22 @@ class AdminRoleController extends Controller
 
             $role->load(['permissions' => fn ($q) => $q->orderBy('group')->orderBy('key')]);
 
-            AuditLog::create([
-                'user_id' => $actor?->id,
-                'action' => 'update_role',
-                'entity' => 'admin_roles',
-                'entity_id' => $role->id,
-                'meta' => [
+            $audit->log(
+                request: $request,
+                action: 'admin_role.update',
+                entity: 'admin_roles',
+                entityId: $role->id,
+                meta: [
+                    'module' => 'rbac',
+                    'summary' => 'Mengubah role admin',
+                    'target' => [
+                        'admin_role_id' => $role->id,
+                        'slug' => $role->slug,
+                    ],
                     'before' => $before,
                     'after' => $this->roleSnapshot($role),
                 ],
-            ]);
+            );
         });
 
         $role->refresh()->load(['permissions' => fn ($q) => $q->orderBy('group')->orderBy('key')]);
@@ -171,9 +178,9 @@ class AdminRoleController extends Controller
         return $this->ok($role);
     }
 
-    public function destroy(Request $request, int $id)
+    public function destroy(Request $request, int $id, AdminAuditLogger $audit)
     {
-        $role = AdminRole::findOrFail($id);
+        $role = AdminRole::with('permissions')->findOrFail($id);
 
         if ($role->is_super) {
             return $this->fail('Tidak boleh hapus role owner/super admin', 422);
@@ -187,21 +194,26 @@ class AdminRoleController extends Controller
             return $this->fail('Role masih dipakai oleh user', 422);
         }
 
-        $actor = $request->user();
         $before = $this->roleSnapshot($role);
 
-        DB::transaction(function () use ($actor, $role, $before) {
+        DB::transaction(function () use ($request, $audit, $role, $before) {
             $role->permissions()->sync([]);
 
-            AuditLog::create([
-                'user_id' => $actor?->id,
-                'action' => 'delete_role',
-                'entity' => 'admin_roles',
-                'entity_id' => $role->id,
-                'meta' => [
+            $audit->log(
+                request: $request,
+                action: 'admin_role.delete',
+                entity: 'admin_roles',
+                entityId: $role->id,
+                meta: [
+                    'module' => 'rbac',
+                    'summary' => 'Menghapus role admin',
+                    'target' => [
+                        'admin_role_id' => $role->id,
+                        'slug' => $role->slug,
+                    ],
                     'before' => $before,
                 ],
-            ]);
+            );
 
             $role->delete();
         });
