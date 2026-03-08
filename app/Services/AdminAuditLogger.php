@@ -10,6 +10,46 @@ use Illuminate\Support\Str;
 
 class AdminAuditLogger
 {
+    public function log(
+        Request $request,
+        string $action,
+        string $entity,
+        int|string|null $entityId = null,
+        array $meta = []
+    ): ?AuditLog {
+        if (app()->runningInConsole()) {
+            return null;
+        }
+
+        $actor = $request->user();
+        if (!$actor) {
+            return null;
+        }
+
+        $payload = array_merge([
+            'scope' => 'admin_manual',
+            'status' => 'success',
+            'request' => [
+                'method' => $request->method(),
+                'path' => $request->path(),
+                'route' => optional($request->route())->uri(),
+                'full_url' => $this->limitString($request->fullUrl(), 1000),
+            ],
+            'context' => [
+                'ip' => $request->ip(),
+                'user_agent' => $this->limitString($request->userAgent(), 500),
+            ],
+        ], $meta);
+
+        return AuditLog::create([
+            'user_id' => $actor->id,
+            'action' => $action,
+            'entity' => $entity,
+            'entity_id' => is_numeric($entityId) ? (int) $entityId : null,
+            'meta' => $this->sanitize($payload),
+        ]);
+    }
+
     public function logRequest(Request $request, array $meta = []): ?AuditLog
     {
         if (!$this->shouldLogRequest($request)) {
@@ -54,46 +94,6 @@ class AdminAuditLogger
                 'user_agent' => $this->limitString($request->userAgent(), 500),
             ],
         ], Arr::except($meta, ['action', 'entity', 'entity_id']));
-
-        return AuditLog::create([
-            'user_id' => $actor->id,
-            'action' => $action,
-            'entity' => $entity,
-            'entity_id' => is_numeric($entityId) ? (int) $entityId : null,
-            'meta' => $this->sanitize($payload),
-        ]);
-    }
-
-        public function log(
-        Request $request,
-        string $action,
-        string $entity,
-        int|string|null $entityId = null,
-        array $meta = []
-    ): ?AuditLog {
-        if (app()->runningInConsole()) {
-            return null;
-        }
-
-        $actor = $request->user();
-        if (!$actor) {
-            return null;
-        }
-
-        $payload = array_merge([
-            'scope' => 'admin_manual',
-            'status' => 'success',
-            'request' => [
-                'method' => $request->method(),
-                'path' => $request->path(),
-                'route' => optional($request->route())->uri(),
-                'full_url' => $this->limitString($request->fullUrl(), 1000),
-            ],
-            'context' => [
-                'ip' => $request->ip(),
-                'user_agent' => $this->limitString($request->userAgent(), 500),
-            ],
-        ], $meta);
 
         return AuditLog::create([
             'user_id' => $actor->id,
@@ -150,7 +150,7 @@ class AdminAuditLogger
             'action' => $action,
             'entity' => $entity,
             'entity_id' => (int) $model->getKey(),
-            'meta' => $meta,
+            'meta' => $this->sanitize($meta),
         ]);
     }
 
