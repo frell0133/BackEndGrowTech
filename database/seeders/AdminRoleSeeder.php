@@ -2,9 +2,9 @@
 
 namespace Database\Seeders;
 
-use App\Models\AdminPermission;
-use App\Models\AdminRole;
 use Illuminate\Database\Seeder;
+use App\Models\AdminRole;
+use App\Models\AdminPermission;
 
 class AdminRoleSeeder extends Seeder
 {
@@ -19,7 +19,7 @@ class AdminRoleSeeder extends Seeder
             ]
         );
 
-        AdminRole::updateOrCreate(
+        $content = AdminRole::updateOrCreate(
             ['slug' => 'content_admin'],
             [
                 'name' => 'Admin Konten',
@@ -28,7 +28,7 @@ class AdminRoleSeeder extends Seeder
             ]
         );
 
-        AdminRole::updateOrCreate(
+        $catalog = AdminRole::updateOrCreate(
             ['slug' => 'catalog_admin'],
             [
                 'name' => 'Admin Produk',
@@ -37,7 +37,7 @@ class AdminRoleSeeder extends Seeder
             ]
         );
 
-        AdminRole::updateOrCreate(
+        $orders = AdminRole::updateOrCreate(
             ['slug' => 'order_admin'],
             [
                 'name' => 'Admin Order',
@@ -46,7 +46,7 @@ class AdminRoleSeeder extends Seeder
             ]
         );
 
-        AdminRole::updateOrCreate(
+        $finance = AdminRole::updateOrCreate(
             ['slug' => 'finance_admin'],
             [
                 'name' => 'Admin Finance',
@@ -55,7 +55,7 @@ class AdminRoleSeeder extends Seeder
             ]
         );
 
-        AdminRole::updateOrCreate(
+        $marketing = AdminRole::updateOrCreate(
             ['slug' => 'marketing_admin'],
             [
                 'name' => 'Admin Marketing',
@@ -64,7 +64,7 @@ class AdminRoleSeeder extends Seeder
             ]
         );
 
-        AdminRole::updateOrCreate(
+        $auditor = AdminRole::updateOrCreate(
             ['slug' => 'auditor'],
             [
                 'name' => 'Auditor (Read Only)',
@@ -90,7 +90,7 @@ class AdminRoleSeeder extends Seeder
                 'manage_referrals', 'manage_discounts', 'manage_vouchers', 'view_dashboard',
             ],
             'auditor' => [
-                'view_dashboard',
+                'view_dashboard', 'view_audit_logs',
             ],
         ];
 
@@ -100,6 +100,7 @@ class AdminRoleSeeder extends Seeder
             $role->permissions()->sync($permIds);
         }
 
+        // owner is_super = true => allow all
         $owner->permissions()->sync([]);
     }
 }
