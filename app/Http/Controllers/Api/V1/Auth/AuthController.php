@@ -22,12 +22,8 @@ class AuthController extends Controller
             'name' => ['required', 'string', 'max:120'],
             'email' => ['required', 'email', 'max:190', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
-
-            // field baru yang disarankan
             'referrer_code' => ['nullable', 'string', 'max:50'],
-
-            // legacy support untuk FE lama kamu
-            'referral_code' => ['nullable', 'string', 'max:50'],
+            'ref    erral_code' => ['nullable', 'string', 'max:50'], // legacy FE support
         ]);
 
         $rawReferrerCode = (string) (

@@ -11,12 +11,10 @@ return new class extends Migration
     {
         Schema::table('users', function (Blueprint $table) {
             if (!Schema::hasColumn('users', 'referral_code')) {
-                // GTC-XXXXXX = total 10 char, jadi 12 masih aman
                 $table->string('referral_code', 12)->nullable()->unique()->after('role');
             }
         });
 
-        // Backfill referral_code untuk user existing yang masih null
         $userIds = DB::table('users')
             ->whereNull('referral_code')
             ->pluck('id');
@@ -43,9 +41,7 @@ return new class extends Migration
             }
 
             $code = $prefix . $suffix;
-        } while (
-            DB::table('users')->where('referral_code', $code)->exists()
-        );
+        } while (DB::table('users')->where('referral_code', $code)->exists());
 
         return $code;
     }
