@@ -7,14 +7,11 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
-use Illuminate\Support\Str;
-
 
 class User extends Authenticatable
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
-
 
     public const TIER_MEMBER   = 'member';
     public const TIER_RESELLER = 'reseller';
@@ -46,7 +43,6 @@ class User extends Authenticatable
         'admin_role_id',
     ];
 
-
     /**
      * The attributes that should be hidden for serialization.
      *
@@ -69,7 +65,7 @@ class User extends Authenticatable
             'password' => 'hashed',
         ];
     }
-    
+
     public function orders()
     {
         return $this->hasMany(Order::class);
@@ -92,7 +88,7 @@ class User extends Authenticatable
 
     public function referredUsers()
     {
-        return $this->hasMany(Referral::class, 'referred_by'); 
+        return $this->hasMany(Referral::class, 'referred_by');
     }
 
     public function referrerRelation()
@@ -113,20 +109,38 @@ class User extends Authenticatable
     protected static function booted(): void
     {
         static::creating(function ($user) {
-            if (!empty($user->referral_code)) return;
+            if (!empty($user->referral_code)) {
+                $user->referral_code = static::normalizeReferralCode((string) $user->referral_code);
+                return;
+            }
 
-            $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-            do {
-                $code = '';
-                for ($i=0; $i<7; $i++) {
-                    $code .= $alphabet[random_int(0, strlen($alphabet)-1)];
-                }
-            } while (static::where('referral_code', $code)->exists());
-
-            $user->referral_code = $code;
+            $user->referral_code = static::generateUniqueReferralCode();
         });
     }
-    
+
+    public static function normalizeReferralCode(string $code): string
+    {
+        return strtoupper(trim($code));
+    }
+
+    public static function generateUniqueReferralCode(): string
+    {
+        $prefix = 'GTC-';
+        $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+        do {
+            $suffix = '';
+
+            for ($i = 0; $i < 6; $i++) {
+                $suffix .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+            }
+
+            $code = $prefix . $suffix;
+        } while (static::where('referral_code', $code)->exists());
+
+        return $code;
+    }
+
     public function favorites()
     {
         return $this->hasMany(\App\Models\Favorite::class);
@@ -139,10 +153,6 @@ class User extends Authenticatable
 
     public function isAdmin(): bool
     {
-        // admin panel kamu sekarang pakai middleware role:admin
-        // jadi admin harus:
-        // - role == 'admin'
-        // - admin_role_id terisi
         return ($this->role === 'admin') && !is_null($this->admin_role_id);
     }
 
@@ -168,5 +178,4 @@ class User extends Authenticatable
         $this->loadMissing(['adminRole.permissions']);
         return $this->adminRole?->permissions?->contains('key', $permissionKey) ?? false;
     }
-
 }

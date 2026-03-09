@@ -11,28 +11,43 @@ return new class extends Migration
     {
         Schema::table('users', function (Blueprint $table) {
             if (!Schema::hasColumn('users', 'referral_code')) {
+                // GTC-XXXXXX = total 10 char, jadi 12 masih aman
                 $table->string('referral_code', 12)->nullable()->unique()->after('role');
             }
         });
 
-        // Backfill referral_code untuk user existing yang masih null.
-        // Format: 7 char uppercase alfanumerik (mis. FRL8K2Q).
-        // Kita pakai gen_random_bytes (pgcrypto). Kalau extension belum aktif, akan error.
-        // Jika kamu belum punya pgcrypto, aktifkan:
-        //   CREATE EXTENSION IF NOT EXISTS pgcrypto;
-        DB::statement("CREATE EXTENSION IF NOT EXISTS pgcrypto;");
+        // Backfill referral_code untuk user existing yang masih null
+        $userIds = DB::table('users')
+            ->whereNull('referral_code')
+            ->pluck('id');
 
-        DB::statement("
-            UPDATE users
-            SET referral_code = (
-                SELECT string_agg(substr(chars, (floor(random()*length(chars))+1)::int, 1), '')
-                FROM (
-                    SELECT 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' AS chars
-                ) s,
-                generate_series(1,7)
-            )
-            WHERE referral_code IS NULL
-        ");
+        foreach ($userIds as $id) {
+            DB::table('users')
+                ->where('id', $id)
+                ->update([
+                    'referral_code' => $this->generateUniqueReferralCode(),
+                ]);
+        }
+    }
+
+    private function generateUniqueReferralCode(): string
+    {
+        $prefix = 'GTC-';
+        $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+        do {
+            $suffix = '';
+
+            for ($i = 0; $i < 6; $i++) {
+                $suffix .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+            }
+
+            $code = $prefix . $suffix;
+        } while (
+            DB::table('users')->where('referral_code', $code)->exists()
+        );
+
+        return $code;
     }
 
     public function down(): void

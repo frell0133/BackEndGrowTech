@@ -47,7 +47,7 @@ class UserReferralController extends Controller
             'code' => ['required', 'string', 'max:50'],
         ]);
 
-        $code = strtoupper(trim($data['code']));
+        $code = User::normalizeReferralCode($data['code']);
 
         $referrer = User::query()
             ->where('referral_code', $code)
@@ -57,7 +57,6 @@ class UserReferralController extends Controller
         if ($referrer->id === $user->id) return $this->fail('Tidak bisa pakai referral code sendiri', 422);
 
         return DB::transaction(function () use ($user, $referrer) {
-
             $existing = Referral::query()
                 ->where('user_id', $user->id)
                 ->lockForUpdate()
@@ -69,7 +68,10 @@ class UserReferralController extends Controller
 
             $ref = Referral::updateOrCreate(
                 ['user_id' => $user->id],
-                ['referred_by' => $referrer->id, 'locked_at' => now()]
+                [
+                    'referred_by' => $referrer->id,
+                    'locked_at'   => now(),
+                ]
             );
 
             return $this->ok([
