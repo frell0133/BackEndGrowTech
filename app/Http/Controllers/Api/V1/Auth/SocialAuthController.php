@@ -33,7 +33,6 @@ class SocialAuthController extends Controller
 
             $email = $socialUser->getEmail();
             $providerId = (string) $socialUser->getId();
-
             $name = $socialUser->getName() ?? $socialUser->getNickname() ?? 'User';
             $avatar = $socialUser->getAvatar();
 
@@ -86,7 +85,7 @@ class SocialAuthController extends Controller
                 $user->update($update);
             }
 
-            // Buat one-time code, bukan token final
+            // Buat one-time code, bukan token langsung di URL
             $exchangeCode = Str::random(96);
 
             Cache::put(
@@ -98,6 +97,7 @@ class SocialAuthController extends Controller
                 now()->addMinute()
             );
 
+            // HANYA pakai FRONTEND_URL production
             $frontend = rtrim(
                 env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app'),
                 '/'
@@ -110,12 +110,12 @@ class SocialAuthController extends Controller
                 'message' => $e->getMessage(),
             ]);
 
-            return response()->json([
-                'success' => false,
-                'message' => 'Social login failed',
-                'provider' => $provider,
-                'error' => $e->getMessage(),
-            ], 500);
+            $frontend = rtrim(
+                env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app'),
+                '/'
+            );
+
+            return redirect($frontend . '/auth/callback?error=social_login_failed');
         }
     }
 }

@@ -16,7 +16,7 @@ class SocialExchangeController extends Controller
         ]);
 
         $cacheKey = 'social_exchange:' . $validated['code'];
-        $payload = Cache::pull($cacheKey); // pull = ambil lalu hapus (one-time use)
+        $payload = Cache::pull($cacheKey);
 
         if (!$payload || empty($payload['user_id'])) {
             return response()->json([
