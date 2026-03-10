@@ -6,6 +6,7 @@ use Illuminate\Database\Seeder;
 use App\Models\User;
 use App\Models\AdminRole;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 
 class AdminUserSeeder extends Seeder
 {
@@ -26,6 +27,8 @@ class AdminUserSeeder extends Seeder
             ]
         );
 
+        $this->ensureGtcReferralCode($owner);
+
         $ownerRole = AdminRole::where('slug', 'owner')->first();
         if ($ownerRole) {
             $owner->admin_role_id = $ownerRole->id;
@@ -33,9 +36,8 @@ class AdminUserSeeder extends Seeder
         }
 
         // =========================
-        // 2) ADMIN UJI COBA (KOSONG - BELUM PUNYA AKSES)
+        // 2) ADMIN UJI COBA
         // =========================
-        // admin_role_id sengaja NULL biar belum bisa akses /api/v1/admin/*
         $trialAdmin = User::updateOrCreate(
             ['email' => 'trial-admin@local.test'],
             [
@@ -45,18 +47,18 @@ class AdminUserSeeder extends Seeder
                 'password' => Hash::make('Admin12345!'),
                 'role' => 'admin',
                 'tier' => 'member',
-                // admin_role_id JANGAN DIISI
             ]
         );
 
-        // pastikan benar-benar kosong
+        $this->ensureGtcReferralCode($trialAdmin);
+
         $trialAdmin->admin_role_id = null;
         $trialAdmin->save();
 
         // =========================
         // 3) USER DEMO
         // =========================
-        User::updateOrCreate(
+        $userDemo = User::updateOrCreate(
             ['email' => 'user@local.test'],
             [
                 'name' => 'user',
@@ -68,7 +70,9 @@ class AdminUserSeeder extends Seeder
             ]
         );
 
-        User::updateOrCreate(
+        $this->ensureGtcReferralCode($userDemo);
+
+        $bima = User::updateOrCreate(
             ['email' => 'yashabima2@gmail.com'],
             [
                 'name' => 'Bima',
@@ -79,5 +83,22 @@ class AdminUserSeeder extends Seeder
                 'tier' => 'member',
             ]
         );
+
+        $this->ensureGtcReferralCode($bima);
+    }
+
+    private function ensureGtcReferralCode(User $user): void
+    {
+        $current = (string) ($user->referral_code ?? '');
+
+        // kalau sudah format GTC-, biarkan
+        if (Str::startsWith($current, 'GTC-')) {
+            return;
+        }
+
+        // kalau mau hanya isi yang null saja, ganti kondisi di atas/bawah sesuai kebutuhan
+        $user->forceFill([
+            'referral_code' => User::generateUniqueReferralCode(),
+        ])->save();
     }
 }
