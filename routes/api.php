@@ -500,11 +500,23 @@ Route::prefix('v1')->group(function () {
 
         return response()->json($res);
     });
-    
-        Route::get('/debug/google-config', function () {
+
+    Route::get('/debug/google-config', function () {
         return response()->json([
             'client_id_exists' => filled(config('services.google.client_id')),
             'client_secret_exists' => filled(config('services.google.client_secret')),
+            'redirect' => config('services.google.redirect'),
+            'app_url' => config('app.url'),
+        ]);
+    });
+
+    Route::get('/debug/google-runtime', function () {
+        $raw = getenv('GOOGLE_CLIENT_SECRET');
+
+        return response()->json([
+            'config_secret_exists' => filled(config('services.google.client_secret')),
+            'getenv_secret_exists' => $raw !== false && trim((string) $raw) !== '',
+            'config_cached' => app()->configurationIsCached(),
             'redirect' => config('services.google.redirect'),
             'app_url' => config('app.url'),
         ]);
