@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -12,7 +13,7 @@ use Throwable;
 
 class SocialAuthController extends Controller
 {
-    private array $allowedProviders = ['google', 'discord'];
+    protected array $allowedProviders = ['google', 'discord'];
 
     public function redirect(string $provider)
     {
@@ -30,33 +31,23 @@ class SocialAuthController extends Controller
         try {
             $socialUser = Socialite::driver($provider)->stateless()->user();
 
-            $email      = $socialUser->getEmail();
+            $email = $socialUser->getEmail();
             $providerId = (string) $socialUser->getId();
 
-            // 1) Nama user
-            $name = $socialUser->getName()
-                ?? $socialUser->getNickname()
-                ?? 'User';
-
-            // 2) Avatar dari provider (Google biasanya OK)
+            $name = $socialUser->getName() ?? $socialUser->getNickname() ?? 'User';
             $avatar = $socialUser->getAvatar();
 
-            // ✅ Discord: build CDN URL dari raw payload kalau perlu
             if ($provider === 'discord') {
                 $raw = $socialUser->user ?? [];
 
-                // Kalau getAvatar() sudah URL, biarkan.
-                // Kalau kosong, coba build sendiri
                 if (!$avatar && isset($raw['id'], $raw['avatar']) && $raw['avatar']) {
                     $discordId = (string) $raw['id'];
-                    $hash      = (string) $raw['avatar'];
-                    $ext       = Str::startsWith($hash, 'a_') ? 'gif' : 'png';
-
+                    $hash = (string) $raw['avatar'];
+                    $ext = Str::startsWith($hash, 'a_') ? 'gif' : 'png';
                     $avatar = "https://cdn.discordapp.com/avatars/{$discordId}/{$hash}.{$ext}?size=256";
                 }
             }
 
-            // 3) Cari user (provider_id > email)
             $user = User::where('provider', $provider)
                 ->where('provider_id', $providerId)
                 ->first();
@@ -65,7 +56,6 @@ class SocialAuthController extends Controller
                 $user = User::where('email', $email)->first();
             }
 
-            // 4) Create user baru
             if (!$user) {
                 $user = User::create([
                     'name' => $name,
@@ -75,18 +65,16 @@ class SocialAuthController extends Controller
                     'tier' => 'member',
                     'provider' => $provider,
                     'provider_id' => $providerId,
-                    'avatar' => $avatar,     // ✅ simpan avatar provider
-                    'avatar_path' => null,   // ✅ default
+                    'avatar' => $avatar,
+                    'avatar_path' => null,
                 ]);
             } else {
-                // 5) Update user existing
                 $update = [
                     'provider' => $provider,
                     'provider_id' => $providerId,
                     'name' => $name,
                 ];
 
-                // 🔐 Jangan override kalau user sudah upload avatar custom
                 if (empty($user->avatar_path)) {
                     $update['avatar'] = $avatar;
                 }
@@ -98,25 +86,24 @@ class SocialAuthController extends Controller
                 $user->update($update);
             }
 
-            // 6) Token Sanctum
-            $token = $user->createToken('api-token-social')->plainTextToken;
+            // Buat one-time code, bukan token final
+            $exchangeCode = Str::random(96);
 
-            // 7) Redirect ke FE
-            $frontendDefault = rtrim(
+            Cache::put(
+                'social_exchange:' . $exchangeCode,
+                [
+                    'user_id' => $user->id,
+                    'provider' => $provider,
+                ],
+                now()->addMinute()
+            );
+
+            $frontend = rtrim(
                 env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app'),
                 '/'
             );
 
-            $frontendLocal = rtrim(
-                env('FRONTEND_URL_LOCAL', $frontendDefault),
-                '/'
-            );
-
-            $frontend = $provider === 'google'
-                ? $frontendLocal
-                : $frontendDefault;
-
-            return redirect($frontend . '/auth/callback?token=' . urlencode($token));
+            return redirect($frontend . '/auth/callback?code=' . urlencode($exchangeCode));
         } catch (Throwable $e) {
             Log::error('Social login failed', [
                 'provider' => $provider,

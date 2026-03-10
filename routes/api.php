@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\V1\Auth\AuthController;
 use App\Http\Controllers\Api\V1\Auth\SocialAuthController;
 use App\Http\Controllers\Api\V1\Auth\AuthPasswordController;
+use App\Http\Controllers\Api\V1\Auth\SocialExchangeController;
 
 // Controllers (Public)
 use App\Http\Controllers\Api\V1\User\ProductController;
@@ -112,6 +113,7 @@ Route::prefix('v1')->group(function () {
     // 2) AUTH
     // =========================
     Route::prefix('auth')->group(function () {
+        Route::post('/v1/auth/social/exchange', [SocialExchangeController::class, 'exchange']);
 
         // email/password
         Route::post('register', [AuthController::class, 'register']);
@@ -521,7 +523,7 @@ Route::prefix('v1')->group(function () {
             'app_url' => config('app.url'),
         ]);
     });
-    
+
     Route::get('/api/v1/debug/env-google-keys', function () {
         $keys = array_values(array_filter(
             array_unique(array_merge(array_keys($_ENV), array_keys($_SERVER))),
