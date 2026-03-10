@@ -521,5 +521,19 @@ Route::prefix('v1')->group(function () {
             'app_url' => config('app.url'),
         ]);
     });
+    
+    Route::get('/api/v1/debug/env-google-keys', function () {
+        $keys = array_values(array_filter(
+            array_unique(array_merge(array_keys($_ENV), array_keys($_SERVER))),
+            fn ($k) => str_contains($k, 'GOOGLE')
+        ));
+
+        sort($keys);
+
+        return response()->json([
+            'keys' => $keys,
+            'config_cached' => app()->configurationIsCached(),
+        ]);
+    });
 
 });
