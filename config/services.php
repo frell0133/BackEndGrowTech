@@ -49,7 +49,6 @@ return [
         'sign_expires' => (int) env('SUPABASE_SIGN_EXPIRES', 60),
         'download_expires' => (int) env('SUPABASE_DOWNLOAD_EXPIRES', 600),
         'public_banners_base' => env('SUPABASE_PUBLIC_BANNERS_BASE'),
-        'public_banners_base' => env('SUPABASE_PUBLIC_BANNERS_BASE'),
     ],
     
     'google' => [

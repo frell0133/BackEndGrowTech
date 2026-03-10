@@ -500,5 +500,14 @@ Route::prefix('v1')->group(function () {
 
         return response()->json($res);
     });
+    
+        Route::get('/debug/google-config', function () {
+        return response()->json([
+            'client_id_exists' => filled(config('services.google.client_id')),
+            'client_secret_exists' => filled(config('services.google.client_secret')),
+            'redirect' => config('services.google.redirect'),
+            'app_url' => config('app.url'),
+        ]);
+    });
 
 });
