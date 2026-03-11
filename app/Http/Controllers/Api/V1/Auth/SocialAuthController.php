@@ -13,15 +13,13 @@ use Throwable;
 
 class SocialAuthController extends Controller
 {
-    protected array $allowedProviders = ['google', 'discord'];
+    private array $allowedProviders = ['google', 'discord'];
 
     public function redirect(string $provider)
     {
         abort_unless(in_array($provider, $this->allowedProviders, true), 404);
 
-        return Socialite::driver($provider)
-            ->stateless()
-            ->redirect();
+        return $this->driver($provider)->redirect();
     }
 
     public function callback(string $provider)
@@ -29,9 +27,9 @@ class SocialAuthController extends Controller
         abort_unless(in_array($provider, $this->allowedProviders, true), 404);
 
         try {
-            $socialUser = Socialite::driver($provider)->stateless()->user();
+            $socialUser = $this->driver($provider)->user();
 
-            $email = $socialUser->getEmail();
+            $email = strtolower(trim((string) ($socialUser->getEmail() ?? '')));
             $providerId = (string) $socialUser->getId();
             $name = $socialUser->getName() ?? $socialUser->getNickname() ?? 'User';
             $avatar = $socialUser->getAvatar();
@@ -47,18 +45,28 @@ class SocialAuthController extends Controller
                 }
             }
 
-            $user = User::where('provider', $provider)
+            $user = User::query()
+                ->where('provider', $provider)
                 ->where('provider_id', $providerId)
                 ->first();
 
-            if (!$user && $email) {
-                $user = User::where('email', $email)->first();
+            if (!$user && $email !== '') {
+                $user = User::query()->where('email', $email)->first();
+            }
+
+            if (!$user && $email === '') {
+                Log::warning('Social login email missing', [
+                    'provider' => $provider,
+                    'provider_id' => $providerId,
+                ]);
+
+                return redirect($this->frontendUrl() . '/auth/callback?error=email_required');
             }
 
             if (!$user) {
                 $user = User::create([
                     'name' => $name,
-                    'email' => $email ?? (Str::uuid() . "@{$provider}.local"),
+                    'email' => $email,
                     'password' => Hash::make(Str::random(32)),
                     'role' => 'user',
                     'tier' => 'member',
@@ -78,14 +86,26 @@ class SocialAuthController extends Controller
                     $update['avatar'] = $avatar;
                 }
 
-                if ($email && $user->email !== $email) {
+                if ($email !== '' && $user->email !== $email) {
                     $update['email'] = $email;
                 }
 
                 $user->update($update);
+                $user->refresh();
             }
 
-            // Buat one-time code, bukan token langsung di URL
+            $effectiveEmail = strtolower(trim((string) ($user->email ?? '')));
+
+            if ($effectiveEmail === '' || str_ends_with($effectiveEmail, '.local')) {
+                Log::warning('Social login cannot continue because email is not deliverable', [
+                    'provider' => $provider,
+                    'user_id' => $user->id,
+                    'email' => $user->email,
+                ]);
+
+                return redirect($this->frontendUrl() . '/auth/callback?error=email_required');
+            }
+
             $exchangeCode = Str::random(96);
 
             Cache::put(
@@ -94,28 +114,36 @@ class SocialAuthController extends Controller
                     'user_id' => $user->id,
                     'provider' => $provider,
                 ],
-                now()->addMinute()
+                now()->addMinutes(5)
             );
 
-            // HANYA pakai FRONTEND_URL production
-            $frontend = rtrim(
-                env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app'),
-                '/'
-            );
-
-            return redirect($frontend . '/auth/callback?code=' . urlencode($exchangeCode));
+            return redirect($this->frontendUrl() . '/auth/callback?code=' . urlencode($exchangeCode));
         } catch (Throwable $e) {
             Log::error('Social login failed', [
                 'provider' => $provider,
                 'message' => $e->getMessage(),
             ]);
 
-            $frontend = rtrim(
-                env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app'),
-                '/'
-            );
-
-            return redirect($frontend . '/auth/callback?error=social_login_failed');
+            return redirect($this->frontendUrl() . '/auth/callback?error=social_login_failed');
         }
+    }
+
+    private function driver(string $provider)
+    {
+        $driver = Socialite::driver($provider)->stateless();
+
+        return match ($provider) {
+            'google' => $driver->scopes(['openid', 'profile', 'email']),
+            'discord' => $driver->scopes(['identify', 'email']),
+            default => $driver,
+        };
+    }
+
+    private function frontendUrl(): string
+    {
+        return rtrim(
+            (string) (config('app.frontend_url') ?: env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app')),
+            '/'
+        );
     }
 }

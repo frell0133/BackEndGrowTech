@@ -5,18 +5,17 @@ namespace App\Http\Controllers\Api\V1\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\Referral;
 use App\Models\User;
+use App\Services\TwoFactorService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
     use ApiResponse;
 
-    public function register(Request $request)
+    public function register(Request $request, TwoFactorService $twoFactor)
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:120'],
@@ -26,12 +25,7 @@ class AuthController extends Controller
             'referral_code' => ['nullable', 'string', 'max:50'], // legacy FE support
         ]);
 
-        $rawReferrerCode = (string) (
-            $data['referrer_code']
-            ?? $data['referral_code']
-            ?? ''
-        );
-
+        $rawReferrerCode = (string) ($data['referrer_code'] ?? $data['referral_code'] ?? '');
         $referrerCode = User::normalizeReferralCode($rawReferrerCode);
         $referrer = null;
 
@@ -45,10 +39,10 @@ class AuthController extends Controller
             }
         }
 
-        return DB::transaction(function () use ($data, $referrer) {
+        $user = DB::transaction(function () use ($data, $referrer) {
             $user = User::create([
                 'name' => $data['name'],
-                'email' => $data['email'],
+                'email' => strtolower(trim($data['email'])),
                 'password' => Hash::make($data['password']),
                 'role' => 'user',
                 'tier' => 'member',
@@ -59,28 +53,44 @@ class AuthController extends Controller
                     ['user_id' => $user->id],
                     [
                         'referred_by' => $referrer->id,
-                        'locked_at'   => now(),
+                        'locked_at' => now(),
                     ]
                 );
             }
 
-            $token = $user->createToken('api-token')->plainTextToken;
-
-            return $this->ok([
-                'user' => $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code'),
-                'referral' => [
-                    'used_referrer_code' => $referrer?->referral_code,
-                    'referrer' => $referrer
-                        ? $referrer->only('id', 'name', 'email', 'referral_code')
-                        : null,
-                ],
-                'token' => $token,
-                'token_type' => 'Bearer',
-            ], 201);
+            return $user;
         });
+
+        $challenge = $twoFactor->startChallenge($user, 'register', [
+            'remember' => false,
+            'provider' => 'manual',
+        ]);
+
+        if (!$challenge['ok']) {
+            $user->delete();
+
+            return $this->fail(
+                $challenge['message'] ?? 'Gagal mengirim OTP registrasi.',
+                $challenge['status'] ?? 500,
+                $challenge['details'] ?? null
+            );
+        }
+
+        return $this->ok([
+            'requires_2fa' => true,
+            'challenge_id' => $challenge['challenge_id'],
+            'channel' => 'email',
+            'expires_in' => $challenge['expires_in'],
+            'email_hint' => $challenge['email_hint'],
+            'user' => $this->serializeUser($user),
+            'referral' => [
+                'used_referrer_code' => $referrer?->referral_code,
+                'referrer' => $referrer ? $referrer->only('id', 'name', 'email', 'referral_code') : null,
+            ],
+        ], 201);
     }
 
-    public function login(Request $request)
+    public function login(Request $request, TwoFactorService $twoFactor)
     {
         $credentials = $request->validate([
             'email' => ['required', 'email'],
@@ -89,47 +99,48 @@ class AuthController extends Controller
         ]);
 
         $remember = (bool) ($credentials['remember'] ?? false);
-        unset($credentials['remember']);
 
-        if (!Auth::attempt($credentials, $remember)) {
-            throw ValidationException::withMessages([
-                'email' => ['Email atau password salah'],
-            ]);
+        $user = User::query()
+            ->where('email', strtolower(trim((string) $credentials['email'])))
+            ->first();
+
+        if (!$user || !Hash::check((string) $credentials['password'], (string) $user->password)) {
+            return $this->fail('Email atau password salah', 422);
         }
 
-        $user = Auth::user();
-        if (!$user) {
-            return response()->json([
-                'success' => false,
-                'data' => null,
-                'meta' => (object) [],
-                'error' => ['message' => 'Unauthenticated'],
-            ], 401);
-        }
+        $challenge = $twoFactor->startChallenge($user, 'login', [
+            'remember' => $remember,
+            'provider' => 'manual',
+        ]);
 
-        $tokenName = $remember ? 'api-token-remember' : 'api-token';
-        $token = $user->createToken($tokenName)->plainTextToken;
+        if (!$challenge['ok']) {
+            return $this->fail(
+                $challenge['message'] ?? 'Gagal mengirim OTP login.',
+                $challenge['status'] ?? 500,
+                $challenge['details'] ?? null
+            );
+        }
 
         return $this->ok([
-            'user' => $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code'),
-            'token' => $token,
-            'token_type' => 'Bearer',
+            'requires_2fa' => true,
+            'challenge_id' => $challenge['challenge_id'],
+            'channel' => 'email',
+            'expires_in' => $challenge['expires_in'],
+            'email_hint' => $challenge['email_hint'],
+            'user' => $this->serializeUser($user),
         ]);
     }
 
     public function logout(Request $request)
     {
         $user = $request->user();
+
         if (!$user) {
-            return response()->json([
-                'success' => false,
-                'data' => null,
-                'meta' => (object) [],
-                'error' => ['message' => 'Unauthenticated'],
-            ], 401);
+            return $this->fail('Unauthenticated', 401);
         }
 
         $token = $user->currentAccessToken();
+
         if ($token) {
             $token->delete();
         }
@@ -140,17 +151,16 @@ class AuthController extends Controller
     public function me(Request $request)
     {
         $user = $request->user();
+
         if (!$user) {
-            return response()->json([
-                'success' => false,
-                'data' => null,
-                'meta' => (object) [],
-                'error' => ['message' => 'Unauthenticated'],
-            ], 401);
+            return $this->fail('Unauthenticated', 401);
         }
 
-        return $this->ok(
-            $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code')
-        );
+        return $this->ok($this->serializeUser($user));
+    }
+
+    private function serializeUser(User $user): array
+    {
+        return $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code');
     }
 }

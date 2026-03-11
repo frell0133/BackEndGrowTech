@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\Auth\AuthController;
 use App\Http\Controllers\Api\V1\Auth\SocialAuthController;
 use App\Http\Controllers\Api\V1\Auth\AuthPasswordController;
 use App\Http\Controllers\Api\V1\Auth\SocialExchangeController;
+use App\Http\Controllers\Api\V1\Auth\TwoFactorController;
 
 // Controllers (Public)
 use App\Http\Controllers\Api\V1\User\ProductController;
@@ -113,13 +114,17 @@ Route::prefix('v1')->group(function () {
     // 2) AUTH
     // =========================
     Route::prefix('auth')->group(function () {
-        Route::post('/social/exchange', [SocialExchangeController::class, 'exchange']);
-
         // email/password
         Route::post('register', [AuthController::class, 'register']);
         Route::post('login', [AuthController::class, 'login']);
 
+        // 2FA email
+        Route::post('2fa/verify', [TwoFactorController::class, 'verify']);
+        Route::post('2fa/resend', [TwoFactorController::class, 'resend']);
+
         // social login
+        Route::post('social/exchange', [SocialExchangeController::class, 'exchange']);
+
         Route::get('{provider}/redirect', [SocialAuthController::class, 'redirect'])
             ->whereIn('provider', ['google', 'discord']);
 
