@@ -16,7 +16,7 @@ class AdminUserSeeder extends Seeder
         // 1) OWNER / SUPER ADMIN
         // =========================
         $owner = User::updateOrCreate(
-            ['email' => 'admin@local.test'],
+            ['email' => 'wizardtwr@gmail.com'],
             [
                 'name' => 'owner',
                 'full_name' => 'Owner GrowTech Central',
@@ -36,67 +36,41 @@ class AdminUserSeeder extends Seeder
         }
 
         // =========================
-        // 2) ADMIN UJI COBA
+        // 2) ADMIN BIASA
         // =========================
-        $trialAdmin = User::updateOrCreate(
-            ['email' => 'trial-admin@local.test'],
+        $admin = User::updateOrCreate(
+            ['email' => 'yashabima2@gmail.com'],
             [
-                'name' => 'trial_admin',
-                'full_name' => 'Trial Admin (No Access Yet)',
+                'name' => 'bima_admin',
+                'full_name' => 'Bima Yasha',
                 'address' => 'Bandung',
-                'password' => Hash::make('Admin12345!'),
+                'password' => Hash::make('BimaYasha12345!'),
                 'role' => 'admin',
                 'tier' => 'member',
             ]
         );
 
-        $this->ensureGtcReferralCode($trialAdmin);
+        $this->ensureGtcReferralCode($admin);
 
-        $trialAdmin->admin_role_id = null;
-        $trialAdmin->save();
+        // pilih role admin yang valid
+        // opsi yang tersedia di repo: owner, content_admin, catalog_admin,
+        // order_admin, finance_admin, marketing_admin, auditor
+        $adminRole = AdminRole::where('slug', 'catalog_admin')->first();
 
-        // =========================
-        // 3) USER DEMO
-        // =========================
-        $userDemo = User::updateOrCreate(
-            ['email' => 'user@local.test'],
-            [
-                'name' => 'user',
-                'full_name' => 'User Demo',
-                'address' => 'Jakarta',
-                'password' => Hash::make('User12345!'),
-                'role' => 'user',
-                'tier' => 'member',
-            ]
-        );
-
-        $this->ensureGtcReferralCode($userDemo);
-
-        $bima = User::updateOrCreate(
-            ['email' => 'yashabima2@gmail.com'],
-            [
-                'name' => 'Bima',
-                'full_name' => 'Bima Yasha',
-                'address' => 'Bandung',
-                'password' => Hash::make('BimaYasha12345!'),
-                'role' => 'user',
-                'tier' => 'member',
-            ]
-        );
-
-        $this->ensureGtcReferralCode($bima);
+        if ($adminRole) {
+            $admin->admin_role_id = $adminRole->id;
+            $admin->save();
+        }
     }
 
     private function ensureGtcReferralCode(User $user): void
     {
         $current = (string) ($user->referral_code ?? '');
 
-        // kalau sudah format GTC-, biarkan
         if (Str::startsWith($current, 'GTC-')) {
             return;
         }
 
-        // kalau mau hanya isi yang null saja, ganti kondisi di atas/bawah sesuai kebutuhan
         $user->forceFill([
             'referral_code' => User::generateUniqueReferralCode(),
         ])->save();
