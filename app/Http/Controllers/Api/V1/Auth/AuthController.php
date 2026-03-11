@@ -22,7 +22,7 @@ class AuthController extends Controller
             'email' => ['required', 'email', 'max:190', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
             'referrer_code' => ['nullable', 'string', 'max:50'],
-            'referral_code' => ['nullable', 'string', 'max:50'], // legacy FE support
+            'referral_code' => ['nullable', 'string', 'max:50'],
         ]);
 
         $rawReferrerCode = (string) ($data['referrer_code'] ?? $data['referral_code'] ?? '');

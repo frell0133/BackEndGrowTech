@@ -2,14 +2,16 @@
 
 return [
 
-    'paths' => ['api/*', 'sanctum/csrf-cookie'],
+    'paths' => [
+        'api/*',
+        'sanctum/csrf-cookie',
+    ],
 
     'allowed_methods' => ['*'],
 
-    // ✅ bolehkan origin FE kamu (atau pakai env)
     'allowed_origins' => [
-        env('FRONTEND_URL', 'http://localhost:3000'),
         'https://frontendgrowtechtesting1-production-dfb9.up.railway.app',
+        'http://localhost:3000',
     ],
 
     'allowed_origins_patterns' => [],
@@ -20,7 +22,6 @@ return [
 
     'max_age' => 0,
 
-    // kalau pakai cookie/sanctum session → true
     'supports_credentials' => false,
 
 ];
