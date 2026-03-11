@@ -113,7 +113,7 @@ Route::prefix('v1')->group(function () {
     // 2) AUTH
     // =========================
     Route::prefix('auth')->group(function () {
-        Route::post('/v1/auth/social/exchange', [SocialExchangeController::class, 'exchange']);
+        Route::post('/social/exchange', [SocialExchangeController::class, 'exchange']);
 
         // email/password
         Route::post('register', [AuthController::class, 'register']);
