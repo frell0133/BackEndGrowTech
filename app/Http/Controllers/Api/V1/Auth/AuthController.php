@@ -26,7 +26,7 @@ class AuthController extends Controller
         ]);
 
         $rawReferrerCode = (string) ($data['referrer_code'] ?? $data['referral_code'] ?? '');
-        $referrerCode = User::normalizeReferralCode($rawReferrerCode);
+        $referrerCode = strtoupper(trim($rawReferrerCode));
         $referrer = null;
 
         if ($referrerCode !== '') {
