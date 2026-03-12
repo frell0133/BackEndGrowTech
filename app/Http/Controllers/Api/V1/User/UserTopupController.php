@@ -4,134 +4,94 @@ namespace App\Http\Controllers\Api\V1\User;
 
 use App\Http\Controllers\Controller;
 use App\Models\WalletTopup;
-use App\Services\MidtransService;
+use App\Services\Payments\PaymentGatewayManager;
+use App\Support\ApiResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class UserTopupController extends Controller
 {
-    public function init(Request $request, MidtransService $midtrans)
+    use ApiResponse;
+
+    public function init(Request $request, PaymentGatewayManager $gatewayManager)
     {
         $user = $request->user();
-        if (!$user) {
-            return response()->json([
-                'success' => false,
-                'error' => ['message' => 'Unauthenticated'],
-            ], 401);
+
+        $v = $request->validate([
+            'amount' => ['required', 'numeric', 'min:10000'],
+            'gateway_code' => ['nullable', 'string', 'max:100'],
+            'method' => ['nullable', 'string', 'max:100'], // backward compatibility
+        ]);
+
+        $gatewayKey = trim((string) ($v['gateway_code'] ?? $v['method'] ?? ''));
+
+        $gateway = $gatewayKey !== ''
+            ? $gatewayManager->resolveActiveByCodeOrAlias($gatewayKey, 'topup')
+            : $gatewayManager->defaultForScope('topup');
+
+        if (!$gateway) {
+            return $this->fail('Payment gateway topup tidak tersedia atau tidak aktif', 422);
         }
 
-        $data = $request->validate([
-            'amount' => ['required', 'integer', 'min:10000'],
-        ]);
+        $amount = (float) $v['amount'];
 
-        $amount = (int) $data['amount'];
-
-        // 1) Buat record dulu supaya order_id bisa mengandung topup_id (lebih aman)
-        $topup = WalletTopup::create([
-            'user_id' => $user->id,
-            'order_id' => null,         // akan diisi setelah ada id
-            'amount' => $amount,
-            'currency' => 'IDR',
-            'status' => 'initiated',
-        ]);
-
-        // 2) order_id: TOPUP-{id}-{timestamp} => mudah dimapping & unik
-        $orderId = 'TOPUP-' . $topup->id . '-' . now()->format('YmdHis');
-        $topup->update(['order_id' => $orderId]);
-
-        // 3) customer_details aman
-        $firstName = (string) ($user->name ?: 'User');
-        $firstName = mb_substr($firstName, 0, 50);
-
-        $payload = [
-            'transaction_details' => [
-                'order_id' => $orderId,
-                'gross_amount' => $amount,
-            ],
-            'customer_details' => [
-                'first_name' => $firstName,
-                'email' => (string) $user->email,
-            ],
-            'item_details' => [
-                [
-                    'id' => 'TOPUP-' . $topup->id,
-                    'price' => $amount,
-                    'quantity' => 1,
-                    'name' => 'Wallet Topup',
-                ]
-            ],
-        ];
-
-        $snap = $midtrans->createSnapTransaction($payload);
-
-        // 4) Handle gagal hit Midtrans
-        if (!($snap['ok'] ?? false)) {
-            $topup->update([
-                'status' => 'failed',
-                // kalau ada kolom last_error/raw_response, isi di sini
-                // 'last_error' => 'Failed create Midtrans transaction',
-                // 'raw_callback' => $snap,
+        $topup = DB::transaction(function () use ($user, $amount, $gateway) {
+            $topup = WalletTopup::create([
+                'user_id' => (int) $user->id,
+                'order_id' => 'TMP-' . now()->format('YmdHis') . '-' . strtoupper(substr(md5((string) microtime(true)), 0, 6)),
+                'amount' => $amount,
+                'currency' => 'IDR',
+                'status' => 'initiated',
+                'gateway_code' => $gateway->code,
+                'raw_callback' => [],
             ]);
 
-            // jangan bocorin detail vendor di production
-            $details = config('app.debug') ? $snap : null;
+            $topup->order_id = 'TOPUP-' . now()->format('YmdHis') . '-' . $topup->id;
+            $topup->save();
 
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'message' => 'Failed create Midtrans transaction',
-                    'details' => $details,
-                ],
-            ], 500);
-        }
+            return $topup;
+        });
 
-        $token = $snap['token'] ?? null;
-        $redirectUrl = $snap['redirect_url'] ?? null;
-
-        if (!$token || !$redirectUrl) {
-            $topup->update([
-                'status' => 'failed',
-                // 'last_error' => 'Midtrans response missing token/redirect_url',
-                // 'raw_callback' => $snap,
+        try {
+            $init = $gatewayManager->driverFor($gateway)->createTopupPayment($gateway, $topup, [
+                'user' => $user,
             ]);
+        } catch (\Throwable $e) {
+            $topup->status = 'failed';
+            $topup->raw_callback = ['exception' => $e->getMessage()];
+            $topup->save();
 
-            $details = config('app.debug') ? $snap : null;
-
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'message' => 'Midtrans response missing token/redirect_url',
-                    'details' => $details,
-                ],
-            ], 500);
+            return $this->fail($e->getMessage(), 422);
         }
 
-        // 5) Update pending + simpan token
-        $topup->update([
-            'status' => 'pending',
-            'snap_token' => $token,
-            'redirect_url' => $redirectUrl,
-        ]);
+        if (!($init['success'] ?? false)) {
+            $topup->status = 'failed';
+            $topup->raw_callback = ['init' => $init['payload'] ?? $init];
+            $topup->save();
 
-        $mode = $snap['mode'] ?? 'unknown';
+            return $this->fail((string) ($init['message'] ?? 'Gagal membuat topup'), 422);
+        }
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'topup_id' => $topup->id,
-                'order_id' => $topup->order_id,
-                'amount' => $topup->amount,
-                'status' => $topup->status,
-                'mode' => $mode,
-                'snap_token' => $topup->snap_token,
-                'redirect_url' => $topup->redirect_url,
+        $topup->status = (string) ($init['status'] ?? 'pending');
+        $topup->external_id = (string) ($init['external_id'] ?? $topup->order_id);
+        $topup->snap_token = (string) ($init['snap_token'] ?? '');
+        $topup->redirect_url = (string) ($init['redirect_url'] ?? '');
+        $topup->raw_callback = ['init' => $init['payload'] ?? $init];
+        $topup->save();
 
-                // kalau kamu pakai secret header, endpoint boleh tetap tampil,
-                // tapi yang bisa execute tetap butuh header secret di controller
-                'simulate_pay_endpoint' => $mode === 'simulate'
-                    ? "/api/v1/topups/{$topup->order_id}/simulate-pay"
-                    : null,
-            ],
-            'error' => null,
+        return $this->ok([
+            'order_id' => $topup->order_id,
+            'status' => $topup->status,
+            'amount' => (float) $topup->amount,
+            'currency' => $topup->currency,
+            'gateway_code' => $gateway->code,
+            'gateway' => $gateway->code,
+            'redirect_url' => $topup->redirect_url,
+            'snap_token' => $topup->snap_token,
+            'reference' => $init['reference'] ?? $topup->external_id,
+            'simulate_pay_endpoint' => $init['simulate_pay_endpoint'] ?? null,
+            'mode' => $init['mode'] ?? ($gateway->sandbox_mode ? 'sandbox' : 'production'),
+            'payment_payload' => $init['payload'] ?? null,
         ]);
     }
 }

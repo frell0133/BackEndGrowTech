@@ -59,28 +59,84 @@ class UserOrderController extends Controller
 
     private function getGatewayFeePercent(): float
     {
-        $row = Setting::query()
-            ->where('group', 'payment')
-            ->where('key', 'fee_percent')
-            ->first();
-
-        if (!$row) return 0.0;
-
-        $val = $row->value;
-
-        if (is_string($val)) {
-            $decoded = json_decode($val, true);
-            if (json_last_error() === JSON_ERROR_NONE) $val = $decoded;
-        }
-
-        if (is_array($val)) {
-            $v = $val['percent'] ?? $val['value'] ?? 0;
-            return is_numeric($v) ? (float) $v : 0.0;
-        }
-
-        if (is_numeric($val)) return (float) $val;
-
+        // Fee final sekarang ditentukan dari payment gateway yang dipilih saat createPayment()
         return 0.0;
+    }
+
+    private function resolveGatewayFee(\App\Models\PaymentGateway $gateway, float $baseAmount): array
+    {
+        $type = strtolower((string) ($gateway->fee_type ?? ''));
+        $value = (float) ($gateway->fee_value ?? 0);
+
+        if ($type === 'fixed') {
+            return [
+                'type' => 'fixed',
+                'percent' => 0.0,
+                'amount' => max(0.0, round($value, 2)),
+            ];
+        }
+
+        if ($type === 'percent') {
+            $percent = max(0.0, $value);
+
+            return [
+                'type' => 'percent',
+                'percent' => $percent,
+                'amount' => round(max(0.0, $baseAmount) * ($percent / 100), 2),
+            ];
+        }
+
+        return [
+            'type' => null,
+            'percent' => 0.0,
+            'amount' => 0.0,
+        ];
+    }
+
+    private function runOrderFulfillment(\App\Services\OrderFulfillmentService $fulfillment, \App\Models\Order $order): array
+    {
+        foreach (['fulfillPaidOrder', 'handlePaidOrder', 'processPaidOrder', 'fulfill'] as $method) {
+            if (!method_exists($fulfillment, $method)) {
+                continue;
+            }
+
+            try {
+                $result = $fulfillment->{$method}($order);
+
+                if (is_array($result)) {
+                    return $result;
+                }
+
+                return ['success' => $result !== false];
+            } catch (\ArgumentCountError $e) {
+                continue;
+            }
+        }
+
+        return ['success' => false];
+    }
+
+    private function dispatchInvoiceForOrder(\App\Models\Order $order, string $reason): void
+    {
+        foreach (['dispatchInvoiceEmailAfterCommit', 'dispatchInvoiceEmail', 'queueInvoiceEmailAfterCommit'] as $method) {
+            if (!method_exists($this, $method)) {
+                continue;
+            }
+
+            try {
+                $this->{$method}((int) $order->id, $reason, (string) $order->invoice_number);
+                return;
+            } catch (\ArgumentCountError $e) {
+                try {
+                    $this->{$method}((int) $order->id);
+                    return;
+                } catch (\Throwable $e2) {
+                    return;
+                }
+            } catch (\Throwable $e) {
+                return;
+            }
+        }
     }
 
     // =========================
@@ -343,18 +399,26 @@ class UserOrderController extends Controller
     // =========================
     // POST /api/v1/orders/{id}/payments
     // =========================
+    
     public function createPayment(
         Request $request,
         string $id,
         MidtransService $midtrans,
         LedgerService $ledger,
-        OrderFulfillmentService $fulfillment
+        OrderFulfillmentService $fulfillment,
+        \App\Services\Payments\PaymentGatewayManager $gatewayManager
     ) {
         $user = $request->user();
 
         $v = $request->validate([
-            'method' => ['required', 'in:midtrans,wallet'],
+            'gateway_code' => ['nullable', 'string', 'max:100'],
+            'method' => ['nullable', 'string', 'max:100'], // backward compatibility
         ]);
+
+        $selected = strtolower(trim((string) ($v['gateway_code'] ?? $v['method'] ?? '')));
+        if ($selected === '') {
+            return $this->fail('gateway_code wajib diisi', 422);
+        }
 
         $order = Order::query()
             ->where('id', (int) $id)
@@ -362,211 +426,219 @@ class UserOrderController extends Controller
             ->with(['items.product', 'product', 'payment', 'vouchers'])
             ->first();
 
-        if (!$order) return $this->fail('Order tidak ditemukan', 404);
+        if (!$order) {
+            return $this->fail('Order tidak ditemukan', 404);
+        }
 
-        $status = (string) ($order->status?->value ?? $order->status);
-        if (in_array($status, [
-            OrderStatus::PAID->value,
-            OrderStatus::FULFILLED->value,
-            OrderStatus::REFUNDED->value
+        $currentStatus = (string) ($order->status?->value ?? $order->status);
+        if (in_array($currentStatus, [
+            \App\Enums\OrderStatus::PAID->value,
+            \App\Enums\OrderStatus::FULFILLED->value,
+            \App\Enums\OrderStatus::REFUNDED->value,
         ], true)) {
             return $this->fail('Order sudah diproses pembayaran', 409);
         }
 
-        // ===== WALLET =====
-        if ($v['method'] === 'wallet') {
+        if ($selected === 'wallet') {
             try {
                 return DB::transaction(function () use ($order, $user, $ledger, $fulfillment) {
-
                     $locked = Order::query()
                         ->where('id', (int) $order->id)
+                        ->where('user_id', (int) $user->id)
+                        ->with(['items.product', 'product', 'payment', 'vouchers'])
                         ->lockForUpdate()
                         ->first();
 
-                    $curStatus = (string) ($locked->status?->value ?? $locked->status);
+                    if (!$locked) {
+                        return $this->fail('Order tidak ditemukan', 404);
+                    }
 
-                    if (in_array($curStatus, [OrderStatus::PAID->value, OrderStatus::FULFILLED->value], true)) {
+                    $curStatus = (string) ($locked->status?->value ?? $locked->status);
+                    if (in_array($curStatus, [
+                        \App\Enums\OrderStatus::PAID->value,
+                        \App\Enums\OrderStatus::FULFILLED->value,
+                        \App\Enums\OrderStatus::REFUNDED->value,
+                    ], true)) {
                         return $this->ok([
                             'method' => 'wallet',
                             'already_paid' => true,
-                            'order' => $locked->fresh()->load(['items.product','product','payment','vouchers','deliveries.license']),
+                            'order' => $locked->fresh()->load(['items.product', 'product', 'payment', 'vouchers']),
                         ]);
                     }
 
                     $amountInt = (int) round((float) $locked->amount);
-                    if ($amountInt <= 0) return $this->fail('Amount invalid', 422);
-
-                    $ledger->purchase((int) $user->id, $amountInt, 'PAY ORDER ' . $locked->invoice_number);
-
-                    $payment = $locked->payment;
-                    if (!$payment) {
-                        $payment = Payment::create([
-                            'order_id' => (int) $locked->id,
-                            'gateway_code' => 'wallet',
-                            'external_id' => null,
-                            'amount' => (float) $locked->amount,
-                            'status' => PaymentStatus::PAID->value,
-                            'raw_callback' => ['method' => 'wallet'],
-                        ]);
-                    } else {
-                        $payment->update([
-                            'gateway_code' => 'wallet',
-                            'amount' => (float) $locked->amount,
-                            'status' => PaymentStatus::PAID->value,
-                            'raw_callback' => array_merge((array) ($payment->raw_callback ?? []), ['method' => 'wallet']),
-                        ]);
+                    if ($amountInt <= 0) {
+                        return $this->fail('Amount invalid', 422);
                     }
 
-                    $locked->update([
-                        'status' => OrderStatus::PAID->value,
-                        'payment_gateway_code' => 'wallet',
+                    $ledger->purchase(
+                        (int) $user->id,
+                        $amountInt,
+                        'PAY ORDER ' . (string) $locked->invoice_number,
+                        [
+                            'order_id' => (int) $locked->id,
+                            'invoice_number' => (string) $locked->invoice_number,
+                            'gateway' => 'wallet',
+                        ]
+                    );
+
+                    $locked->payment_gateway_code = 'wallet';
+                    $locked->gateway_fee_percent = 0;
+                    $locked->gateway_fee_amount = 0;
+                    $locked->status = \App\Enums\OrderStatus::PAID->value;
+                    $locked->save();
+
+                    $payment = \App\Models\Payment::query()->firstOrNew([
+                        'order_id' => (int) $locked->id,
                     ]);
 
-                    // ✅ FIX UTAMA: komisi referral juga diproses saat wallet PAID
-                    app(ReferralCommissionService::class)->handleOrderPaid(
+                    $payment->order_id = (int) $locked->id;
+                    $payment->gateway_code = 'wallet';
+                    $payment->external_id = (string) $locked->invoice_number;
+                    $payment->amount = (float) $locked->amount;
+                    $payment->status = \App\Enums\PaymentStatus::PAID->value;
+                    $payment->raw_callback = [
+                        'source' => 'wallet',
+                        'paid_at' => now()->toDateTimeString(),
+                    ];
+                    $payment->save();
+
+                    app(\App\Services\ReferralCommissionService::class)->handleOrderPaid(
                         $locked->fresh(),
                         $ledger,
-                        ['method' => 'wallet']
+                        [
+                            'gateway' => 'wallet',
+                            'direct' => true,
+                        ]
                     );
 
-                    $res = $fulfillment->fulfillPaidOrder($locked->fresh());
+                    $fulfillmentResult = $this->runOrderFulfillment($fulfillment, $locked->fresh(['items.product', 'product', 'payment']));
+                    $hasDeliveries = method_exists($locked, 'deliveries')
+                        ? $locked->deliveries()->exists()
+                        : false;
 
-                    if (!($res['ok'] ?? false)) {
-                        throw new \RuntimeException($res['message'] ?? 'Fulfillment failed');
+                    if (($fulfillmentResult['success'] ?? false) || ($fulfillmentResult['ok'] ?? false) || $hasDeliveries) {
+                        $locked->status = \App\Enums\OrderStatus::FULFILLED->value;
+                        $locked->save();
                     }
 
-                    $locked->update(['status' => OrderStatus::FULFILLED->value]);
-
-                    $this->dispatchInvoiceEmailAfterCommit(
-                        (int) $locked->id,
-                        'wallet_paid',
-                        (string) $locked->invoice_number
-                    );
+                    $this->dispatchInvoiceForOrder($locked, 'wallet_paid');
 
                     return $this->ok([
                         'method' => 'wallet',
+                        'status' => 'paid',
+                        'order' => $locked->fresh()->load(['items.product', 'product', 'payment', 'vouchers']),
                         'payment' => $payment->fresh(),
-                        'order' => $locked->fresh()->load(['items.product','product','vouchers','deliveries.license','payment']),
-                        'fulfillment' => $res,
+                        'fulfillment' => $fulfillmentResult,
                     ]);
                 });
-            } catch (\Illuminate\Validation\ValidationException $e) {
-                return $this->fail('Validation failed', 422, $e->errors());
             } catch (\Throwable $e) {
-                return $this->fail('Wallet payment failed', 500, $e->getMessage());
+                return $this->fail($e->getMessage(), 422);
             }
         }
 
-        // ===== MIDTRANS =====
-        try {
-            return DB::transaction(function () use ($order, $user, $midtrans) {
+        $gateway = $gatewayManager->resolveActiveByCodeOrAlias($selected, 'order');
+        if (!$gateway) {
+            return $this->fail('Payment gateway tidak tersedia atau tidak aktif', 422);
+        }
 
+        try {
+            return DB::transaction(function () use ($order, $user, $gateway, $gatewayManager) {
                 $locked = Order::query()
                     ->where('id', (int) $order->id)
+                    ->where('user_id', (int) $user->id)
+                    ->with(['items.product', 'product', 'payment', 'vouchers'])
                     ->lockForUpdate()
                     ->first();
 
+                if (!$locked) {
+                    return $this->fail('Order tidak ditemukan', 404);
+                }
+
+                $curStatus = (string) ($locked->status?->value ?? $locked->status);
+                if (in_array($curStatus, [
+                    \App\Enums\OrderStatus::PAID->value,
+                    \App\Enums\OrderStatus::FULFILLED->value,
+                    \App\Enums\OrderStatus::REFUNDED->value,
+                ], true)) {
+                    return $this->fail('Order sudah diproses pembayaran', 409);
+                }
+
                 $baseAmount = (float) $locked->amount;
+                $fee = $this->resolveGatewayFee($gateway, $baseAmount);
+                $grossAmount = round($baseAmount + (float) $fee['amount'], 2);
 
-                $feeAmount = (float) ($locked->gateway_fee_amount ?? 0);
-                if ($feeAmount <= 0) {
-                    $feePercent = $this->getGatewayFeePercent();
-                    if ($feePercent > 0) {
-                        $feeAmount = round((float)$baseAmount * ((float)$feePercent / 100), 2);
-                        $locked->update([
-                            'gateway_fee_percent' => (float) $feePercent,
-                            'gateway_fee_amount' => (float) $feeAmount,
-                        ]);
-                    }
-                }
+                $locked->payment_gateway_code = $gateway->code;
+                $locked->gateway_fee_percent = (float) $fee['percent'];
+                $locked->gateway_fee_amount = (float) $fee['amount'];
+                $locked->save();
 
-                $gross = (float) ($baseAmount + $feeAmount);
+                $payment = \App\Models\Payment::query()->firstOrNew([
+                    'order_id' => (int) $locked->id,
+                ]);
 
-                $payment = $locked->payment;
-                if (!$payment) {
-                    $payment = Payment::create([
-                        'order_id' => (int) $locked->id,
-                        'gateway_code' => 'midtrans',
-                        'external_id' => (string) $locked->invoice_number,
-                        'amount' => (float) $gross,
-                        'status' => PaymentStatus::INITIATED->value,
-                        'raw_callback' => null,
-                    ]);
-                } else {
-                    $payment->update([
-                        'gateway_code' => 'midtrans',
-                        'external_id' => (string) $locked->invoice_number,
-                        'amount' => (float) $gross,
-                    ]);
-                }
-
-                $payload = [
-                    'transaction_details' => [
-                        'order_id' => (string) $locked->invoice_number,
-                        'gross_amount' => (int) round($gross),
-                    ],
-                    'item_details' => [
-                        [
-                            'id' => (string) $locked->invoice_number,
-                            'price' => (int) round($gross),
-                            'quantity' => 1,
-                            'name' => mb_substr('Growtech Order ' . (string) $locked->invoice_number, 0, 50),
-                        ],
-                    ],
-                    'customer_details' => [
-                        'first_name' => (string) ($user->name ?? 'Customer'),
-                        'email' => (string) ($user->email ?? 'customer@example.com'),
-                    ],
-                    'callbacks' => [
-                        'finish' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment',
-                        'error' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment/failed',
-                        'unfinish' => 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app/customer/category/product/detail/lengkapipembelian/methodpayment/process',
-                    ],
+                $payment->order_id = (int) $locked->id;
+                $payment->gateway_code = $gateway->code;
+                $payment->external_id = (string) $locked->invoice_number;
+                $payment->amount = (float) $grossAmount;
+                $payment->status = \App\Enums\PaymentStatus::INITIATED->value;
+                $payment->raw_callback = [
+                    'gateway' => $gateway->code,
+                    'initiated_at' => now()->toDateTimeString(),
                 ];
+                $payment->save();
 
-                $snap = $midtrans->createSnapTransaction($payload);
+                $init = $gatewayManager->driverFor($gateway)->createOrderPayment(
+                    $gateway,
+                    $locked->fresh(['items.product', 'product', 'payment', 'vouchers']),
+                    [
+                        'user' => $user,
+                        'gross_amount' => $grossAmount,
+                    ]
+                );
 
-                $ok = (bool) ($snap['ok'] ?? false);
-                if (!$ok) {
-                    if (!empty($snap['token']) || !empty($snap['redirect_url'])) $ok = true;
+                if (!($init['success'] ?? false)) {
+                    $payment->status = \App\Enums\PaymentStatus::FAILED->value;
+                    $payment->raw_callback = ['init' => $init['payload'] ?? $init];
+                    $payment->save();
+
+                    return $this->fail((string) ($init['message'] ?? 'Gagal membuat payment'), 422);
                 }
 
-                if (!$ok) {
-                    $payment->update([
-                        'status' => PaymentStatus::FAILED->value,
-                        'raw_callback' => $snap,
-                    ]);
-                    return $this->fail('Gagal membuat pembayaran Midtrans', 422, $snap);
-                }
-
-                $locked->update([
-                    'status' => OrderStatus::PENDING->value,
-                    'payment_gateway_code' => 'midtrans',
-                ]);
-
-                $payment->update([
-                    'status' => PaymentStatus::PENDING->value,
-                    'raw_callback' => $snap,
-                ]);
+                $payment->external_id = (string) ($init['external_id'] ?? $locked->invoice_number);
+                $payment->amount = (float) $grossAmount;
+                $payment->status = \App\Enums\PaymentStatus::PENDING->value;
+                $payment->raw_callback = ['init' => $init['payload'] ?? $init];
+                $payment->save();
 
                 return $this->ok([
-                    'method' => 'midtrans',
-                    'order' => $locked->fresh()->load(['items.product', 'product', 'vouchers', 'payment']),
-                    'payment' => $payment->fresh(),
-                    'amounts' => [
-                        'base' => (float) $baseAmount,
-                        'fee' => (float) $feeAmount,
-                        'gross' => (float) $gross,
+                    'method' => $gateway->code,
+                    'gateway' => [
+                        'code' => $gateway->code,
+                        'name' => $gateway->name,
+                        'provider' => $gateway->provider,
+                        'driver' => $gateway->driver,
+                        'sandbox_mode' => (bool) $gateway->sandbox_mode,
                     ],
-                    'snap' => [
-                        'mode' => $snap['mode'] ?? null,
-                        'token' => $snap['token'] ?? null,
-                        'redirect_url' => $snap['redirect_url'] ?? null,
+                    'order' => $locked->fresh()->load(['items.product', 'product', 'payment', 'vouchers']),
+                    'payment' => $payment->fresh(),
+                    'payment_gateway_summary' => [
+                        'fee_type' => $fee['type'],
+                        'fee_percent' => (float) $fee['percent'],
+                        'fee_amount' => (float) $fee['amount'],
+                        'total_payable' => (float) $grossAmount,
+                    ],
+                    'payment_payload' => [
+                        'reference' => $init['reference'] ?? $payment->external_id,
+                        'redirect_url' => $init['redirect_url'] ?? null,
+                        'snap_token' => $init['snap_token'] ?? null,
+                        'mode' => $init['mode'] ?? ($gateway->sandbox_mode ? 'sandbox' : 'production'),
+                        'payload' => $init['payload'] ?? null,
                     ],
                 ]);
             });
         } catch (\Throwable $e) {
-            return $this->fail('Midtrans payment init failed', 500, $e->getMessage());
+            return $this->fail($e->getMessage(), 422);
         }
     }
 

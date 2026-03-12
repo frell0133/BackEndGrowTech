@@ -206,6 +206,11 @@ Route::prefix('v1')->group(function () {
         // Payments (User)
         Route::post('orders/{id}/payments', [UserOrderController::class, 'createPayment']);
         Route::get('orders/{id}/payments', [UserOrderController::class, 'paymentStatus']);
+        Route::get('payment-gateways/available', [\App\Http\Controllers\Api\V1\Admin\PaymentGatewayController::class, 'available']);
+
+        Route::post('webhooks/payments/midtrans', [\App\Http\Controllers\Api\V1\Webhook\PaymentWebhookController::class, 'handleMidtrans']);
+        Route::post('webhooks/payments/duitku', [\App\Http\Controllers\Api\V1\Webhook\PaymentWebhookController::class, 'handleDuitku']);
+        Route::post('webhooks/payments/{gateway_code}', [\App\Http\Controllers\Api\V1\Webhook\PaymentWebhookController::class, 'handle']);
 
         // Delivery (User)
         Route::get('orders/{id}/delivery', [UserDeliveryController::class, 'info']);

@@ -4,48 +4,38 @@ namespace App\Http\Controllers\Api\V1\User;
 
 use App\Http\Controllers\Controller;
 use App\Models\WalletTopup;
+use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 
 class UserTopupStatusController extends Controller
 {
-    public function show(string $orderId, Request $request)
+    use ApiResponse;
+
+    public function show(Request $request, string $orderId)
     {
         $user = $request->user();
-        if (!$user) {
-            return response()->json([
-                'success' => false,
-                'data' => null,
-                'meta' => [],
-                'error' => ['message' => 'Unauthenticated'],
-            ], 401);
-        }
 
-        $topup = WalletTopup::where('order_id', $orderId)
-            ->where('user_id', $user->id)
+        $topup = WalletTopup::query()
+            ->where('user_id', (int) $user->id)
+            ->where('order_id', $orderId)
             ->first();
 
         if (!$topup) {
-            return response()->json([
-                'success' => false,
-                'data' => null,
-                'meta' => [],
-                'error' => ['message' => 'Topup not found'],
-            ], 404);
+            return $this->fail('Topup tidak ditemukan', 404);
         }
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'order_id' => $topup->order_id,
-                'status' => $topup->status,
-                'amount' => $topup->amount,
-                'currency' => $topup->currency,
-                'paid_at' => $topup->paid_at,
-                'posted_to_ledger_at' => $topup->posted_to_ledger_at,
-                'gateway' => $topup->gateway,
-            ],
-            'meta' => [],
-            'error' => null,
+        return $this->ok([
+            'order_id' => $topup->order_id,
+            'status' => $topup->status,
+            'amount' => (float) $topup->amount,
+            'currency' => $topup->currency,
+            'paid_at' => $topup->paid_at,
+            'posted_to_ledger_at' => $topup->posted_to_ledger_at,
+            'gateway_code' => $topup->gateway_code,
+            'gateway' => $topup->gateway_code,
+            'redirect_url' => $topup->redirect_url,
+            'snap_token' => $topup->snap_token,
+            'external_id' => $topup->external_id,
         ]);
     }
 }
