@@ -145,7 +145,7 @@ class MidtransGatewayDriver implements PaymentGatewayDriver
                 'reference' => $merchantOrderId,
                 'snap_token' => 'SIM-' . Str::upper(Str::random(24)),
                 'redirect_url' => rtrim((string) config('app.frontend_url', config('app.url')), '/') . '/payment/simulated/' . $merchantOrderId,
-                'simulate_pay_endpoint' => null,
+                'simulate_pay_endpoint' => rtrim((string) config('app.url'), '/') . '/api/v1/topups/' . $merchantOrderId . '/simulate-pay',
                 'mode' => 'simulation',
                 'payload' => [
                     'simulated' => true,
@@ -156,14 +156,7 @@ class MidtransGatewayDriver implements PaymentGatewayDriver
         }
 
         $serverKey = (string) $this->requiredConfig($gateway, 'server_key');
-        $snapUrl = (string) ($config['snap_url'] ?? config('services.midtrans.snap_url') ?? '');
-        $snapUrl = trim($snapUrl);
-
-        if ($snapUrl === '') {
-            $snapUrl = $gateway->sandbox_mode
-                ? 'https://app.sandbox.midtrans.com/snap/v1'
-                : 'https://app.midtrans.com/snap/v1';
-        }
+        $snapUrl = $this->normalizedSnapBaseUrl((string) ($config['snap_url'] ?? config('services.midtrans.snap_url') ?? ''), $gateway->sandbox_mode);
 
         $response = Http::timeout(30)
             ->acceptJson()
@@ -192,6 +185,25 @@ class MidtransGatewayDriver implements PaymentGatewayDriver
             'mode' => $mode,
             'payload' => is_array($json) ? $json : [],
         ];
+    }
+
+    protected function normalizedSnapBaseUrl(string $snapUrl, bool $sandboxMode): string
+    {
+        $snapUrl = trim($snapUrl);
+
+        if ($snapUrl === '') {
+            return $sandboxMode
+                ? 'https://app.sandbox.midtrans.com/snap/v1'
+                : 'https://app.midtrans.com/snap/v1';
+        }
+
+        $snapUrl = rtrim($snapUrl, '/');
+
+        if (Str::endsWith($snapUrl, '/transactions')) {
+            $snapUrl = Str::beforeLast($snapUrl, '/transactions');
+        }
+
+        return $snapUrl;
     }
 
     protected function mapWebhookStatus(array $payload): string

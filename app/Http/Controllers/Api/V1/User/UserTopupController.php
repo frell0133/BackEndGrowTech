@@ -72,6 +72,11 @@ class UserTopupController extends Controller
             return $this->fail((string) ($init['message'] ?? 'Gagal membuat topup'), 422);
         }
 
+        $simulatePayEndpoint = $init['simulate_pay_endpoint'] ?? null;
+        if (!$simulatePayEndpoint && ($init['mode'] ?? null) === 'simulation') {
+            $simulatePayEndpoint = rtrim((string) config('app.url'), '/') . '/api/v1/topups/' . $topup->order_id . '/simulate-pay';
+        }
+
         $topup->status = (string) ($init['status'] ?? 'pending');
         $topup->external_id = (string) ($init['external_id'] ?? $topup->order_id);
         $topup->snap_token = (string) ($init['snap_token'] ?? '');
@@ -80,16 +85,19 @@ class UserTopupController extends Controller
         $topup->save();
 
         return $this->ok([
+            'topup_id' => (int) $topup->id,
             'order_id' => $topup->order_id,
             'status' => $topup->status,
             'amount' => (float) $topup->amount,
             'currency' => $topup->currency,
             'gateway_code' => $gateway->code,
             'gateway' => $gateway->code,
+            'external_id' => $topup->external_id,
             'redirect_url' => $topup->redirect_url,
             'snap_token' => $topup->snap_token,
             'reference' => $init['reference'] ?? $topup->external_id,
-            'simulate_pay_endpoint' => $init['simulate_pay_endpoint'] ?? null,
+            'simulate_pay_endpoint' => $simulatePayEndpoint,
+            'status_endpoint' => rtrim((string) config('app.url'), '/') . '/api/v1/wallet/topups/' . $topup->order_id,
             'mode' => $init['mode'] ?? ($gateway->sandbox_mode ? 'sandbox' : 'production'),
             'payment_payload' => $init['payload'] ?? null,
         ]);

@@ -24,9 +24,11 @@ use App\Http\Controllers\Api\V1\User\UserProfileController;
 use App\Http\Controllers\Api\V1\User\UserTopupController;
 use App\Http\Controllers\Api\V1\User\UserCartController;
 use App\Http\Controllers\Api\V1\User\UserFavoriteController;
+use App\Http\Controllers\Api\V1\User\UserTopupStatusController;
 
 // Controllers (Webhook/Simulate)
 use App\Http\Controllers\Api\V1\Webhook\MidtransWebhookController;
+use App\Http\Controllers\Api\V1\Webhook\PaymentWebhookController;
 use App\Http\Controllers\Api\V1\Simulate\SimulateTopupController;
 
 // Controllers (Admin)
@@ -157,14 +159,12 @@ Route::prefix('v1')->group(function () {
     // =========================
     // 3) WEBHOOKS (PUBLIC)
     // =========================
-    Route::post('webhooks/payments/midtrans', [MidtransWebhookController::class, 'handle']);
+    Route::get('payment-gateways/available', [PaymentGatewayController::class, 'available']);
 
-    Route::post('webhooks/payments/{gateway_code}', fn (string $gateway_code) => response()->json([
-        'success' => true,
-        'data' => ['received' => true, 'todo' => true, 'gateway' => $gateway_code],
-        'meta' => (object)[],
-        'error' => null,
-    ]))->where('gateway_code', '^(?!midtrans$).+');
+    Route::post('webhooks/payments/midtrans', [PaymentWebhookController::class, 'handleMidtrans']);
+    Route::post('webhooks/payments/duitku', [PaymentWebhookController::class, 'handleDuitku']);
+    Route::post('webhooks/payments/{gateway_code}', [PaymentWebhookController::class, 'handle'])
+        ->where('gateway_code', '^(?!midtrans$|duitku$).+');
 
     // Simulate topup pay (PUBLIC)
     Route::post('topups/{orderId}/simulate-pay', [SimulateTopupController::class, 'pay']);
@@ -206,11 +206,6 @@ Route::prefix('v1')->group(function () {
         // Payments (User)
         Route::post('orders/{id}/payments', [UserOrderController::class, 'createPayment']);
         Route::get('orders/{id}/payments', [UserOrderController::class, 'paymentStatus']);
-        Route::get('payment-gateways/available', [\App\Http\Controllers\Api\V1\Admin\PaymentGatewayController::class, 'available']);
-
-        Route::post('webhooks/payments/midtrans', [\App\Http\Controllers\Api\V1\Webhook\PaymentWebhookController::class, 'handleMidtrans']);
-        Route::post('webhooks/payments/duitku', [\App\Http\Controllers\Api\V1\Webhook\PaymentWebhookController::class, 'handleDuitku']);
-        Route::post('webhooks/payments/{gateway_code}', [\App\Http\Controllers\Api\V1\Webhook\PaymentWebhookController::class, 'handle']);
 
         // Delivery (User)
         Route::get('orders/{id}/delivery', [UserDeliveryController::class, 'info']);
@@ -225,6 +220,7 @@ Route::prefix('v1')->group(function () {
         // TOPUP QRIS init
         Route::post('wallet/topups/init', [UserTopupController::class, 'init'])
             ->middleware('throttle:20,1');
+        Route::get('wallet/topups/{orderId}', [UserTopupStatusController::class, 'show']);
 
         // Referral (User)
         Route::get('referral', [UserReferralController::class, 'dashboard']);

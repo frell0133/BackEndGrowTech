@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\PaymentGateway;
-use App\Services\Payments\PaymentGatewayManager;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -63,8 +62,7 @@ class PaymentGatewayController extends Controller
 
     public function store(Request $request)
     {
-        $validated = $request->validate($this->rules());
-
+        $validated = $request->validate($this->rules('store'));
         $payload = $this->normalizePayload($validated);
 
         $gateway = PaymentGateway::create($payload);
@@ -95,7 +93,7 @@ class PaymentGatewayController extends Controller
             return $this->fail('Payment gateway tidak ditemukan', 404);
         }
 
-        $validated = $request->validate($this->rules($gateway->id));
+        $validated = $request->validate($this->rules('update', $gateway->id));
         $payload = $this->normalizePayload($validated, $gateway);
 
         $gateway->fill($payload);
@@ -131,30 +129,38 @@ class PaymentGatewayController extends Controller
         ]);
     }
 
-    protected function rules(?int $ignoreId = null): array
+    protected function rules(string $mode = 'store', ?int $ignoreId = null): array
     {
+        $required = $mode === 'store' ? ['required'] : ['sometimes'];
+        $optionalBool = $mode === 'store' ? ['nullable', 'boolean'] : ['sometimes', 'boolean'];
+        $optionalArray = $mode === 'store' ? ['nullable', 'array'] : ['sometimes', 'array'];
+
         return [
-            'code' => [
-                'nullable',
-                'string',
-                'max:100',
-                Rule::unique('payment_gateways', 'code')->ignore($ignoreId),
-            ],
-            'name' => ['required', 'string', 'max:120'],
-            'provider' => ['required', 'string', 'max:100'],
-            'driver' => ['required', 'string', 'max:100'],
-            'description' => ['nullable', 'string'],
-            'is_active' => ['nullable', 'boolean'],
-            'is_default_order' => ['nullable', 'boolean'],
-            'is_default_topup' => ['nullable', 'boolean'],
-            'supports_order' => ['nullable', 'boolean'],
-            'supports_topup' => ['nullable', 'boolean'],
-            'sandbox_mode' => ['nullable', 'boolean'],
-            'fee_type' => ['nullable', Rule::in(['percent', 'fixed'])],
-            'fee_value' => ['nullable', 'numeric', 'min:0'],
-            'sort_order' => ['nullable', 'integer'],
-            'config' => ['nullable', 'array'],
-            'secret_config' => ['nullable', 'array'],
+            'code' => array_merge(
+                $mode === 'store' ? ['nullable'] : ['sometimes'],
+                ['string', 'max:100', Rule::unique('payment_gateways', 'code')->ignore($ignoreId)]
+            ),
+            'name' => array_merge($required, ['string', 'max:120']),
+            'provider' => array_merge($required, ['string', 'max:100']),
+            'driver' => array_merge($required, ['string', 'max:100']),
+            'description' => $mode === 'store' ? ['nullable', 'string'] : ['sometimes', 'nullable', 'string'],
+            'is_active' => $optionalBool,
+            'is_default_order' => $optionalBool,
+            'is_default_topup' => $optionalBool,
+            'supports_order' => $optionalBool,
+            'supports_topup' => $optionalBool,
+            'sandbox_mode' => $optionalBool,
+            'fee_type' => $mode === 'store'
+                ? ['nullable', Rule::in(['percent', 'fixed'])]
+                : ['sometimes', 'nullable', Rule::in(['percent', 'fixed'])],
+            'fee_value' => $mode === 'store'
+                ? ['nullable', 'numeric', 'min:0']
+                : ['sometimes', 'nullable', 'numeric', 'min:0'],
+            'sort_order' => $mode === 'store'
+                ? ['nullable', 'integer']
+                : ['sometimes', 'integer'],
+            'config' => $optionalArray,
+            'secret_config' => $optionalArray,
         ];
     }
 

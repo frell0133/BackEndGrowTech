@@ -417,7 +417,13 @@ class UserOrderController extends Controller
 
         $selected = strtolower(trim((string) ($v['gateway_code'] ?? $v['method'] ?? '')));
         if ($selected === '') {
-            return $this->fail('gateway_code wajib diisi', 422);
+            $defaultGateway = $gatewayManager->defaultForScope('order');
+
+            if (!$defaultGateway) {
+                return $this->fail('Tidak ada payment gateway order yang aktif', 422);
+            }
+
+            $selected = (string) $defaultGateway->code;
         }
 
         $order = Order::query()

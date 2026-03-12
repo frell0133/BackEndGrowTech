@@ -57,7 +57,7 @@ class PaymentWebhookController extends Controller
         OrderFulfillmentService $fulfillment
     ) {
         try {
-            $gateway = $gatewayManager->resolveAnyByCodeOrAlias($gatewayKey);
+            $gateway = $gatewayManager->resolveWebhookGateway($gatewayKey);
 
             if (!$gateway) {
                 return response()->json([
