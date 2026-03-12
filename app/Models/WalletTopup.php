@@ -14,12 +14,14 @@ class WalletTopup extends Model
         'currency',
         'status',
         'gateway_code',
+        'external_id',
         'snap_token',
         'redirect_url',
-        'external_id',
         'raw_callback',
         'posted_to_ledger_at',
         'paid_at',
+        'invoice_emailed_at',
+        'invoice_email_error',
     ];
 
     protected $casts = [
@@ -27,6 +29,7 @@ class WalletTopup extends Model
         'raw_callback' => 'array',
         'posted_to_ledger_at' => 'datetime',
         'paid_at' => 'datetime',
+        'invoice_emailed_at' => 'datetime',
     ];
 
     public function user(): BelongsTo

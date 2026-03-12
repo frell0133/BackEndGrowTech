@@ -16,13 +16,11 @@ class SendInvoiceEmailJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $orderId;
     public int $tries = 3;
     public int $timeout = 120;
 
-    public function __construct(int $orderId)
+    public function __construct(public int $orderId)
     {
-        $this->orderId = $orderId;
     }
 
     private function decodePercent($val): float
@@ -51,8 +49,8 @@ class SendInvoiceEmailJob implements ShouldQueue
         $order = Order::query()
             ->with([
                 'user',
-                'product',       // legacy fallback
-                'items.product', // multi-item
+                'product',
+                'items.product',
                 'payment',
                 'vouchers',
             ])
@@ -63,28 +61,27 @@ class SendInvoiceEmailJob implements ShouldQueue
             return;
         }
 
-        // anti double send
         if (!empty($order->invoice_emailed_at)) {
             Log::info('SendInvoiceEmailJob: already sent', ['order_id' => $order->id]);
             return;
         }
 
         $to = $order->email ?? $order->user?->email;
+
         if (!$to) {
             try {
                 $order->forceFill([
                     'invoice_email_error' => 'Invoice email recipient is empty',
                 ])->save();
-            } catch (\Throwable $ignored) {}
+            } catch (\Throwable $ignored) {
+            }
 
             Log::warning('SendInvoiceEmailJob: email empty', ['order_id' => $order->id]);
             throw new \RuntimeException('Invoice email recipient is empty');
         }
 
-        // ===== items (multi-item) =====
         $items = $order->items;
 
-        // fallback legacy single-product order
         if ($items->isEmpty() && !empty($order->product_id)) {
             $legacyQty = (int) ($order->qty ?? 1);
             $legacySubtotal = (float) ($order->subtotal ?? $order->amount ?? 0);
@@ -105,34 +102,29 @@ class SendInvoiceEmailJob implements ShouldQueue
                 'name' => $it->product->name ?? 'Product',
                 'qty' => (int) ($it->qty ?? 1),
                 'price' => (float) ($it->unit_price ?? 0),
-                'subtotal' => (float) ($it->line_subtotal ?? 0),
+                'subtotal' => (float) ($it->line_subtotal ?? (($it->unit_price ?? 0) * ($it->qty ?? 1))),
             ];
         })->values()->all();
 
-        // ===== payment status/method =====
         $paymentStatus = $order->payment?->status;
         if (is_object($paymentStatus)) {
             $paymentStatus = $paymentStatus->value ?? '-';
         }
         $paymentStatus = $paymentStatus ?? '-';
 
-        $paymentMethod = $order->payment?->gateway_code
-            ?? $order->payment_gateway_code
-            ?? '-';
+        $paymentMethod = $order->payment?->gateway_code ?? $order->payment_gateway_code ?? '-';
 
-        // ===== fallback recalc (order lama) =====
         try {
-            $rawTax = Setting::query()->where('group','payment')->where('key','tax_percent')->value('value');
-            $rawFee = Setting::query()->where('group','payment')->where('key','fee_percent')->value('value');
+            $rawTax = Setting::query()->where('group', 'payment')->where('key', 'tax_percent')->value('value');
+            $rawFee = Setting::query()->where('group', 'payment')->where('key', 'fee_percent')->value('value');
 
             $settingTax = (float) $this->decodePercent($rawTax);
             $settingFee = (float) $this->decodePercent($rawFee);
 
             $subtotal = (float) ($order->subtotal ?? 0);
             $discount = (float) ($order->discount_total ?? 0);
-
             $taxPercent = (float) ($order->tax_percent ?? 0);
-            $taxAmount  = (float) ($order->tax_amount ?? 0);
+            $taxAmount = (float) ($order->tax_amount ?? 0);
 
             if ($taxPercent <= 0 && $settingTax > 0 && $subtotal > 0) {
                 $taxPercent = $settingTax;
@@ -155,9 +147,9 @@ class SendInvoiceEmailJob implements ShouldQueue
                     'gateway_fee_amount' => (float) $feeAmount,
                 ])->save();
             }
-        } catch (\Throwable $ignored) {}
+        } catch (\Throwable $ignored) {
+        }
 
-        // refresh after possible recalc
         $order->refresh();
 
         $html = view('emails.invoice', [
@@ -181,7 +173,8 @@ class SendInvoiceEmailJob implements ShouldQueue
                             ? mb_substr($body, 0, 2000)
                             : mb_substr((string) json_encode($body, JSON_UNESCAPED_UNICODE), 0, 2000),
                     ])->save();
-                } catch (\Throwable $ignored) {}
+                } catch (\Throwable $ignored) {
+                }
 
                 Log::error('SendInvoiceEmailJob: brevo failed', [
                     'order_id' => $order->id,
@@ -205,7 +198,8 @@ class SendInvoiceEmailJob implements ShouldQueue
                 $order->forceFill([
                     'invoice_email_error' => mb_substr($e->getMessage(), 0, 2000),
                 ])->save();
-            } catch (\Throwable $ignored) {}
+            } catch (\Throwable $ignored) {
+            }
 
             Log::error('SendInvoiceEmailJob: exception', [
                 'order_id' => $order->id,

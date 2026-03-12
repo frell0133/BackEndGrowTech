@@ -102,4 +102,32 @@ class UserTopupController extends Controller
             'payment_payload' => $init['payload'] ?? null,
         ]);
     }
+    public function show(Request $request, string $orderId)
+    {
+        $user = $request->user();
+
+        $topup = WalletTopup::query()
+            ->where('user_id', (int) $user->id)
+            ->where('order_id', $orderId)
+            ->first();
+
+        if (!$topup) {
+            return $this->fail('Topup tidak ditemukan', 404);
+        }
+
+        return $this->ok([
+            'id' => (int) $topup->id,
+            'order_id' => $topup->order_id,
+            'status' => $topup->status,
+            'amount' => (float) $topup->amount,
+            'currency' => $topup->currency,
+            'gateway_code' => $topup->gateway_code,
+            'external_id' => $topup->external_id,
+            'paid_at' => optional($topup->paid_at)?->toISOString(),
+            'posted_to_ledger_at' => optional($topup->posted_to_ledger_at)?->toISOString(),
+            'invoice_emailed_at' => optional($topup->invoice_emailed_at)?->toISOString(),
+            'invoice_email_error' => $topup->invoice_email_error,
+            'created_at' => optional($topup->created_at)?->toISOString(),
+        ]);
+    }
 }

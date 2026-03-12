@@ -86,7 +86,23 @@ class PaymentWebhookController extends Controller
                 ->first();
 
             if ($topup) {
-                DB::transaction(function () use ($topup, $gateway, $status, $externalId, $payload, $amount, $event, $ledger) {
+                $finalTopupId = null;
+                $shouldDispatchTopupInvoice = false;
+                $topupOrderId = null;
+
+                DB::transaction(function () use (
+                    $topup,
+                    $gateway,
+                    $status,
+                    $externalId,
+                    $payload,
+                    $amount,
+                    $event,
+                    $ledger,
+                    &$finalTopupId,
+                    &$shouldDispatchTopupInvoice,
+                    &$topupOrderId
+                ) {
                     $locked = WalletTopup::query()
                         ->where('id', $topup->id)
                         ->lockForUpdate()
@@ -115,7 +131,25 @@ class PaymentWebhookController extends Controller
                         $locked->paid_at = $locked->paid_at ?: now();
                         $locked->save();
                     }
+
+                    $finalTopupId = (int) $locked->id;
+                    $topupOrderId = (string) $locked->order_id;
+
+                    if (
+                        $status === 'paid' &&
+                        empty($locked->invoice_emailed_at)
+                    ) {
+                        $shouldDispatchTopupInvoice = true;
+                    }
                 });
+
+                if ($shouldDispatchTopupInvoice && $finalTopupId) {
+                    $this->dispatchWalletTopupInvoiceAfterCommit(
+                        $finalTopupId,
+                        $gateway->code . '_topup_paid',
+                        $topupOrderId
+                    );
+                }
 
                 return response()->json([
                     'success' => true,
@@ -144,7 +178,23 @@ class PaymentWebhookController extends Controller
                 ], 200);
             }
 
-            DB::transaction(function () use ($order, $gateway, $status, $externalId, $payload, $amount, $ledger, $fulfillment) {
+            $finalOrderId = null;
+            $finalInvoiceNumber = null;
+            $shouldDispatchOrderInvoice = false;
+
+            DB::transaction(function () use (
+                $order,
+                $gateway,
+                $status,
+                $externalId,
+                $payload,
+                $amount,
+                $ledger,
+                $fulfillment,
+                &$finalOrderId,
+                &$finalInvoiceNumber,
+                &$shouldDispatchOrderInvoice
+            ) {
                 $lockedOrder = Order::query()
                     ->where('id', $order->id)
                     ->with(['items.product', 'product', 'payment'])
@@ -194,7 +244,10 @@ class PaymentWebhookController extends Controller
                         ]
                     );
 
-                    $result = $this->runFulfillment($fulfillment, $lockedOrder->fresh(['items.product', 'product', 'payment']));
+                    $result = $this->runFulfillment(
+                        $fulfillment,
+                        $lockedOrder->fresh(['items.product', 'product', 'payment'])
+                    );
 
                     $hasDeliveries = method_exists($lockedOrder, 'deliveries')
                         ? $lockedOrder->deliveries()->exists()
@@ -202,19 +255,33 @@ class PaymentWebhookController extends Controller
 
                     if (($result['success'] ?? false) || ($result['ok'] ?? false) || $hasDeliveries) {
                         $lockedOrder->status = OrderStatus::FULFILLED->value;
-                        $lockedOrder->save();
                     }
 
-                    $this->dispatchInvoiceForOrder($lockedOrder, $gateway->code . '_paid');
-                    return;
+                    $lockedOrder->save();
                 }
 
                 if ($status === 'refunded') {
                     $lockedOrder->status = OrderStatus::REFUNDED->value;
+                    $lockedOrder->save();
                 }
 
-                $lockedOrder->save();
+                $finalOrderId = (int) $lockedOrder->id;
+                $finalInvoiceNumber = (string) $lockedOrder->invoice_number;
+
+                if (
+                    $status === 'paid' &&
+                    empty($lockedOrder->invoice_emailed_at)
+                ) {
+                    $shouldDispatchOrderInvoice = true;
+                }
             });
+
+            if ($shouldDispatchOrderInvoice && $finalOrderId) {
+                $this->dispatchInvoiceForOrder(
+                    Order::query()->findOrFail($finalOrderId),
+                    $gateway->code . '_paid'
+                );
+            }
 
             return response()->json([
                 'success' => true,

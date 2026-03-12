@@ -135,8 +135,7 @@
             $gatewayTotal = $baseTotal + $feeAmount;
 
             $method = strtolower((string) ($paymentMethod ?? ($order->payment_gateway_code ?? '')));
-            $isGateway = in_array($method, ['midtrans'], true);
-
+            $isGateway = $method !== '' && $method !== '-';
             $showFee = $isGateway && $feeAmount > 0;
           @endphp
 
