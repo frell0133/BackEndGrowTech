@@ -33,5 +33,45 @@ class SettingsSeeder extends Seeder
                 'is_public' => true,
             ]
         );
+
+        // =========================
+        // SYSTEM ACCESS / MAINTENANCE
+        // =========================
+        $systemDefaults = [
+            'public_access' => [
+                'enabled' => true,
+                'message' => 'Halaman publik sedang maintenance.',
+            ],
+            'user_auth_access' => [
+                'enabled' => true,
+                'message' => 'Login dan registrasi user sedang maintenance.',
+            ],
+            'user_area_access' => [
+                'enabled' => true,
+                'message' => 'Area user sedang maintenance.',
+            ],
+            'catalog_access' => [
+                'enabled' => true,
+                'message' => 'Katalog sedang maintenance.',
+            ],
+            'checkout_access' => [
+                'enabled' => true,
+                'message' => 'Checkout sedang maintenance.',
+            ],
+            'topup_access' => [
+                'enabled' => true,
+                'message' => 'Top up wallet sedang maintenance.',
+            ],
+        ];
+
+        foreach ($systemDefaults as $key => $value) {
+            Setting::updateOrCreate(
+                ['group' => 'system', 'key' => $key],
+                [
+                    'value' => $value,
+                    'is_public' => false,
+                ]
+            );
+        }
     }
 }

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\SystemAccessService;
 use App\Services\TwoFactorService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
@@ -13,7 +14,7 @@ class SocialExchangeController extends Controller
 {
     use ApiResponse;
 
-    public function exchange(Request $request, TwoFactorService $twoFactor)
+    public function exchange(Request $request, TwoFactorService $twoFactor, SystemAccessService $access)
     {
         $validated = $request->validate([
             'code' => ['required', 'string'],
@@ -29,6 +30,14 @@ class SocialExchangeController extends Controller
 
         if (!$user) {
             return $this->fail('User tidak ditemukan.', 404);
+        }
+
+        if (!$access->canUserAuthenticate($user)) {
+            return $this->fail(
+                $access->message('user_auth_access', 'Login sosial user sedang maintenance.'),
+                503,
+                ['maintenance' => true, 'key' => 'user_auth_access']
+            );
         }
 
         $challenge = $twoFactor->startChallenge($user, 'social', [

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\Referral;
 use App\Models\User;
+use App\Services\SystemAccessService;
 use App\Services\TwoFactorService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
@@ -15,8 +16,16 @@ class AuthController extends Controller
 {
     use ApiResponse;
 
-    public function register(Request $request, TwoFactorService $twoFactor)
+    public function register(Request $request, TwoFactorService $twoFactor, SystemAccessService $access)
     {
+        if (!$access->enabled('user_auth_access')) {
+            return $this->fail(
+                $access->message('user_auth_access', 'Registrasi user sedang maintenance.'),
+                503,
+                ['maintenance' => true, 'key' => 'user_auth_access']
+            );
+        }
+
         $data = $request->validate([
             'name' => ['required', 'string', 'max:120'],
             'email' => ['required', 'email', 'max:190', 'unique:users,email'],
@@ -90,7 +99,7 @@ class AuthController extends Controller
         ], 201);
     }
 
-    public function login(Request $request, TwoFactorService $twoFactor)
+    public function login(Request $request, TwoFactorService $twoFactor, SystemAccessService $access)
     {
         $credentials = $request->validate([
             'email' => ['required', 'email'],
@@ -106,6 +115,14 @@ class AuthController extends Controller
 
         if (!$user || !Hash::check((string) $credentials['password'], (string) $user->password)) {
             return $this->fail('Email atau password salah', 422);
+        }
+
+        if (!$access->canUserAuthenticate($user)) {
+            return $this->fail(
+                $access->message('user_auth_access', 'Login user sedang maintenance.'),
+                503,
+                ['maintenance' => true, 'key' => 'user_auth_access']
+            );
         }
 
         $challenge = $twoFactor->startChallenge($user, 'login', [

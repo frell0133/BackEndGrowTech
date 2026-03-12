@@ -28,6 +28,11 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin' => \App\Http\Middleware\EnsureAdminHasRole::class,
             'admin.can' => \App\Http\Middleware\AdminCan::class,
             'admin.super' => \App\Http\Middleware\EnsureSuperAdmin::class,
+
+            // maintenance / access control
+            'public.access' => \App\Http\Middleware\CheckPublicAccess::class,
+            'user.access' => \App\Http\Middleware\CheckUserAccess::class,
+            'feature.access' => \App\Http\Middleware\CheckFeatureAccess::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

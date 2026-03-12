@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\AuthChallenge;
 use App\Models\User;
+use App\Services\SystemAccessService;
 use App\Services\TwoFactorService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
@@ -13,7 +14,7 @@ class TwoFactorController extends Controller
 {
     use ApiResponse;
 
-    public function verify(Request $request, TwoFactorService $twoFactor)
+    public function verify(Request $request, TwoFactorService $twoFactor, SystemAccessService $access)
     {
         $data = $request->validate([
             'challenge_id' => ['required', 'string'],
@@ -42,6 +43,14 @@ class TwoFactorController extends Controller
             return $this->fail('User challenge tidak ditemukan.', 404);
         }
 
+        if (!$access->canUserAuthenticate($user)) {
+            return $this->fail(
+                $access->message('user_auth_access', 'Login user sedang maintenance.'),
+                503,
+                ['maintenance' => true, 'key' => 'user_auth_access']
+            );
+        }
+
         if (!$user->email_verified_at && $this->isDeliverableEmail((string) $user->email)) {
             $user->forceFill([
                 'email_verified_at' => now(),
@@ -58,11 +67,24 @@ class TwoFactorController extends Controller
         ]);
     }
 
-    public function resend(Request $request, TwoFactorService $twoFactor)
+    public function resend(Request $request, TwoFactorService $twoFactor, SystemAccessService $access)
     {
         $data = $request->validate([
             'challenge_id' => ['required', 'string'],
         ]);
+
+        $challenge = AuthChallenge::query()
+            ->with('user')
+            ->where('challenge_id', (string) $data['challenge_id'])
+            ->first();
+
+        if ($challenge && $challenge->user && !$access->canUserAuthenticate($challenge->user)) {
+            return $this->fail(
+                $access->message('user_auth_access', 'Pengiriman ulang OTP sedang dinonaktifkan sementara.'),
+                503,
+                ['maintenance' => true, 'key' => 'user_auth_access']
+            );
+        }
 
         $result = $twoFactor->resendChallenge((string) $data['challenge_id']);
 
