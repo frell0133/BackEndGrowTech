@@ -91,11 +91,9 @@ Route::prefix('v1')->group(function () {
         Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories']);
         Route::get('subcategories', [PublicSubcategoryController::class, 'index']);
 
-        // Products (PUBLIC)
         Route::get('products', [ProductController::class, 'index']);
         Route::get('products/{product}', [ProductController::class, 'show']);
 
-        // (optional) availability stub
         Route::get('products/{product}/availability', fn () => response()->json([
             'success' => true,
             'data' => ['available' => null, 'todo' => true],
@@ -103,7 +101,6 @@ Route::prefix('v1')->group(function () {
             'error' => null,
         ]));
 
-        // Content (PUBLIC)
         Route::prefix('content')->group(function () {
             Route::get('settings', [ContentController::class, 'settings']);
             Route::get('banners', [ContentController::class, 'banners']);
@@ -111,6 +108,17 @@ Route::prefix('v1')->group(function () {
             Route::get('pages/{slug}', [ContentController::class, 'page']);
             Route::get('faqs', [ContentController::class, 'faqs']);
         });
+
+        // CHECK PUBLIK
+        Route::get('maintenance/public-check', fn () => response()->json([
+            'success' => true,
+            'data' => [
+                'allowed' => true,
+                'scope' => 'public',
+            ],
+            'meta' => (object)[],
+            'error' => null,
+        ]));
     });
 
     // =========================
@@ -190,6 +198,16 @@ Route::prefix('v1')->group(function () {
             Route::get('products/{product}', [ProductController::class, 'show'])
                 ->middleware('feature.access:catalog');
         });
+
+        Route::get('user/maintenance-check', fn () => response()->json([
+            'success' => true,
+            'data' => [
+                'allowed' => true,
+                'scope' => 'user',
+            ],
+            'meta' => (object)[],
+            'error' => null,
+        ]));
 
         // Cart
         Route::get('cart', [UserCartController::class, 'show']);
