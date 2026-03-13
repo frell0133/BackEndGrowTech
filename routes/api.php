@@ -179,12 +179,16 @@ Route::prefix('v1')->group(function () {
          * Fungsinya sama dengan public catalog.
          */
         Route::prefix('catalog')->group(function () {
-            Route::get('categories', [PublicCategoryController::class, 'index']);
-            Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories']);
-            Route::get('subcategories', [PublicSubcategoryController::class, 'index']);
-
-            Route::get('products', [ProductController::class, 'index']);
-            Route::get('products/{product}', [ProductController::class, 'show']);
+            Route::get('categories', [PublicCategoryController::class, 'index'])
+            ->middleware('feature.access:catalog');
+            Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories'])
+                ->middleware('feature.access:catalog');
+            Route::get('subcategories', [PublicSubcategoryController::class, 'index'])
+                ->middleware('feature.access:catalog');
+            Route::get('products', [ProductController::class, 'index'])
+                ->middleware('feature.access:catalog');
+            Route::get('products/{product}', [ProductController::class, 'show'])
+                ->middleware('feature.access:catalog');
         });
 
         // Cart
@@ -193,18 +197,26 @@ Route::prefix('v1')->group(function () {
         Route::patch('cart/items/{id}', [UserCartController::class, 'update']);
         Route::delete('cart/items/{id}', [UserCartController::class, 'remove']);
 
-        Route::post('cart/checkout', [UserCartController::class, 'checkout']);
-        Route::get('cart/checkout', [UserCartController::class, 'checkoutPreview']);
+        Route::post('cart/checkout', [UserCartController::class, 'checkout'])
+            ->middleware('feature.access:checkout');
+        Route::get('cart/checkout', [UserCartController::class, 'checkoutPreview'])
+            ->middleware('feature.access:checkout');
 
         // Orders (User)
-        Route::post('orders', [UserOrderController::class, 'store']);
-        Route::get('orders', [UserOrderController::class, 'index']);
-        Route::get('orders/{id}', [UserOrderController::class, 'show']);
-        Route::post('orders/{id}/cancel', [UserOrderController::class, 'cancel']);
+        Route::post('orders', [UserOrderController::class, 'store'])
+            ->middleware('feature.access:checkout');
+        Route::get('orders', [UserOrderController::class, 'index'])
+            ->middleware('feature.access:checkout');
+        Route::get('orders/{id}', [UserOrderController::class, 'show'])
+            ->middleware('feature.access:checkout');
+        Route::post('orders/{id}/cancel', [UserOrderController::class, 'cancel'])
+        ->middleware('feature.access:checkout');
 
         // Payments (User)
-        Route::post('orders/{id}/payments', [UserOrderController::class, 'createPayment']);
-        Route::get('orders/{id}/payments', [UserOrderController::class, 'paymentStatus']);
+        Route::post('orders/{id}/payments', [UserOrderController::class, 'createPayment'])
+            ->middleware('feature.access:checkout');
+        Route::get('orders/{id}/payments', [UserOrderController::class, 'paymentStatus'])
+            ->middleware('feature.access:checkout');
 
         // Delivery (User)
         Route::get('orders/{id}/delivery', [UserDeliveryController::class, 'info']);
@@ -219,8 +231,10 @@ Route::prefix('v1')->group(function () {
 
         // TOPUP QRIS init
         Route::post('wallet/topups/init', [UserTopupController::class, 'init'])
-            ->middleware('throttle:20,1');
-        Route::get('wallet/topups/{orderId}', [UserTopupStatusController::class, 'show']);
+            ->middleware(['feature.access:topup', 'throttle:20,1']);
+
+        Route::get('wallet/topups/{orderId}', [UserTopupStatusController::class, 'show'])
+            ->middleware('feature.access:topup');
 
         // Referral (User)
         Route::get('referral', [UserReferralController::class, 'dashboard']);
@@ -553,7 +567,7 @@ Route::prefix('v1')->group(function () {
         ]);
     });
 
-    Route::get('/api/v1/debug/env-google-keys', function () {
+    Route::get('/debug/env-google-keys', function () {
         $keys = array_values(array_filter(
             array_unique(array_merge(array_keys($_ENV), array_keys($_SERVER))),
             fn ($k) => str_contains($k, 'GOOGLE')
