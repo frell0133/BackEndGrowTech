@@ -27,9 +27,7 @@ use App\Http\Controllers\Api\V1\User\UserFavoriteController;
 use App\Http\Controllers\Api\V1\User\UserTopupStatusController;
 
 // Controllers (Webhook/Simulate)
-use App\Http\Controllers\Api\V1\Webhook\MidtransWebhookController;
 use App\Http\Controllers\Api\V1\Webhook\PaymentWebhookController;
-use App\Http\Controllers\Api\V1\Simulate\SimulateTopupController;
 
 // Controllers (Admin)
 use App\Http\Controllers\Api\V1\Admin\AdminUserController;
@@ -54,6 +52,8 @@ use App\Http\Controllers\Api\V1\Admin\AdminDiscountCampaignController;
 use App\Http\Controllers\Api\V1\Admin\AdminCategoryController;
 use App\Http\Controllers\Api\V1\Admin\AdminSubCategoryController;
 use App\Http\Controllers\Api\V1\Admin\AdminDashboardController;
+use App\Http\Controllers\Api\V1\Admin\AdminProductStockController;
+use App\Http\Controllers\Api\V1\Admin\AdminSystemAccessController;
 
 // Controllers (Public Catalog)
 use App\Http\Controllers\Api\V1\Public\CategoryController as PublicCategoryController;
@@ -166,8 +166,6 @@ Route::prefix('v1')->group(function () {
     Route::post('webhooks/payments/{gateway_code}', [PaymentWebhookController::class, 'handle'])
         ->where('gateway_code', '^(?!midtrans$|duitku$).+');
 
-    // Simulate topup pay (PUBLIC)
-    Route::post('topups/{orderId}/simulate-pay', [SimulateTopupController::class, 'pay']);
 
     // =========================
     // 4) USER AREA (AUTH)
@@ -328,16 +326,27 @@ Route::prefix('v1')->group(function () {
             Route::post('products/{id}/publish', [AdminProductController::class, 'publish']);
         });
 
-        // Licenses / Stock
+        // Licenses
         Route::middleware('admin.can:manage_licenses')->group(function () {
             Route::get('products/{id}/licenses', [AdminLicenseController::class, 'index']);
             Route::get('products/{id}/licenses/summary', [AdminLicenseController::class, 'summary']);
             Route::post('products/{id}/licenses', [AdminLicenseController::class, 'store']);
             Route::post('products/{id}/licenses/upload', [AdminLicenseController::class, 'upload']);
-
             Route::post('licenses/check-duplicates', [AdminLicenseController::class, 'checkDuplicates']);
-            Route::post('products/{id}/take-stock', [AdminLicenseController::class, 'takeStock']);
+        });
 
+        // Product stocks (non-license stock)
+        Route::middleware('admin.can:manage_product_stocks')->group(function () {
+            Route::get('products/{product}/stocks', [AdminProductStockController::class, 'index']);
+            Route::post('products/{product}/stocks/import', [AdminProductStockController::class, 'import']);
+            Route::post('products/{product}/stocks/take', [AdminProductStockController::class, 'take']);
+            Route::post('stocks/{stock}/release', [AdminProductStockController::class, 'release']);
+            Route::post('stocks/{stock}/disable', [AdminProductStockController::class, 'disable']);
+        });
+
+        // Stock proofs / take stock
+        Route::middleware('admin.can:manage_stock_proofs')->group(function () {
+            Route::post('products/{id}/take-stock', [AdminLicenseController::class, 'takeStock']);
             Route::get('stock/proofs', [AdminLicenseController::class, 'proofList']);
             Route::get('stock/proofs/{proof_id}', [AdminLicenseController::class, 'proofDownload']);
             Route::get('stock/proofs/{proof_id}/json', [AdminLicenseController::class, 'proofDownloadJson']);
@@ -356,6 +365,11 @@ Route::prefix('v1')->group(function () {
         Route::middleware('admin.can:manage_deliveries')->group(function () {
             Route::post('orders/{id}/delivery/resend', [AdminDeliveryController::class, 'resend']);
             Route::post('orders/{id}/delivery/revoke', [AdminDeliveryController::class, 'revoke']);
+        });
+
+        // Payments monitoring
+        Route::middleware('admin.can:view_payments')->group(function () {
+            Route::get('payments', [AdminPaymentController::class, 'index']);
         });
 
         // Payment gateways
@@ -411,6 +425,13 @@ Route::prefix('v1')->group(function () {
             Route::post('settings/upsert', [AdminSiteSettingController::class, 'upsert']);
             Route::delete('settings', [AdminSiteSettingController::class, 'destroy']);
             Route::post('settings/icon/sign', [AdminSiteSettingController::class, 'signIconUpload']);
+        });
+
+        // System access / maintenance
+        Route::middleware('admin.can:manage_system_access')->group(function () {
+            Route::get('system-access', [AdminSystemAccessController::class, 'index']);
+            Route::post('system-access/upsert', [AdminSystemAccessController::class, 'upsert']);
+            Route::delete('system-access', [AdminSystemAccessController::class, 'destroy']);
         });
 
         // Banners

@@ -13,9 +13,12 @@ use App\Models\Faq;
 use App\Models\License;
 use App\Models\Order;
 use App\Models\Page;
+use App\Models\Payment;
 use App\Models\PaymentGateway;
 use App\Models\Popup;
 use App\Models\Product;
+use App\Models\ProductStock;
+use App\Models\ProductStockLog;
 use App\Models\ReferralSetting;
 use App\Models\Setting;
 use App\Models\SubCategory;
@@ -65,7 +68,10 @@ class AppServiceProvider extends ServiceProvider
             SubCategory::class,
             Product::class,
             License::class,
+            ProductStock::class,
+            ProductStockLog::class,
             Order::class,
+            Payment::class,
             Delivery::class,
             Voucher::class,
             DiscountCampaign::class,

@@ -66,8 +66,6 @@ return [
     'midtrans' => [
         'server_key' => env('MIDTRANS_SERVER_KEY'),
         'snap_url'   => env('MIDTRANS_SNAP_URL', 'https://app.sandbox.midtrans.com/snap/v1/transactions'),
-        'simulate'   => env('MIDTRANS_SIMULATE', false),
-
     ],
 
 ];

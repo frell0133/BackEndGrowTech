@@ -212,7 +212,10 @@ class AdminAuditLogger
             \App\Models\SubCategory::class => ['entity' => 'subcategories', 'module' => 'catalog', 'label' => 'subcategory', 'action_prefix' => 'subcategory', 'identity' => ['id', 'category_id', 'name', 'slug', 'provider', 'is_active']],
             \App\Models\Product::class => ['entity' => 'products', 'module' => 'catalog', 'label' => 'product', 'action_prefix' => 'product', 'identity' => ['id', 'category_id', 'subcategory_id', 'name', 'slug', 'type', 'is_active', 'is_published']],
             \App\Models\License::class => ['entity' => 'licenses', 'module' => 'catalog', 'label' => 'license', 'action_prefix' => 'license', 'identity' => ['id', 'product_id', 'status', 'taken_by', 'reserved_order_id']],
+            \App\Models\ProductStock::class => ['entity' => 'product_stocks', 'module' => 'catalog', 'label' => 'product stock', 'action_prefix' => 'product_stock', 'identity' => ['id', 'product_id', 'status', 'taken_by', 'reserved_order_id']],
+            \App\Models\ProductStockLog::class => ['entity' => 'product_stock_logs', 'module' => 'catalog', 'label' => 'product stock log', 'action_prefix' => 'product_stock_log', 'identity' => ['id', 'product_stock_id', 'actor_id', 'action']],
             \App\Models\Order::class => ['entity' => 'orders', 'module' => 'orders', 'label' => 'order', 'action_prefix' => 'order', 'identity' => ['id', 'invoice_number', 'user_id', 'status', 'amount']],
+            \App\Models\Payment::class => ['entity' => 'payments', 'module' => 'finance', 'label' => 'payment', 'action_prefix' => 'payment', 'identity' => ['id', 'order_id', 'gateway_code', 'external_id', 'status', 'amount']],
             \App\Models\Delivery::class => ['entity' => 'deliveries', 'module' => 'orders', 'label' => 'delivery', 'action_prefix' => 'delivery', 'identity' => ['id', 'order_id', 'license_id', 'delivery_mode', 'revealed_at', 'emailed_at']],
             \App\Models\Voucher::class => ['entity' => 'vouchers', 'module' => 'marketing', 'label' => 'voucher', 'action_prefix' => 'voucher', 'identity' => ['id', 'code', 'type', 'value', 'quota', 'is_active']],
             \App\Models\DiscountCampaign::class => ['entity' => 'discount_campaigns', 'module' => 'marketing', 'label' => 'discount campaign', 'action_prefix' => 'discount_campaign', 'identity' => ['id', 'name', 'slug', 'enabled', 'discount_type', 'discount_value', 'priority']],
@@ -249,7 +252,7 @@ class AdminAuditLogger
 
         if (count($segments) >= 2 && !in_array(end($segments), ['sign'], true)) {
             $last = end($segments);
-            if (!in_array($last, ['categories', 'subcategories', 'users', 'products', 'licenses', 'orders', 'payment_gateways', 'wallet', 'referrals', 'withdraws', 'vouchers', 'settings', 'banners', 'popups', 'pages', 'faqs', 'discount_campaigns', 'uploads', 'admin_users', 'admin_roles'], true)) {
+            if (!in_array($last, ['categories', 'subcategories', 'users', 'products', 'licenses', 'orders', 'payments', 'payment_gateways', 'wallet', 'referrals', 'withdraws', 'vouchers', 'settings', 'system_access', 'banners', 'popups', 'pages', 'faqs', 'discount_campaigns', 'uploads', 'admin_users', 'admin_roles', 'stocks'], true)) {
                 $base = prev($segments) ?: $segments[0];
                 return Str::singular($base) . '.' . $last;
             }
@@ -292,10 +295,10 @@ class AdminAuditLogger
         $entity = $this->inferEntityFromRoute($request);
 
         return match ($entity) {
-            'categories', 'subcategories', 'products', 'licenses', 'stock' => 'catalog',
+            'categories', 'subcategories', 'products', 'licenses', 'stock', 'stocks' => 'catalog',
             'orders', 'deliveries' => 'orders',
-            'wallet', 'withdraws' => 'finance',
-            'payment_gateways' => 'settings',
+            'payments', 'wallet', 'withdraws' => 'finance',
+            'payment_gateways', 'system_access' => 'settings',
             'referrals', 'referral_settings', 'vouchers', 'discount_campaigns' => 'marketing',
             'settings', 'banners', 'popups', 'pages', 'faqs', 'uploads' => 'content',
             'admin_users', 'admin_roles', 'permissions' => 'rbac',

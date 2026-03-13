@@ -31,7 +31,6 @@ class PaymentGatewaySeeder extends Seeder
                 'fee_value' => 0,
                 'sort_order' => 10,
                 'config' => array_filter([
-                    'simulate' => (bool) env('MIDTRANS_SIMULATE', false),
                     'snap_url' => env('MIDTRANS_SNAP_URL'),
                 ], fn ($v) => $v !== null && $v !== ''),
                 'secret_config' => array_filter([
@@ -53,7 +52,7 @@ class PaymentGatewaySeeder extends Seeder
                 'provider' => 'duitku',
                 'driver' => 'duitku',
                 'description' => 'Default Duitku gateway',
-                'is_active' => false, // biarkan manual aktif lewat admin
+                'is_active' => false,
                 'is_default_order' => false,
                 'is_default_topup' => false,
                 'supports_order' => true,
