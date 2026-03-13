@@ -86,30 +86,31 @@ Route::prefix('v1')->group(function () {
     // =========================
     // 1) PUBLIC CATALOG (UMUM)
     // =========================
-    // Categories/Subcategories (PUBLIC)
-    Route::get('categories', [PublicCategoryController::class, 'index']);
-    Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories']);
-    Route::get('subcategories', [PublicSubcategoryController::class, 'index']);
+    Route::middleware(['public.access'])->group(function () {
+        Route::get('categories', [PublicCategoryController::class, 'index']);
+        Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories']);
+        Route::get('subcategories', [PublicSubcategoryController::class, 'index']);
 
-    // Products (PUBLIC)
-    Route::get('products', [ProductController::class, 'index']);
-    Route::get('products/{product}', [ProductController::class, 'show']);
+        // Products (PUBLIC)
+        Route::get('products', [ProductController::class, 'index']);
+        Route::get('products/{product}', [ProductController::class, 'show']);
 
-    // (optional) availability stub
-    Route::get('products/{product}/availability', fn () => response()->json([
-        'success' => true,
-        'data' => ['available' => null, 'todo' => true],
-        'meta' => (object)[],
-        'error' => null,
-    ]));
+        // (optional) availability stub
+        Route::get('products/{product}/availability', fn () => response()->json([
+            'success' => true,
+            'data' => ['available' => null, 'todo' => true],
+            'meta' => (object)[],
+            'error' => null,
+        ]));
 
-    // Content (PUBLIC)
-    Route::prefix('content')->group(function () {
-        Route::get('settings', [ContentController::class, 'settings']);
-        Route::get('banners', [ContentController::class, 'banners']);
-        Route::get('popup', [ContentController::class, 'popup']);
-        Route::get('pages/{slug}', [ContentController::class, 'page']);
-        Route::get('faqs', [ContentController::class, 'faqs']);
+        // Content (PUBLIC)
+        Route::prefix('content')->group(function () {
+            Route::get('settings', [ContentController::class, 'settings']);
+            Route::get('banners', [ContentController::class, 'banners']);
+            Route::get('popup', [ContentController::class, 'popup']);
+            Route::get('pages/{slug}', [ContentController::class, 'page']);
+            Route::get('faqs', [ContentController::class, 'faqs']);
+        });
     });
 
     // =========================
@@ -170,7 +171,7 @@ Route::prefix('v1')->group(function () {
     // =========================
     // 4) USER AREA (AUTH)
     // =========================
-    Route::middleware('auth:sanctum')->group(function () {
+    Route::middleware(['auth:sanctum', 'user.access'])->group(function () {
 
         /**
          * USER CATALOG (ALIAS)
