@@ -24,6 +24,7 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
     public function __construct(int $orderId)
     {
         $this->orderId = $orderId;
+         $this->onQueue('default');
     }
 
     public function handle(OrderFulfillmentService $fulfill, BrevoMailService $brevo): void
