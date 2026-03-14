@@ -113,20 +113,6 @@ class ProcessPaidOrderJob implements ShouldQueue
             }
         }
 
-        try {
-            $job = SendInvoiceEmailJob::dispatch((int) $order->id)->delay(now()->addSeconds(2));
-
-            if (method_exists($job, 'afterCommit')) {
-                $job->afterCommit();
-            }
-        } catch (\Throwable $e) {
-            Log::error('PROCESS PAID ORDER: invoice dispatch failed', [
-                'order_id' => $order->id,
-                'source' => $this->source,
-                'error' => $e->getMessage(),
-            ]);
-        }
-
         Log::info('PROCESS PAID ORDER DONE', [
             'order_id' => $order->id,
             'source' => $this->source,

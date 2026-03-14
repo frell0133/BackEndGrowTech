@@ -635,6 +635,14 @@ class UserOrderController extends Controller
                     return $result;
                 }
 
+                $freshOrder = Order::query()
+                    ->with(['items.product', 'product', 'payment', 'vouchers'])
+                    ->find((int) $result['order_id']);
+
+                if ($freshOrder && empty($freshOrder->invoice_emailed_at)) {
+                    $this->dispatchInvoiceForOrder($freshOrder, 'wallet_paid');
+                }
+
                 $job = ProcessPaidOrderJob::dispatch(
                     (int) $result['order_id'],
                     'wallet_paid'
@@ -643,6 +651,7 @@ class UserOrderController extends Controller
                 if (method_exists($job, 'afterCommit')) {
                     $job->afterCommit();
                 }
+
 
                 $freshOrder = Order::query()
                     ->with(['items.product', 'product', 'payment', 'vouchers'])
