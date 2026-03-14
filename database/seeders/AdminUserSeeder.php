@@ -22,6 +22,7 @@ class AdminUserSeeder extends Seeder
                 'name' => 'wizard_user',
                 'full_name' => 'Wizard User GrowTech Central',
                 'address' => 'Bandung',
+                'password' => Hash::make('User12345!'),
                 'role' => 'user',
                 'admin_role_id' => null,
                 'tier' => $oldOwner->tier ?: 'member',
