@@ -17,10 +17,10 @@ class SendWalletTopupInvoiceJob implements ShouldQueue
 
     public int $tries = 3;
     public int $timeout = 120;
-    public string $queue = 'default';
 
     public function __construct(public int $topupId)
     {
+        $this->onQueue('default');
     }
 
     protected function resolveRecipientEmail(WalletTopup $topup): array
