@@ -17,6 +17,7 @@ class SendWalletTopupInvoiceJob implements ShouldQueue
 
     public int $tries = 3;
     public int $timeout = 120;
+    public string $queue = 'default';
 
     public function __construct(public int $topupId)
     {
@@ -35,7 +36,6 @@ class SendWalletTopupInvoiceJob implements ShouldQueue
             return;
         }
 
-        // anti double send
         if (!empty($topup->invoice_emailed_at)) {
             Log::info('SendWalletTopupInvoiceJob: already sent', [
                 'topup_id' => $topup->id,
@@ -67,11 +67,27 @@ class SendWalletTopupInvoiceJob implements ShouldQueue
 
         $paymentStatus = $topup->status ?? '-';
 
-        $html = view('emails.wallet-topup-invoice', [
-            'topup' => $topup,
-            'paymentMethod' => $gatewayName,
-            'paymentStatus' => $paymentStatus,
-        ])->render();
+        try {
+            $html = view('emails.wallet-topup-invoice', [
+                'topup' => $topup,
+                'paymentMethod' => $gatewayName,
+                'paymentStatus' => $paymentStatus,
+            ])->render();
+        } catch (\Throwable $e) {
+            try {
+                $topup->forceFill([
+                    'invoice_email_error' => mb_substr('View render failed: ' . $e->getMessage(), 0, 2000),
+                ])->save();
+            } catch (\Throwable $ignored) {
+            }
+
+            Log::error('SendWalletTopupInvoiceJob: view render failed', [
+                'topup_id' => $topup->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            throw $e;
+        }
 
         $subject = 'Invoice Topup Wallet ' . ($topup->order_id ?? ('#' . $topup->id));
 

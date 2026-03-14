@@ -13,15 +13,33 @@ class AdminUserSeeder extends Seeder
     public function run(): void
     {
         // =========================
-        // 1) OWNER / SUPER ADMIN
+        // 0) UBAH wizard lama jadi USER BIASA
+        // =========================
+        $oldOwner = User::where('email', 'wizardtwr@gmail.com')->first();
+
+        if ($oldOwner) {
+            $oldOwner->update([
+                'name' => 'wizard_user',
+                'full_name' => 'Wizard User GrowTech Central',
+                'address' => 'Bandung',
+                'role' => 'user',
+                'admin_role_id' => null,
+                'tier' => $oldOwner->tier ?: 'member',
+            ]);
+
+            $this->ensureGtcReferralCode($oldOwner);
+        }
+
+        // =========================
+        // 1) OWNER / SUPER ADMIN BARU
         // =========================
         $owner = User::updateOrCreate(
-            ['email' => 'wizardtwr@gmail.com'],
+            ['email' => 'emailpercobaan115@gmail.com'],
             [
                 'name' => 'owner',
                 'full_name' => 'Owner GrowTech Central',
                 'address' => 'Bandung',
-                'password' => Hash::make('Admin12345!'),
+                'password' => Hash::make('bismillahsukses'),
                 'role' => 'admin',
                 'tier' => 'member',
             ]
@@ -52,8 +70,8 @@ class AdminUserSeeder extends Seeder
 
         $this->ensureGtcReferralCode($admin);
 
-        // pilih role admin yang valid
-        // opsi yang tersedia di repo: owner, content_admin, catalog_admin,
+        // opsi role yang tersedia:
+        // owner, content_admin, catalog_admin,
         // order_admin, finance_admin, marketing_admin, auditor
         $adminRole = AdminRole::where('slug', 'catalog_admin')->first();
 

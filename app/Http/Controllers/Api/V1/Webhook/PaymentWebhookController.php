@@ -15,6 +15,7 @@ use App\Services\ReferralCommissionService;
 use App\Support\DispatchesInvoiceEmail;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class PaymentWebhookController extends Controller
@@ -74,6 +75,14 @@ class PaymentWebhookController extends Controller
             $amount = (float) ($event['amount'] ?? 0);
             $payload = is_array($event['payload'] ?? null) ? $event['payload'] : $request->all();
 
+            Log::info('PAYMENT WEBHOOK RECEIVED', [
+                'gateway' => $gateway->code,
+                'merchant_order_id' => $merchantOrderId,
+                'external_id' => $externalId,
+                'status' => $status,
+                'amount' => $amount,
+            ]);
+
             if ($merchantOrderId === '') {
                 return response()->json([
                     'success' => false,
@@ -108,6 +117,10 @@ class PaymentWebhookController extends Controller
                         ->lockForUpdate()
                         ->first();
 
+                    if (!$locked) {
+                        throw new \RuntimeException('Wallet topup not found during transaction');
+                    }
+
                     $locked->gateway_code = $gateway->code;
                     $locked->external_id = $externalId !== '' ? $externalId : $locked->external_id;
                     $locked->status = $status;
@@ -130,17 +143,28 @@ class PaymentWebhookController extends Controller
                         $locked->posted_to_ledger_at = now();
                         $locked->paid_at = $locked->paid_at ?: now();
                         $locked->save();
+
+                        Log::info('TOPUP LEDGER POSTED', [
+                            'topup_id' => $locked->id,
+                            'user_id' => $locked->user_id,
+                            'order_id' => $locked->order_id,
+                            'gateway' => $gateway->code,
+                        ]);
                     }
 
                     $finalTopupId = (int) $locked->id;
                     $topupOrderId = (string) $locked->order_id;
 
-                    if (
-                        $status === 'paid' &&
-                        empty($locked->invoice_emailed_at)
-                    ) {
+                    if ($status === 'paid' && empty($locked->invoice_emailed_at)) {
                         $shouldDispatchTopupInvoice = true;
                     }
+
+                    Log::info('TOPUP WEBHOOK PROCESSED IN TX', [
+                        'topup_id' => $locked->id,
+                        'order_id' => $locked->order_id,
+                        'status' => $status,
+                        'should_dispatch_topup_invoice' => $shouldDispatchTopupInvoice,
+                    ]);
                 });
 
                 if ($shouldDispatchTopupInvoice && $finalTopupId) {
@@ -149,6 +173,14 @@ class PaymentWebhookController extends Controller
                         $gateway->code . '_topup_paid',
                         $topupOrderId
                     );
+                } else {
+                    Log::info('TOPUP INVOICE NOT DISPATCHED', [
+                        'topup_id' => $finalTopupId,
+                        'status' => $status,
+                        'reason' => $status !== 'paid'
+                            ? 'status_not_paid'
+                            : 'already_emailed_or_invalid_topup',
+                    ]);
                 }
 
                 return response()->json([
@@ -172,6 +204,12 @@ class PaymentWebhookController extends Controller
             }
 
             if (!$order) {
+                Log::warning('ORDER WEBHOOK IGNORED NOT FOUND', [
+                    'gateway' => $gateway->code,
+                    'merchant_order_id' => $merchantOrderId,
+                    'external_id' => $externalId,
+                ]);
+
                 return response()->json([
                     'success' => true,
                     'message' => 'IGNORED_NOT_FOUND',
@@ -200,6 +238,10 @@ class PaymentWebhookController extends Controller
                     ->with(['items.product', 'product', 'payment'])
                     ->lockForUpdate()
                     ->first();
+
+                if (!$lockedOrder) {
+                    throw new \RuntimeException('Order not found during transaction');
+                }
 
                 $alreadyPaid = in_array((string) ($lockedOrder->status?->value ?? $lockedOrder->status), [
                     OrderStatus::PAID->value,
@@ -234,6 +276,12 @@ class PaymentWebhookController extends Controller
                     $lockedOrder->status = OrderStatus::PAID->value;
                     $lockedOrder->save();
 
+                    Log::info('ORDER MARKED PAID', [
+                        'order_id' => $lockedOrder->id,
+                        'invoice_number' => $lockedOrder->invoice_number,
+                        'gateway' => $gateway->code,
+                    ]);
+
                     app(ReferralCommissionService::class)->handleOrderPaid(
                         $lockedOrder->fresh(),
                         $ledger,
@@ -255,6 +303,13 @@ class PaymentWebhookController extends Controller
 
                     if (($result['success'] ?? false) || ($result['ok'] ?? false) || $hasDeliveries) {
                         $lockedOrder->status = OrderStatus::FULFILLED->value;
+
+                        Log::info('ORDER MARKED FULFILLED', [
+                            'order_id' => $lockedOrder->id,
+                            'invoice_number' => $lockedOrder->invoice_number,
+                            'has_deliveries' => $hasDeliveries,
+                            'result' => $result,
+                        ]);
                     }
 
                     $lockedOrder->save();
@@ -263,17 +318,27 @@ class PaymentWebhookController extends Controller
                 if ($status === 'refunded') {
                     $lockedOrder->status = OrderStatus::REFUNDED->value;
                     $lockedOrder->save();
+
+                    Log::info('ORDER MARKED REFUNDED', [
+                        'order_id' => $lockedOrder->id,
+                        'invoice_number' => $lockedOrder->invoice_number,
+                    ]);
                 }
 
                 $finalOrderId = (int) $lockedOrder->id;
                 $finalInvoiceNumber = (string) $lockedOrder->invoice_number;
 
-                if (
-                    $status === 'paid' &&
-                    empty($lockedOrder->invoice_emailed_at)
-                ) {
+                if ($status === 'paid' && empty($lockedOrder->invoice_emailed_at)) {
                     $shouldDispatchOrderInvoice = true;
                 }
+
+                Log::info('ORDER WEBHOOK PROCESSED IN TX', [
+                    'order_id' => $lockedOrder->id,
+                    'invoice_number' => $lockedOrder->invoice_number,
+                    'status' => $status,
+                    'should_dispatch_order_invoice' => $shouldDispatchOrderInvoice,
+                    'invoice_emailed_at' => $lockedOrder->invoice_emailed_at,
+                ]);
             });
 
             if ($shouldDispatchOrderInvoice && $finalOrderId) {
@@ -281,6 +346,15 @@ class PaymentWebhookController extends Controller
                     Order::query()->findOrFail($finalOrderId),
                     $gateway->code . '_paid'
                 );
+            } else {
+                Log::info('ORDER INVOICE NOT DISPATCHED', [
+                    'order_id' => $finalOrderId,
+                    'invoice_number' => $finalInvoiceNumber,
+                    'status' => $status,
+                    'reason' => $status !== 'paid'
+                        ? 'status_not_paid'
+                        : 'already_emailed_or_invalid_order',
+                ]);
             }
 
             return response()->json([
@@ -288,12 +362,22 @@ class PaymentWebhookController extends Controller
                 'message' => 'ORDER_PROCESSED',
             ], 200);
         } catch (ValidationException $e) {
+            Log::error('PAYMENT WEBHOOK VALIDATION ERROR', [
+                'message' => $e->getMessage(),
+                'errors' => $e->errors(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage(),
                 'errors' => $e->errors(),
             ], 400);
         } catch (\Throwable $e) {
+            Log::error('PAYMENT WEBHOOK FATAL ERROR', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage(),
@@ -311,15 +395,43 @@ class PaymentWebhookController extends Controller
             try {
                 $result = $fulfillment->{$method}($order);
 
+                Log::info('ORDER FULFILLMENT METHOD EXECUTED', [
+                    'method' => $method,
+                    'order_id' => $order->id,
+                    'invoice_number' => $order->invoice_number,
+                    'result_type' => gettype($result),
+                ]);
+
                 if (is_array($result)) {
                     return $result;
                 }
 
                 return ['success' => $result !== false];
             } catch (\ArgumentCountError $e) {
+                Log::warning('ORDER FULFILLMENT ARGUMENT COUNT ERROR', [
+                    'method' => $method,
+                    'order_id' => $order->id,
+                    'invoice_number' => $order->invoice_number,
+                    'error' => $e->getMessage(),
+                ]);
+
                 continue;
+            } catch (\Throwable $e) {
+                Log::error('ORDER FULFILLMENT EXECUTION FAILED', [
+                    'method' => $method,
+                    'order_id' => $order->id,
+                    'invoice_number' => $order->invoice_number,
+                    'error' => $e->getMessage(),
+                ]);
+
+                return ['success' => false, 'error' => $e->getMessage()];
             }
         }
+
+        Log::warning('ORDER FULFILLMENT NO METHOD MATCHED', [
+            'order_id' => $order->id,
+            'invoice_number' => $order->invoice_number,
+        ]);
 
         return ['success' => false];
     }
@@ -333,17 +445,51 @@ class PaymentWebhookController extends Controller
 
             try {
                 $this->{$method}((int) $order->id, $reason, (string) $order->invoice_number);
+
+                Log::info('dispatchInvoiceForOrder success', [
+                    'method' => $method,
+                    'order_id' => $order->id,
+                    'invoice_number' => $order->invoice_number,
+                    'reason' => $reason,
+                ]);
+
                 return;
             } catch (\ArgumentCountError $e) {
                 try {
                     $this->{$method}((int) $order->id);
+
+                    Log::info('dispatchInvoiceForOrder success with fallback args', [
+                        'method' => $method,
+                        'order_id' => $order->id,
+                        'invoice_number' => $order->invoice_number,
+                        'reason' => $reason,
+                    ]);
+
                     return;
                 } catch (\Throwable $e2) {
-                    return;
+                    Log::error('dispatchInvoiceForOrder fallback failed', [
+                        'method' => $method,
+                        'order_id' => $order->id,
+                        'invoice_number' => $order->invoice_number,
+                        'reason' => $reason,
+                        'error' => $e2->getMessage(),
+                    ]);
                 }
             } catch (\Throwable $e) {
-                return;
+                Log::error('dispatchInvoiceForOrder failed', [
+                    'method' => $method,
+                    'order_id' => $order->id,
+                    'invoice_number' => $order->invoice_number,
+                    'reason' => $reason,
+                    'error' => $e->getMessage(),
+                ]);
             }
         }
+
+        Log::error('dispatchInvoiceForOrder: no dispatch method succeeded', [
+            'order_id' => $order->id,
+            'invoice_number' => $order->invoice_number,
+            'reason' => $reason,
+        ]);
     }
 }

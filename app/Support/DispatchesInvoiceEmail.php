@@ -23,9 +23,11 @@ trait DispatchesInvoiceEmail
             ]);
 
             try {
-                $job = SendInvoiceEmailJob::dispatch($orderId)->delay(now()->addSeconds(3));
+                $job = SendInvoiceEmailJob::dispatch($orderId)
+                    ->onQueue('default')
+                    ->delay(now()->addSeconds(3));
 
-                if (method_exists($job, 'afterCommit')) {
+                if (is_object($job) && method_exists($job, 'afterCommit')) {
                     $job->afterCommit();
                 }
 
@@ -33,12 +35,15 @@ trait DispatchesInvoiceEmail
                     'type' => 'order',
                     'source' => $source,
                     'order_id' => $orderId,
+                    'invoice_number' => $invoiceNumber,
+                    'queue' => 'default',
                 ]);
             } catch (\Throwable $e) {
                 Log::error('INVOICE DISPATCH FAILED', [
                     'type' => 'order',
                     'source' => $source,
                     'order_id' => $orderId,
+                    'invoice_number' => $invoiceNumber,
                     'error' => $e->getMessage(),
                 ]);
             }
@@ -72,9 +77,11 @@ trait DispatchesInvoiceEmail
             ]);
 
             try {
-                $job = SendWalletTopupInvoiceJob::dispatch($topupId)->delay(now()->addSeconds(3));
+                $job = SendWalletTopupInvoiceJob::dispatch($topupId)
+                    ->onQueue('default')
+                    ->delay(now()->addSeconds(3));
 
-                if (method_exists($job, 'afterCommit')) {
+                if (is_object($job) && method_exists($job, 'afterCommit')) {
                     $job->afterCommit();
                 }
 
@@ -82,12 +89,15 @@ trait DispatchesInvoiceEmail
                     'type' => 'wallet_topup',
                     'source' => $source,
                     'topup_id' => $topupId,
+                    'order_id' => $orderId,
+                    'queue' => 'default',
                 ]);
             } catch (\Throwable $e) {
                 Log::error('TOPUP INVOICE DISPATCH FAILED', [
                     'type' => 'wallet_topup',
                     'source' => $source,
                     'topup_id' => $topupId,
+                    'order_id' => $orderId,
                     'error' => $e->getMessage(),
                 ]);
             }

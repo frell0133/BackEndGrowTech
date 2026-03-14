@@ -43,13 +43,13 @@
                 <tr>
                   <td style="padding:6px 0;color:#888580;font-size:13px;width:180px;">Tanggal Dibuat</td>
                   <td style="padding:6px 0;color:#2d2a24;font-size:13px;font-weight:600;">
-                    {{ optional($topup->created_at)->timezone('Asia/Jakarta')->format('d M Y H:i') }} WIB
+                    {{ $topup->created_at ? \Carbon\Carbon::parse($topup->created_at)->timezone('Asia/Jakarta')->format('d M Y H:i') . ' WIB' : '-' }}
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:6px 0;color:#888580;font-size:13px;">Tanggal Dibayar</td>
                   <td style="padding:6px 0;color:#2d2a24;font-size:13px;font-weight:600;">
-                    {{ optional($topup->paid_at)->timezone('Asia/Jakarta')->format('d M Y H:i') ?? '-' }} WIB
+                    {{ $topup->paid_at ? \Carbon\Carbon::parse($topup->paid_at)->timezone('Asia/Jakarta')->format('d M Y H:i') . ' WIB' : '-' }}
                   </td>
                 </tr>
                 <tr>
@@ -60,7 +60,7 @@
                 </tr>
                 <tr>
                   <td style="padding:6px 0;color:#888580;font-size:13px;">Status Pembayaran</td>
-                  <td style="padding:6px 0;color:#2d2a24;font-size:13px;font-weight:600;">
+                  <td style="padding:6px 0;color:#2d2a24;font-size:13px;font-weight:600;text-transform:capitalize;">
                     {{ $paymentStatus ?? ($topup->status ?? '-') }}
                   </td>
                 </tr>
