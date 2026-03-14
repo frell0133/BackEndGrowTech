@@ -25,6 +25,7 @@ use App\Support\DispatchesInvoiceEmail;
 use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
 use App\Models\Referral;
+use App\Jobs\ProcessPaidOrderJob;
 
 // ✅ NEW: service untuk komisi referral saat PAID (wallet/midtrans)
 use App\Services\ReferralCommissionService;
@@ -554,7 +555,7 @@ class UserOrderController extends Controller
 
         if ($this->isWalletMethod($selected)) {
             try {
-                return DB::transaction(function () use ($order, $user, $ledger, $fulfillment) {
+                $result = DB::transaction(function () use ($order, $user, $ledger) {
                     $locked = Order::query()
                         ->where('id', (int) $order->id)
                         ->where('user_id', (int) $user->id)
@@ -567,6 +568,7 @@ class UserOrderController extends Controller
                     }
 
                     $curStatus = (string) ($locked->status?->value ?? $locked->status);
+
                     if (in_array($curStatus, [
                         \App\Enums\OrderStatus::PAID->value,
                         \App\Enums\OrderStatus::FULFILLED->value,
@@ -599,12 +601,7 @@ class UserOrderController extends Controller
                     $ledger->purchase(
                         (int) $user->id,
                         $amountInt,
-                        'PAY ORDER ' . (string) $locked->invoice_number,
-                        [
-                            'order_id' => (int) $locked->id,
-                            'invoice_number' => (string) $locked->invoice_number,
-                            'gateway' => 'wallet',
-                        ]
+                        'PAY ORDER ' . (string) $locked->invoice_number
                     );
 
                     $locked->payment_gateway_code = 'wallet';
@@ -628,35 +625,38 @@ class UserOrderController extends Controller
                     ];
                     $payment->save();
 
-                    app(\App\Services\ReferralCommissionService::class)->handleOrderPaid(
-                        $locked->fresh(),
-                        $ledger,
-                        [
-                            'gateway' => 'wallet',
-                            'direct' => true,
-                        ]
-                    );
-
-                    $fulfillmentResult = $this->runOrderFulfillment($fulfillment, $locked->fresh(['items.product', 'product', 'payment']));
-                    $hasDeliveries = method_exists($locked, 'deliveries')
-                        ? $locked->deliveries()->exists()
-                        : false;
-
-                    if (($fulfillmentResult['success'] ?? false) || ($fulfillmentResult['ok'] ?? false) || $hasDeliveries) {
-                        $locked->status = \App\Enums\OrderStatus::FULFILLED->value;
-                        $locked->save();
-                    }
-
-                    $this->dispatchInvoiceForOrder($locked, 'wallet_paid');
-
-                    return $this->ok([
-                        'method' => 'wallet',
-                        'status' => 'paid',
-                        'order' => $locked->fresh()->load(['items.product', 'product', 'payment', 'vouchers']),
-                        'payment' => $payment->fresh(),
-                        'fulfillment' => $fulfillmentResult,
-                    ]);
+                    return [
+                        'order_id' => (int) $locked->id,
+                        'payment_id' => (int) $payment->id,
+                    ];
                 });
+
+                if ($result instanceof \Illuminate\Http\JsonResponse) {
+                    return $result;
+                }
+
+                $job = ProcessPaidOrderJob::dispatch(
+                    (int) $result['order_id'],
+                    'wallet_paid'
+                )->delay(now()->addSeconds(1));
+
+                if (method_exists($job, 'afterCommit')) {
+                    $job->afterCommit();
+                }
+
+                $freshOrder = Order::query()
+                    ->with(['items.product', 'product', 'payment', 'vouchers'])
+                    ->find((int) $result['order_id']);
+
+                return $this->ok([
+                    'method' => 'wallet',
+                    'status' => 'paid',
+                    'processing' => [
+                        'queued' => true,
+                        'next_step' => 'fulfillment_and_invoice',
+                    ],
+                    'order' => $freshOrder,
+                ]);
             } catch (\Illuminate\Validation\ValidationException $e) {
                 return $this->fail($e->getMessage(), 422, [
                     'errors' => $e->errors(),
@@ -672,6 +672,7 @@ class UserOrderController extends Controller
                 return $this->fail($e->getMessage(), 422);
             }
         }
+
 
         $gateway = $gatewayManager->resolveActiveByCodeOrAlias($selected, 'order');
         if (!$gateway) {
