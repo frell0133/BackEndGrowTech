@@ -21,6 +21,7 @@ class SendInvoiceEmailJob implements ShouldQueue
 
     public function __construct(public int $orderId)
     {
+        $this->onQueue('default');
     }
 
     private function decodePercent($val): float

@@ -9,42 +9,35 @@ use Illuminate\Support\Facades\Log;
 
 trait DispatchesInvoiceEmail
 {
-    protected function afterCommitOrNow(callable $callback): void
-    {
-        if (DB::transactionLevel() > 0) {
-            DB::afterCommit($callback);
-            return;
-        }
-
-        $callback();
-    }
-
-    protected function runOrderInvoiceNow(
+    protected function dispatchOrderInvoiceJob(
         int $orderId,
         string $source = 'unknown',
         ?string $invoiceNumber = null
     ): void {
-        Log::info('INVOICE EXECUTION REQUESTED', [
+        Log::info('INVOICE DISPATCH REQUESTED', [
             'type' => 'order',
             'source' => $source,
             'order_id' => $orderId,
             'invoice_number' => $invoiceNumber,
-            'mode' => 'sync_after_commit',
+            'mode' => 'queue_after_commit',
         ]);
 
         try {
-            $job = new SendInvoiceEmailJob($orderId);
-            app()->call([$job, 'handle']);
+            $job = SendInvoiceEmailJob::dispatch($orderId)->delay(now()->addSeconds(2));
 
-            Log::info('INVOICE EXECUTION FINISHED', [
+            if (method_exists($job, 'afterCommit')) {
+                $job->afterCommit();
+            }
+
+            Log::info('INVOICE DISPATCHED', [
                 'type' => 'order',
                 'source' => $source,
                 'order_id' => $orderId,
                 'invoice_number' => $invoiceNumber,
-                'mode' => 'sync_after_commit',
+                'mode' => 'queue_after_commit',
             ]);
         } catch (\Throwable $e) {
-            Log::error('INVOICE EXECUTION FAILED', [
+            Log::error('INVOICE DISPATCH FAILED', [
                 'type' => 'order',
                 'source' => $source,
                 'order_id' => $orderId,
@@ -54,32 +47,35 @@ trait DispatchesInvoiceEmail
         }
     }
 
-    protected function runWalletTopupInvoiceNow(
+    protected function dispatchTopupInvoiceJob(
         int $topupId,
         string $source = 'unknown',
         ?string $orderId = null
     ): void {
-        Log::info('TOPUP INVOICE EXECUTION REQUESTED', [
+        Log::info('TOPUP INVOICE DISPATCH REQUESTED', [
             'type' => 'wallet_topup',
             'source' => $source,
             'topup_id' => $topupId,
             'order_id' => $orderId,
-            'mode' => 'sync_after_commit',
+            'mode' => 'queue_after_commit',
         ]);
 
         try {
-            $job = new SendWalletTopupInvoiceJob($topupId);
-            app()->call([$job, 'handle']);
+            $job = SendWalletTopupInvoiceJob::dispatch($topupId)->delay(now()->addSeconds(2));
 
-            Log::info('TOPUP INVOICE EXECUTION FINISHED', [
+            if (method_exists($job, 'afterCommit')) {
+                $job->afterCommit();
+            }
+
+            Log::info('TOPUP INVOICE DISPATCHED', [
                 'type' => 'wallet_topup',
                 'source' => $source,
                 'topup_id' => $topupId,
                 'order_id' => $orderId,
-                'mode' => 'sync_after_commit',
+                'mode' => 'queue_after_commit',
             ]);
         } catch (\Throwable $e) {
-            Log::error('TOPUP INVOICE EXECUTION FAILED', [
+            Log::error('TOPUP INVOICE DISPATCH FAILED', [
                 'type' => 'wallet_topup',
                 'source' => $source,
                 'topup_id' => $topupId,
@@ -94,13 +90,20 @@ trait DispatchesInvoiceEmail
         string $source = 'unknown',
         ?string $invoiceNumber = null
     ): void {
-        $this->afterCommitOrNow(function () use ($orderId, $source, $invoiceNumber) {
-            $this->runOrderInvoiceNow($orderId, $source, $invoiceNumber);
-        });
+        if (DB::transactionLevel() > 0) {
+            DB::afterCommit(function () use ($orderId, $source, $invoiceNumber) {
+                $this->dispatchOrderInvoiceJob($orderId, $source, $invoiceNumber);
+            });
+            return;
+        }
+
+        $this->dispatchOrderInvoiceJob($orderId, $source, $invoiceNumber);
     }
 
-    protected function dispatchInvoiceEmail(int $orderId, string $source = 'unknown'): void
-    {
+    protected function dispatchInvoiceEmail(
+        int $orderId,
+        string $source = 'unknown'
+    ): void {
         $this->dispatchInvoiceEmailAfterCommit($orderId, $source);
     }
 
@@ -117,9 +120,14 @@ trait DispatchesInvoiceEmail
         string $source = 'unknown',
         ?string $orderId = null
     ): void {
-        $this->afterCommitOrNow(function () use ($topupId, $source, $orderId) {
-            $this->runWalletTopupInvoiceNow($topupId, $source, $orderId);
-        });
+        if (DB::transactionLevel() > 0) {
+            DB::afterCommit(function () use ($topupId, $source, $orderId) {
+                $this->dispatchTopupInvoiceJob($topupId, $source, $orderId);
+            });
+            return;
+        }
+
+        $this->dispatchTopupInvoiceJob($topupId, $source, $orderId);
     }
 
     protected function dispatchInvoiceForTopup(
@@ -127,7 +135,7 @@ trait DispatchesInvoiceEmail
         string $reason = 'unknown',
         ?string $orderId = null
     ): void {
-        foreach (['dispatchWalletTopupInvoiceAfterCommit', 'runWalletTopupInvoiceNow'] as $method) {
+        foreach (['dispatchWalletTopupInvoiceAfterCommit', 'dispatchTopupInvoiceJob'] as $method) {
             if (!method_exists($this, $method)) {
                 continue;
             }
