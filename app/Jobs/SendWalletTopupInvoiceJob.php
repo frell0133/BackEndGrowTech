@@ -23,6 +23,26 @@ class SendWalletTopupInvoiceJob implements ShouldQueue
     {
     }
 
+    protected function resolveRecipientEmail(WalletTopup $topup): array
+    {
+        $candidates = [
+            'user.email' => $topup->user?->email,
+            'raw_callback.init.request.customer_details.email' => data_get($topup->raw_callback, 'init.request.customer_details.email'),
+            'raw_callback.webhook.customer_details.email' => data_get($topup->raw_callback, 'webhook.customer_details.email'),
+            'raw_callback.customer_details.email' => data_get($topup->raw_callback, 'customer_details.email'),
+            'raw_callback.email' => data_get($topup->raw_callback, 'email'),
+        ];
+
+        foreach ($candidates as $source => $email) {
+            $email = trim((string) $email);
+            if ($email !== '') {
+                return [$email, $source];
+            }
+        }
+
+        return ['', 'empty'];
+    }
+
     public function handle(BrevoMailService $brevo): void
     {
         $topup = WalletTopup::query()
@@ -43,9 +63,9 @@ class SendWalletTopupInvoiceJob implements ShouldQueue
             return;
         }
 
-        $to = $topup->user?->email;
+        [$to, $recipientSource] = $this->resolveRecipientEmail($topup);
 
-        if (!$to) {
+        if ($to === '') {
             try {
                 $topup->forceFill([
                     'invoice_email_error' => 'Wallet topup invoice recipient is empty',
@@ -55,6 +75,8 @@ class SendWalletTopupInvoiceJob implements ShouldQueue
 
             Log::warning('SendWalletTopupInvoiceJob: email empty', [
                 'topup_id' => $topup->id,
+                'user_id' => $topup->user_id,
+                'recipient_source' => $recipientSource,
             ]);
 
             throw new \RuntimeException('Wallet topup invoice recipient is empty');
@@ -108,6 +130,8 @@ class SendWalletTopupInvoiceJob implements ShouldQueue
 
                 Log::error('SendWalletTopupInvoiceJob: brevo failed', [
                     'topup_id' => $topup->id,
+                    'to' => $to,
+                    'recipient_source' => $recipientSource,
                     'response' => $res,
                 ]);
 
@@ -122,6 +146,7 @@ class SendWalletTopupInvoiceJob implements ShouldQueue
             Log::info('SendWalletTopupInvoiceJob: success', [
                 'topup_id' => $topup->id,
                 'to' => $to,
+                'recipient_source' => $recipientSource,
             ]);
         } catch (\Throwable $e) {
             try {
@@ -133,6 +158,8 @@ class SendWalletTopupInvoiceJob implements ShouldQueue
 
             Log::error('SendWalletTopupInvoiceJob: exception', [
                 'topup_id' => $topup->id,
+                'to' => $to,
+                'recipient_source' => $recipientSource,
                 'error' => $e->getMessage(),
             ]);
 

@@ -121,10 +121,15 @@ class PaymentWebhookController extends Controller
                         throw new \RuntimeException('Wallet topup not found during transaction');
                     }
 
+                    $existingRaw = is_array($locked->raw_callback) ? $locked->raw_callback : [];
+
                     $locked->gateway_code = $gateway->code;
                     $locked->external_id = $externalId !== '' ? $externalId : $locked->external_id;
                     $locked->status = $status;
-                    $locked->raw_callback = $payload;
+                    $locked->raw_callback = array_merge($existingRaw, [
+                        'webhook' => $payload,
+                    ]);
+
 
                     if ($status === 'paid' && !$locked->paid_at) {
                         $locked->paid_at = $event['paid_at'] ?? now();
@@ -167,13 +172,13 @@ class PaymentWebhookController extends Controller
                     ]);
                 });
 
-                if ($shouldDispatchTopupInvoice && $finalTopupId) {
-                    $this->dispatchWalletTopupInvoiceAfterCommit(
-                        $finalTopupId,
-                        $gateway->code . '_topup_paid',
-                        $topupOrderId
-                    );
-                } else {
+                    if ($shouldDispatchTopupInvoice && $finalTopupId) {
+                        $this->dispatchInvoiceForTopup(
+                            $finalTopupId,
+                            $gateway->code . '_topup_paid',
+                            $topupOrderId
+                        );
+                    } else {
                     Log::info('TOPUP INVOICE NOT DISPATCHED', [
                         'topup_id' => $finalTopupId,
                         'status' => $status,

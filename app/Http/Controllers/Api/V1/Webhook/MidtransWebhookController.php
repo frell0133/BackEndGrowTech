@@ -127,7 +127,11 @@ class MidtransWebhookController extends Controller
                     $alreadyPosted = in_array((string) $lockedTopup->status, ['paid', 'success', 'completed'], true)
                         || !empty($lockedTopup->posted_to_ledger_at);
 
-                    $lockedTopup->raw_callback = $payload;
+                   $existingRaw = is_array($lockedTopup->raw_callback) ? $lockedTopup->raw_callback : [];
+
+                    $lockedTopup->raw_callback = array_merge($existingRaw, [
+                        'webhook' => $payload,
+                    ]);
                     $lockedTopup->external_id = $payload['transaction_id'] ?? $lockedTopup->external_id;
 
                     if (!$alreadyPosted) {
@@ -189,7 +193,7 @@ class MidtransWebhookController extends Controller
                 });
 
                 if ($shouldDispatchTopupInvoice && $finalTopupId) {
-                    $this->dispatchWalletTopupInvoiceAfterCommit(
+                    $this->dispatchInvoiceForTopup(
                         (int) $finalTopupId,
                         'midtrans_topup_paid',
                         (string) $topupOrderId

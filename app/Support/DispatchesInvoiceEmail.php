@@ -121,4 +121,43 @@ trait DispatchesInvoiceEmail
             $this->runWalletTopupInvoiceNow($topupId, $source, $orderId);
         });
     }
+
+    protected function dispatchInvoiceForTopup(
+        int $topupId,
+        string $reason = 'unknown',
+        ?string $orderId = null
+    ): void {
+        foreach (['dispatchWalletTopupInvoiceAfterCommit', 'runWalletTopupInvoiceNow'] as $method) {
+            if (!method_exists($this, $method)) {
+                continue;
+            }
+
+            try {
+                $this->{$method}($topupId, $reason, $orderId);
+
+                Log::info('dispatchInvoiceForTopup success', [
+                    'method' => $method,
+                    'topup_id' => $topupId,
+                    'order_id' => $orderId,
+                    'reason' => $reason,
+                ]);
+
+                return;
+            } catch (\Throwable $e) {
+                Log::error('dispatchInvoiceForTopup failed', [
+                    'method' => $method,
+                    'topup_id' => $topupId,
+                    'order_id' => $orderId,
+                    'reason' => $reason,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        Log::error('dispatchInvoiceForTopup: no dispatch method succeeded', [
+            'topup_id' => $topupId,
+            'order_id' => $orderId,
+            'reason' => $reason,
+        ]);
+    }
 }
