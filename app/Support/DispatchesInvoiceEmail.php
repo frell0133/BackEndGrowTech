@@ -9,44 +9,93 @@ use Illuminate\Support\Facades\Log;
 
 trait DispatchesInvoiceEmail
 {
+    protected function afterCommitOrNow(callable $callback): void
+    {
+        if (DB::transactionLevel() > 0) {
+            DB::afterCommit($callback);
+            return;
+        }
+
+        $callback();
+    }
+
+    protected function runOrderInvoiceNow(
+        int $orderId,
+        string $source = 'unknown',
+        ?string $invoiceNumber = null
+    ): void {
+        Log::info('INVOICE EXECUTION REQUESTED', [
+            'type' => 'order',
+            'source' => $source,
+            'order_id' => $orderId,
+            'invoice_number' => $invoiceNumber,
+            'mode' => 'sync_after_commit',
+        ]);
+
+        try {
+            $job = new SendInvoiceEmailJob($orderId);
+            app()->call([$job, 'handle']);
+
+            Log::info('INVOICE EXECUTION FINISHED', [
+                'type' => 'order',
+                'source' => $source,
+                'order_id' => $orderId,
+                'invoice_number' => $invoiceNumber,
+                'mode' => 'sync_after_commit',
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('INVOICE EXECUTION FAILED', [
+                'type' => 'order',
+                'source' => $source,
+                'order_id' => $orderId,
+                'invoice_number' => $invoiceNumber,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    protected function runWalletTopupInvoiceNow(
+        int $topupId,
+        string $source = 'unknown',
+        ?string $orderId = null
+    ): void {
+        Log::info('TOPUP INVOICE EXECUTION REQUESTED', [
+            'type' => 'wallet_topup',
+            'source' => $source,
+            'topup_id' => $topupId,
+            'order_id' => $orderId,
+            'mode' => 'sync_after_commit',
+        ]);
+
+        try {
+            $job = new SendWalletTopupInvoiceJob($topupId);
+            app()->call([$job, 'handle']);
+
+            Log::info('TOPUP INVOICE EXECUTION FINISHED', [
+                'type' => 'wallet_topup',
+                'source' => $source,
+                'topup_id' => $topupId,
+                'order_id' => $orderId,
+                'mode' => 'sync_after_commit',
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('TOPUP INVOICE EXECUTION FAILED', [
+                'type' => 'wallet_topup',
+                'source' => $source,
+                'topup_id' => $topupId,
+                'order_id' => $orderId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
     protected function dispatchInvoiceEmailAfterCommit(
         int $orderId,
         string $source = 'unknown',
         ?string $invoiceNumber = null
     ): void {
-        DB::afterCommit(function () use ($orderId, $source, $invoiceNumber) {
-            Log::info('INVOICE DISPATCH REQUESTED', [
-                'type' => 'order',
-                'source' => $source,
-                'order_id' => $orderId,
-                'invoice_number' => $invoiceNumber,
-            ]);
-
-            try {
-                $job = SendInvoiceEmailJob::dispatch($orderId)
-                    ->onQueue('default')
-                    ->delay(now()->addSeconds(3));
-
-                if (is_object($job) && method_exists($job, 'afterCommit')) {
-                    $job->afterCommit();
-                }
-
-                Log::info('INVOICE QUEUED', [
-                    'type' => 'order',
-                    'source' => $source,
-                    'order_id' => $orderId,
-                    'invoice_number' => $invoiceNumber,
-                    'queue' => 'default',
-                ]);
-            } catch (\Throwable $e) {
-                Log::error('INVOICE DISPATCH FAILED', [
-                    'type' => 'order',
-                    'source' => $source,
-                    'order_id' => $orderId,
-                    'invoice_number' => $invoiceNumber,
-                    'error' => $e->getMessage(),
-                ]);
-            }
+        $this->afterCommitOrNow(function () use ($orderId, $source, $invoiceNumber) {
+            $this->runOrderInvoiceNow($orderId, $source, $invoiceNumber);
         });
     }
 
@@ -68,39 +117,8 @@ trait DispatchesInvoiceEmail
         string $source = 'unknown',
         ?string $orderId = null
     ): void {
-        DB::afterCommit(function () use ($topupId, $source, $orderId) {
-            Log::info('TOPUP INVOICE DISPATCH REQUESTED', [
-                'type' => 'wallet_topup',
-                'source' => $source,
-                'topup_id' => $topupId,
-                'order_id' => $orderId,
-            ]);
-
-            try {
-                $job = SendWalletTopupInvoiceJob::dispatch($topupId)
-                    ->onQueue('default')
-                    ->delay(now()->addSeconds(3));
-
-                if (is_object($job) && method_exists($job, 'afterCommit')) {
-                    $job->afterCommit();
-                }
-
-                Log::info('TOPUP INVOICE QUEUED', [
-                    'type' => 'wallet_topup',
-                    'source' => $source,
-                    'topup_id' => $topupId,
-                    'order_id' => $orderId,
-                    'queue' => 'default',
-                ]);
-            } catch (\Throwable $e) {
-                Log::error('TOPUP INVOICE DISPATCH FAILED', [
-                    'type' => 'wallet_topup',
-                    'source' => $source,
-                    'topup_id' => $topupId,
-                    'order_id' => $orderId,
-                    'error' => $e->getMessage(),
-                ]);
-            }
+        $this->afterCommitOrNow(function () use ($topupId, $source, $orderId) {
+            $this->runWalletTopupInvoiceNow($topupId, $source, $orderId);
         });
     }
 }

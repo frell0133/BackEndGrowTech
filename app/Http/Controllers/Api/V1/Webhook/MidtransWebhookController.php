@@ -44,14 +44,22 @@ class MidtransWebhookController extends Controller
 
         if ($orderId === '' || $statusCode === '' || $grossAmount === '' || $signatureKey === '') {
             Log::warning('MIDTRANS WEBHOOK INVALID PAYLOAD', ['payload' => $payload]);
-            return response()->json(['success' => true, 'ignored' => true, 'message' => 'Invalid payload (ignored)'], 200);
+            return response()->json([
+                'success' => true,
+                'ignored' => true,
+                'message' => 'Invalid payload (ignored)',
+            ], 200);
         }
 
         // ===== 2) server key =====
         $serverKey = (string) config('services.midtrans.server_key', env('MIDTRANS_SERVER_KEY', ''));
         if ($serverKey === '') {
             Log::error('MIDTRANS WEBHOOK SERVER KEY EMPTY', ['order_id' => $orderId]);
-            return response()->json(['success' => true, 'ignored' => true, 'message' => 'Server key not configured (ignored)'], 200);
+            return response()->json([
+                'success' => true,
+                'ignored' => true,
+                'message' => 'Server key not configured (ignored)',
+            ], 200);
         }
 
         // ===== 3) verify signature =====
@@ -62,7 +70,12 @@ class MidtransWebhookController extends Controller
                 'expected' => $expected,
                 'got' => $signatureKey,
             ]);
-            return response()->json(['success' => true, 'ignored' => true, 'message' => 'Invalid signature (ignored)'], 200);
+
+            return response()->json([
+                'success' => true,
+                'ignored' => true,
+                'message' => 'Invalid signature (ignored)',
+            ], 200);
         }
 
         // ===== 4) paid? =====
@@ -70,17 +83,16 @@ class MidtransWebhookController extends Controller
             ($transactionStatus === 'settlement') ||
             ($transactionStatus === 'capture' && $fraudStatus === 'accept');
 
-        // map ke status internal (string)
         $mapped = match ($transactionStatus) {
-            'settlement' => 'paid',
-            'capture'    => $isPaid ? 'paid' : 'pending',
-            'pending'    => 'pending',
-            'deny'       => 'failed',
-            'cancel'     => 'failed',
-            'expire'     => 'expired',
-            'refund'     => 'refunded',
-            'partial_refund' => 'refunded',
-            default      => 'pending',
+            'settlement'      => 'paid',
+            'capture'         => $isPaid ? 'paid' : 'pending',
+            'pending'         => 'pending',
+            'deny'            => 'failed',
+            'cancel'          => 'failed',
+            'expire'          => 'expired',
+            'refund'          => 'refunded',
+            'partial_refund'  => 'refunded',
+            default           => 'pending',
         };
 
         /**
@@ -91,50 +103,109 @@ class MidtransWebhookController extends Controller
         $topup = WalletTopup::where('order_id', $orderId)->first();
         if ($topup) {
             try {
-                DB::transaction(function () use ($topup, $payload, $mapped, $isPaid, $orderId, $ledger) {
+                $finalTopupId = null;
+                $shouldDispatchTopupInvoice = false;
+                $topupOrderId = null;
 
+                DB::transaction(function () use (
+                    $topup,
+                    $payload,
+                    $mapped,
+                    $isPaid,
+                    $orderId,
+                    $ledger,
+                    &$finalTopupId,
+                    &$shouldDispatchTopupInvoice,
+                    &$topupOrderId
+                ) {
                     $lockedTopup = WalletTopup::where('id', $topup->id)->lockForUpdate()->first();
 
-                    // idempotent: kalau sudah paid jangan dobel posting
-                    if (in_array($lockedTopup->status, ['paid', 'success', 'completed'], true) || $lockedTopup->posted_to_ledger_at) {
+                    if (!$lockedTopup) {
+                        throw new \RuntimeException('Wallet topup not found during transaction');
+                    }
+
+                    $alreadyPosted = in_array((string) $lockedTopup->status, ['paid', 'success', 'completed'], true)
+                        || !empty($lockedTopup->posted_to_ledger_at);
+
+                    $lockedTopup->raw_callback = $payload;
+                    $lockedTopup->external_id = $payload['transaction_id'] ?? $lockedTopup->external_id;
+
+                    if (!$alreadyPosted) {
+                        $lockedTopup->status = $mapped;
+                        $lockedTopup->save();
+
+                        if ($isPaid && $mapped === 'paid') {
+                            $userId = (int) $lockedTopup->user_id;
+                            $amount = (int) $lockedTopup->amount;
+
+                            $ledger->topup(
+                                $userId,
+                                $amount,
+                                (string) $lockedTopup->order_id,
+                                'Topup via Midtrans'
+                            );
+
+                            $lockedTopup->status = 'paid';
+                            $lockedTopup->posted_to_ledger_at = now();
+                            $lockedTopup->save();
+
+                            Log::info('MIDTRANS TOPUP PAID -> WALLET CREDITED', [
+                                'order_id' => $orderId,
+                                'user_id' => $userId,
+                                'amount' => $amount,
+                            ]);
+                        }
+                    } else {
+                        if (empty($lockedTopup->status)) {
+                            $lockedTopup->status = 'paid';
+                        }
+
+                        $lockedTopup->save();
+
                         Log::info('MIDTRANS DUPLICATE TOPUP (ALREADY POSTED)', [
                             'order_id' => $orderId,
                             'status' => $lockedTopup->status,
                             'posted_to_ledger_at' => $lockedTopup->posted_to_ledger_at,
                         ]);
-                        return;
                     }
 
-                    $lockedTopup->raw_callback = $payload;
-                    $lockedTopup->external_id = $payload['transaction_id'] ?? null;
-                    $lockedTopup->status = $mapped;
-                    $lockedTopup->save();
+                    $finalTopupId = (int) $lockedTopup->id;
+                    $topupOrderId = (string) $lockedTopup->order_id;
 
-                    if (!$isPaid || $mapped !== 'paid') {
-                        return;
+                    $isPaidLike = in_array((string) $lockedTopup->status, ['paid', 'success', 'completed'], true)
+                        || !empty($lockedTopup->posted_to_ledger_at);
+
+                    if ($isPaidLike && empty($lockedTopup->invoice_emailed_at)) {
+                        $shouldDispatchTopupInvoice = true;
                     }
 
-                    $userId = (int) $lockedTopup->user_id;
-                    $amount = (int) $lockedTopup->amount;
-
-                    // posting ledger
-                    $ledger->topup(
-                        $userId,
-                        $amount,
-                        $lockedTopup->order_id,  // idempotency key
-                        'Topup via Midtrans'
-                    );
-
-                    $lockedTopup->status = 'paid';
-                    $lockedTopup->posted_to_ledger_at = now();
-                    $lockedTopup->save();
-
-                    Log::info('MIDTRANS TOPUP PAID -> WALLET CREDITED', [
-                        'order_id' => $orderId,
-                        'user_id' => $userId,
-                        'amount' => $amount,
+                    Log::info('MIDTRANS TOPUP FINAL STATE', [
+                        'topup_id' => $lockedTopup->id,
+                        'order_id' => $lockedTopup->order_id,
+                        'status' => $lockedTopup->status,
+                        'posted_to_ledger_at' => $lockedTopup->posted_to_ledger_at,
+                        'should_dispatch_topup_invoice' => $shouldDispatchTopupInvoice,
                     ]);
                 });
+
+                if ($shouldDispatchTopupInvoice && $finalTopupId) {
+                    $this->dispatchWalletTopupInvoiceAfterCommit(
+                        (int) $finalTopupId,
+                        'midtrans_topup_paid',
+                        (string) $topupOrderId
+                    );
+
+                    Log::info('MIDTRANS TOPUP INVOICE DISPATCHED', [
+                        'topup_id' => $finalTopupId,
+                        'order_id' => $topupOrderId,
+                    ]);
+                } else {
+                    Log::info('MIDTRANS TOPUP INVOICE NOT DISPATCHED', [
+                        'topup_id' => $finalTopupId,
+                        'order_id' => $topupOrderId,
+                        'reason' => 'already_emailed_or_not_paid',
+                    ]);
+                }
 
                 return response()->json(['success' => true, 'message' => 'OK (topup)'], 200);
             } catch (\Throwable $e) {
@@ -142,7 +213,12 @@ class MidtransWebhookController extends Controller
                     'order_id' => $orderId,
                     'err' => $e->getMessage(),
                 ]);
-                return response()->json(['success' => true, 'ignored' => true, 'message' => 'Topup internal error (ignored)'], 200);
+
+                return response()->json([
+                    'success' => true,
+                    'ignored' => true,
+                    'message' => 'Topup internal error (ignored)',
+                ], 200);
             }
         }
 
@@ -192,10 +268,13 @@ class MidtransWebhookController extends Controller
             ) {
                 $lockedOrder = Order::query()->where('id', $order->id)->lockForUpdate()->first();
 
-                $current = $lockedOrder->status?->value ?? (string)$lockedOrder->status;
+                $current = $lockedOrder->status?->value ?? (string) $lockedOrder->status;
 
-                // idempotent: kalau sudah final, stop
-                if (in_array($current, [OrderStatus::PAID->value, OrderStatus::FULFILLED->value, OrderStatus::REFUNDED->value], true)) {
+                if (in_array($current, [
+                    OrderStatus::PAID->value,
+                    OrderStatus::FULFILLED->value,
+                    OrderStatus::REFUNDED->value,
+                ], true)) {
                     Log::info('MIDTRANS DUPLICATE ORDER (ALREADY FINAL)', [
                         'midtrans_order_id' => $orderId,
                         'status' => $current,
@@ -203,33 +282,33 @@ class MidtransWebhookController extends Controller
                     return;
                 }
 
-                // map ke enum order status
                 $newOrderStatus = match ($mapped) {
-                    'paid' => OrderStatus::PAID->value,
-                    'pending' => OrderStatus::PENDING->value,
-                    'failed' => OrderStatus::FAILED->value,
-                    'expired' => OrderStatus::EXPIRED->value,
+                    'paid'     => OrderStatus::PAID->value,
+                    'pending'  => OrderStatus::PENDING->value,
+                    'failed'   => OrderStatus::FAILED->value,
+                    'expired'  => OrderStatus::EXPIRED->value,
                     'refunded' => OrderStatus::REFUNDED->value,
-                    default => OrderStatus::PENDING->value,
+                    default    => OrderStatus::PENDING->value,
                 };
 
-                // update order
                 $lockedOrder->payment_gateway_code = 'midtrans';
                 $lockedOrder->status = $newOrderStatus;
+
                 if (property_exists($lockedOrder, 'midtrans_payload')) {
                     $lockedOrder->midtrans_payload = $payload;
                 }
+
                 $lockedOrder->save();
 
-                // update/ensure payment
                 $payment = $lockedOrder->payment;
+
                 $paymentStatus = match ($mapped) {
-                    'paid' => PaymentStatus::PAID->value,
-                    'pending' => PaymentStatus::PENDING->value,
-                    'failed' => PaymentStatus::FAILED->value,
-                    'expired' => PaymentStatus::EXPIRED->value,
+                    'paid'     => PaymentStatus::PAID->value,
+                    'pending'  => PaymentStatus::PENDING->value,
+                    'failed'   => PaymentStatus::FAILED->value,
+                    'expired'  => PaymentStatus::EXPIRED->value,
                     'refunded' => PaymentStatus::REFUNDED->value,
-                    default => PaymentStatus::PENDING->value,
+                    default    => PaymentStatus::PENDING->value,
                 };
 
                 if (!$payment) {
@@ -250,23 +329,16 @@ class MidtransWebhookController extends Controller
                     ]);
                 }
 
-                // kalau belum paid, stop
                 if (!$isPaid || $mapped !== 'paid') {
                     return;
                 }
 
-                /**
-                 * ==========================================================
-                 * REFERRAL COMMISSION -> MASUK KE WALLET KOMISI (IDR_COMMISSION)
-                 * ==========================================================
-                 */
                 $refTx = ReferralTransaction::query()
                     ->where('order_id', (int) $lockedOrder->id)
                     ->lockForUpdate()
                     ->first();
 
                 if ($refTx && $refTx->status !== 'valid') {
-
                     $settings = ReferralSetting::current();
 
                     if (!$settings || !($settings->enabled ?? false)) {
@@ -283,6 +355,7 @@ class MidtransWebhookController extends Controller
                             $pct = (int) ($settings->commission_value ?? 0);
                             $commission = (int) floor($orderAmount * $pct / 100);
                         }
+
                         $commission = max(0, $commission);
 
                         $refTx->status = 'valid';
@@ -317,9 +390,6 @@ class MidtransWebhookController extends Controller
                     }
                 }
 
-                /**
-                 * FULFILL
-                 */
                 $res = $fulfillment->fulfillPaidOrder($lockedOrder->fresh());
 
                 if (!($res['ok'] ?? false)) {
@@ -334,7 +404,6 @@ class MidtransWebhookController extends Controller
                 $lockedOrder->status = OrderStatus::FULFILLED->value;
                 $lockedOrder->save();
 
-                // send invoice email after commit
                 $this->dispatchInvoiceEmailAfterCommit(
                     (int) $lockedOrder->id,
                     'midtrans_paid',
@@ -348,13 +417,17 @@ class MidtransWebhookController extends Controller
             });
 
             return response()->json(['success' => true, 'message' => 'OK (order)'], 200);
-
         } catch (\Throwable $e) {
             Log::error('MIDTRANS ORDER WEBHOOK ERROR', [
                 'order_id' => $orderId,
                 'err' => $e->getMessage(),
             ]);
-            return response()->json(['success' => true, 'ignored' => true, 'message' => 'Order internal error (ignored)'], 200);
+
+            return response()->json([
+                'success' => true,
+                'ignored' => true,
+                'message' => 'Order internal error (ignored)',
+            ], 200);
         }
     }
 }

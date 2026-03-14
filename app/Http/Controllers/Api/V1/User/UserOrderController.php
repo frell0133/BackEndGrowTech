@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
@@ -137,6 +138,90 @@ class UserOrderController extends Controller
                 return;
             }
         }
+    }
+
+    private function normalizePaymentMethodCode(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? 'wallet' : '';
+        }
+
+        if (is_array($value)) {
+            foreach ([
+                'code',
+                'gateway_code',
+                'method',
+                'value',
+                'id',
+                'slug',
+                'name',
+            ] as $key) {
+                $candidate = $this->normalizePaymentMethodCode($value[$key] ?? null);
+
+                if ($candidate !== '') {
+                    return $candidate;
+                }
+            }
+
+            return '';
+        }
+
+        if ($value === null) {
+            return '';
+        }
+
+        $normalized = strtolower(trim((string) $value));
+
+        return match ($normalized) {
+            'wallet', 'saldo', 'balance', 'wallet_balance', 'internal_wallet', 'gtc_wallet', 'my_wallet' => 'wallet',
+            default => $normalized,
+        };
+    }
+
+    private function extractSelectedPaymentCode(Request $request, array $validated = []): string
+    {
+        foreach ([
+            $validated['gateway_code'] ?? null,
+            $validated['method'] ?? null,
+            $validated['gateway'] ?? null,
+            $validated['payment_method'] ?? null,
+            $validated['payment_gateway_code'] ?? null,
+            $validated['payment_method_code'] ?? null,
+            $validated['selected_method'] ?? null,
+            $request->input('gateway_code'),
+            $request->input('method'),
+            $request->input('gateway'),
+            $request->input('payment_method'),
+            $request->input('payment_gateway_code'),
+            $request->input('payment_method_code'),
+            $request->input('selected_method'),
+            data_get($request->all(), 'selected_payment_method.code'),
+            data_get($request->all(), 'selectedPaymentMethod.code'),
+            data_get($request->all(), 'payment.code'),
+            data_get($request->all(), 'payment.method'),
+            data_get($request->all(), 'gateway.code'),
+        ] as $candidate) {
+            $selected = $this->normalizePaymentMethodCode($candidate);
+
+            if ($selected !== '') {
+                return $selected;
+            }
+        }
+
+        if (filter_var($request->input('wallet'), FILTER_VALIDATE_BOOLEAN)) {
+            return 'wallet';
+        }
+
+        if (filter_var($request->input('use_wallet'), FILTER_VALIDATE_BOOLEAN)) {
+            return 'wallet';
+        }
+
+        return '';
+    }
+
+    private function isWalletMethod(string $selected): bool
+    {
+        return $this->normalizePaymentMethodCode($selected) === 'wallet';
     }
 
     // =========================
@@ -412,10 +497,32 @@ class UserOrderController extends Controller
 
         $v = $request->validate([
             'gateway_code' => ['nullable', 'string', 'max:100'],
-            'method' => ['nullable', 'string', 'max:100'], // backward compatibility
+            'method' => ['nullable', 'string', 'max:100'],
+            'gateway' => ['nullable', 'string', 'max:100'],
+            'payment_method' => ['nullable', 'string', 'max:100'],
+            'payment_gateway_code' => ['nullable', 'string', 'max:100'],
+            'payment_method_code' => ['nullable', 'string', 'max:100'],
+            'selected_method' => ['nullable', 'string', 'max:100'],
+            'wallet' => ['nullable'],
+            'use_wallet' => ['nullable'],
         ]);
 
-        $selected = strtolower(trim((string) ($v['gateway_code'] ?? $v['method'] ?? '')));
+        $selected = $this->extractSelectedPaymentCode($request, $v);
+
+        Log::info('ORDER CREATE PAYMENT REQUEST', [
+            'order_id' => (int) $id,
+            'user_id' => (int) $user->id,
+            'selected' => $selected,
+            'raw_gateway_code' => $request->input('gateway_code'),
+            'raw_method' => $request->input('method'),
+            'raw_gateway' => $request->input('gateway'),
+            'raw_payment_method' => $request->input('payment_method'),
+            'raw_payment_gateway_code' => $request->input('payment_gateway_code'),
+            'raw_payment_method_code' => $request->input('payment_method_code'),
+            'wallet_flag' => $request->input('wallet'),
+            'use_wallet_flag' => $request->input('use_wallet'),
+        ]);
+
         if ($selected === '') {
             $defaultGateway = $gatewayManager->defaultForScope('order');
 
@@ -445,7 +552,7 @@ class UserOrderController extends Controller
             return $this->fail('Order sudah diproses pembayaran', 409);
         }
 
-        if ($selected === 'wallet') {
+        if ($this->isWalletMethod($selected)) {
             try {
                 return DB::transaction(function () use ($order, $user, $ledger, $fulfillment) {
                     $locked = Order::query()
@@ -475,6 +582,18 @@ class UserOrderController extends Controller
                     $amountInt = (int) round((float) $locked->amount);
                     if ($amountInt <= 0) {
                         return $this->fail('Amount invalid', 422);
+                    }
+
+                    $wallet = $ledger->getOrCreateUserWallet((int) $user->id);
+                    $walletBalance = (int) ($wallet->balance ?? 0);
+
+                    if ($walletBalance < $amountInt) {
+                        return $this->fail('Saldo wallet tidak cukup', 422, [
+                            'payment_method' => 'wallet',
+                            'wallet_balance' => $walletBalance,
+                            'required_amount' => $amountInt,
+                            'shortfall' => max(0, $amountInt - $walletBalance),
+                        ]);
                     }
 
                     $ledger->purchase(
@@ -538,7 +657,18 @@ class UserOrderController extends Controller
                         'fulfillment' => $fulfillmentResult,
                     ]);
                 });
+            } catch (\Illuminate\Validation\ValidationException $e) {
+                return $this->fail($e->getMessage(), 422, [
+                    'errors' => $e->errors(),
+                    'payment_method' => 'wallet',
+                ]);
             } catch (\Throwable $e) {
+                Log::error('ORDER WALLET PAYMENT FAILED', [
+                    'order_id' => (int) $order->id,
+                    'user_id' => (int) $user->id,
+                    'error' => $e->getMessage(),
+                ]);
+
                 return $this->fail($e->getMessage(), 422);
             }
         }
