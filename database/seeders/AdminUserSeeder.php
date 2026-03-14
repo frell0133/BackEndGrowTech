@@ -2,9 +2,9 @@
 
 namespace Database\Seeders;
 
-use Illuminate\Database\Seeder;
-use App\Models\User;
 use App\Models\AdminRole;
+use App\Models\User;
+use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 
@@ -12,28 +12,36 @@ class AdminUserSeeder extends Seeder
 {
     public function run(): void
     {
-        // =========================
-        // 0) UBAH wizard lama jadi USER BIASA
-        // =========================
-        $oldOwner = User::where('email', 'wizardtwr@gmail.com')->first();
+        /**
+         * =========================================================
+         * 0) DEMOTE OWNER LAMA MENJADI USER BIASA
+         * =========================================================
+         * Akun lama: wizardtwr@gmail.com
+         * Sebelumnya mungkin dipakai sebagai owner/admin.
+         * Sekarang dijadikan user biasa agar tidak bentrok
+         * dengan owner baru.
+         */
+        $legacyOwner = User::where('email', 'wizardtwr@gmail.com')->first();
 
-        if ($oldOwner) {
-            $oldOwner->update([
+        if ($legacyOwner) {
+            $legacyOwner->update([
                 'name' => 'wizard_user',
                 'full_name' => 'Wizard User GrowTech Central',
                 'address' => 'Bandung',
                 'password' => Hash::make('User12345!'),
                 'role' => 'user',
                 'admin_role_id' => null,
-                'tier' => $oldOwner->tier ?: 'member',
+                'tier' => $legacyOwner->tier ?: 'member',
             ]);
 
-            $this->ensureGtcReferralCode($oldOwner);
+            $this->ensureGtcReferralCode($legacyOwner);
         }
 
-        // =========================
-        // 1) OWNER / SUPER ADMIN BARU
-        // =========================
+        /**
+         * =========================================================
+         * 1) OWNER / SUPER ADMIN BARU
+         * =========================================================
+         */
         $owner = User::updateOrCreate(
             ['email' => 'emailpercobaan115@gmail.com'],
             [
@@ -47,16 +55,13 @@ class AdminUserSeeder extends Seeder
         );
 
         $this->ensureGtcReferralCode($owner);
+        $this->assignAdminRole($owner, 'owner');
 
-        $ownerRole = AdminRole::where('slug', 'owner')->first();
-        if ($ownerRole) {
-            $owner->admin_role_id = $ownerRole->id;
-            $owner->save();
-        }
-
-        // =========================
-        // 2) ADMIN BIASA
-        // =========================
+        /**
+         * =========================================================
+         * 2) ADMIN BIASA
+         * =========================================================
+         */
         $admin = User::updateOrCreate(
             ['email' => 'yashabima2@gmail.com'],
             [
@@ -70,23 +75,28 @@ class AdminUserSeeder extends Seeder
         );
 
         $this->ensureGtcReferralCode($admin);
+        $this->assignAdminRole($admin, 'catalog_admin');
+    }
 
-        // opsi role yang tersedia:
-        // owner, content_admin, catalog_admin,
-        // order_admin, finance_admin, marketing_admin, auditor
-        $adminRole = AdminRole::where('slug', 'catalog_admin')->first();
+    private function assignAdminRole(User $user, string $roleSlug): void
+    {
+        $role = AdminRole::where('slug', $roleSlug)->first();
 
-        if ($adminRole) {
-            $admin->admin_role_id = $adminRole->id;
-            $admin->save();
+        if (! $role) {
+            return;
+        }
+
+        if ($user->admin_role_id !== $role->id) {
+            $user->admin_role_id = $role->id;
+            $user->save();
         }
     }
 
     private function ensureGtcReferralCode(User $user): void
     {
-        $current = (string) ($user->referral_code ?? '');
+        $currentCode = (string) ($user->referral_code ?? '');
 
-        if (Str::startsWith($current, 'GTC-')) {
+        if (Str::startsWith($currentCode, 'GTC-')) {
             return;
         }
 
