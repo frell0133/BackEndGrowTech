@@ -76,8 +76,7 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
 
         $itemsEmail = $deliveries
             ->map(fn ($d) => $d->license ? $fulfill->formatLicense($d->license) : null)
-            ->filter(fn ($item) => !empty($item['license_key']) || !empty($item['payload']) || !empty($item['product_name']))
-            ->values()
+            ->filter()
             ->values()
             ->all();
 
