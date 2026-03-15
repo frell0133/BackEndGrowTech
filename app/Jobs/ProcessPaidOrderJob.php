@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Services\LedgerService;
 use App\Services\OrderFulfillmentService;
 use App\Services\ReferralCommissionService;
+use App\Support\DispatchesInvoiceEmail;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -16,7 +17,7 @@ use Illuminate\Support\Facades\Log;
 
 class ProcessPaidOrderJob implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, DispatchesInvoiceEmail;
 
     public int $tries = 3;
     public int $timeout = 180;
@@ -106,10 +107,26 @@ class ProcessPaidOrderJob implements ShouldQueue
             ? $order->deliveries()->exists()
             : false;
 
-        if (($fulfillmentResult['ok'] ?? false) || ($fulfillmentResult['success'] ?? false) || $hasDeliveries) {
+        $isFulfilled = ($fulfillmentResult['ok'] ?? false)
+            || ($fulfillmentResult['success'] ?? false)
+            || $hasDeliveries;
+
+        if ($isFulfilled) {
             if ((string) ($order->status?->value ?? $order->status) !== OrderStatus::FULFILLED->value) {
                 $order->status = OrderStatus::FULFILLED->value;
                 $order->save();
+            }
+        }
+
+        if ($this->source === 'wallet_paid' && $isFulfilled) {
+            $freshOrder = $order->fresh();
+
+            if ($freshOrder && empty($freshOrder->invoice_emailed_at)) {
+                $this->dispatchInvoiceEmailAfterCommit(
+                    (int) $freshOrder->id,
+                    'wallet_paid_fulfilled',
+                    (string) $freshOrder->invoice_number
+                );
             }
         }
 

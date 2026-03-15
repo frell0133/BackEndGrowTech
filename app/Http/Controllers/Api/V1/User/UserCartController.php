@@ -270,17 +270,23 @@ class UserCartController extends Controller
             ->where('status', License::STATUS_AVAILABLE)
             ->count();
 
-        if ($stock <= 0) {
-            return $this->fail('Out of stock', 422, ['stock_available' => 0]);
-        }
-
         $item = CartItem::query()
             ->where('cart_id', $cart->id)
             ->where('product_id', $product->id)
             ->first();
 
+        $existingQty = (int) ($item->qty ?? 0);
+        $newQty = min(99, $existingQty + $qty);
+
+        if ($stock < $newQty) {
+            return $this->fail('Stock tidak cukup', 422, [
+                'product_id' => (int) $product->id,
+                'stock_available' => (int) $stock,
+                'qty_requested' => (int) $newQty,
+            ]);
+        }
+
         if ($item) {
-            $newQty = min(99, $item->qty + $qty);
             $item->update(['qty' => $newQty]);
         } else {
             $item = CartItem::create([
@@ -309,7 +315,22 @@ class UserCartController extends Controller
             ->where('cart_id', $cart->id)
             ->firstOrFail();
 
-        $item->update(['qty' => (int) $v['qty']]);
+        $requestedQty = (int) $v['qty'];
+
+        $stock = License::query()
+            ->where('product_id', (int) $item->product_id)
+            ->where('status', License::STATUS_AVAILABLE)
+            ->count();
+
+        if ($stock < $requestedQty) {
+            return $this->fail('Stock tidak cukup', 422, [
+                'product_id' => (int) $item->product_id,
+                'stock_available' => (int) $stock,
+                'qty_requested' => (int) $requestedQty,
+            ]);
+        }
+
+        $item->update(['qty' => $requestedQty]);
 
         return $this->ok(['message' => 'Cart updated', 'item' => $item]);
     }

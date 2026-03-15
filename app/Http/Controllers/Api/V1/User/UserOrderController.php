@@ -26,6 +26,8 @@ use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
 use App\Models\Referral;
 use App\Jobs\ProcessPaidOrderJob;
+use App\Models\License;
+use Illuminate\Http\JsonResponse;
 
 // ✅ NEW: service untuk komisi referral saat PAID (wallet/midtrans)
 use App\Services\ReferralCommissionService;
@@ -248,6 +250,16 @@ class UserOrderController extends Controller
         }
         if (property_exists($product, 'is_published') && $product->is_published === false) {
             return $this->fail('Product belum dipublish', 422);
+        }
+
+        $stock = $this->availableLicenseStock((int) $product->id);
+
+        if ($stock < $qty) {
+            return $this->fail('Stock tidak cukup', 422, [
+                'product_id' => (int) $product->id,
+                'stock_available' => (int) $stock,
+                'qty_requested' => (int) $qty,
+            ]);
         }
 
         // ✅ tier pricing
@@ -482,6 +494,49 @@ class UserOrderController extends Controller
         });
     }
 
+    private function availableLicenseStock(int $productId): int
+    {
+        return License::query()
+            ->where('product_id', $productId)
+            ->where('status', License::STATUS_AVAILABLE)
+            ->count();
+    }
+
+    private function stockErrorResponseForOrder(Order $order): ?JsonResponse
+    {
+        $items = $order->items;
+
+        if (!$items || $items->isEmpty()) {
+            $items = collect([
+                (object) [
+                    'product_id' => (int) ($order->product_id ?? 0),
+                    'qty' => (int) ($order->qty ?? 1),
+                ]
+            ]);
+        }
+
+        foreach ($items as $item) {
+            $productId = (int) ($item->product_id ?? 0);
+            $needQty = max(1, (int) ($item->qty ?? 1));
+
+            if ($productId <= 0) {
+                return $this->fail('Product invalid', 422);
+            }
+
+            $stock = $this->availableLicenseStock($productId);
+
+            if ($stock < $needQty) {
+                return $this->fail('Stock tidak cukup', 422, [
+                    'product_id' => $productId,
+                    'stock_available' => $stock,
+                    'qty_requested' => $needQty,
+                ]);
+            }
+        }
+
+        return null;
+    }
+
     // =========================
     // POST /api/v1/orders/{id}/payments
     // =========================
@@ -581,6 +636,10 @@ class UserOrderController extends Controller
                         ]);
                     }
 
+                    if ($stockError = $this->stockErrorResponseForOrder($locked)) {
+                        return $stockError;
+                    }
+
                     $amountInt = (int) round((float) $locked->amount);
                     if ($amountInt <= 0) {
                         return $this->fail('Amount invalid', 422);
@@ -633,14 +692,6 @@ class UserOrderController extends Controller
 
                 if ($result instanceof \Illuminate\Http\JsonResponse) {
                     return $result;
-                }
-
-                $freshOrder = Order::query()
-                    ->with(['items.product', 'product', 'payment', 'vouchers'])
-                    ->find((int) $result['order_id']);
-
-                if ($freshOrder && empty($freshOrder->invoice_emailed_at)) {
-                    $this->dispatchInvoiceForOrder($freshOrder, 'wallet_paid');
                 }
 
                 $job = ProcessPaidOrderJob::dispatch(
@@ -708,6 +759,10 @@ class UserOrderController extends Controller
                     \App\Enums\OrderStatus::REFUNDED->value,
                 ], true)) {
                     return $this->fail('Order sudah diproses pembayaran', 409);
+                }
+
+                if ($stockError = $this->stockErrorResponseForOrder($locked)) {
+                    return $stockError;
                 }
 
                 $baseAmount = (float) $locked->amount;
