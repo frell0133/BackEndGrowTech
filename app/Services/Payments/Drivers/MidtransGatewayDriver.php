@@ -16,50 +16,44 @@ class MidtransGatewayDriver implements PaymentGatewayDriver
     public function createOrderPayment(PaymentGateway $gateway, Order $order, array $context = []): array
     {
         $user = $context['user'] ?? null;
-        $grossAmount = (float) ($context['gross_amount'] ?? ((float) $order->amount + (float) ($order->gateway_fee_amount ?? 0)));
 
-        $itemDetails = [];
-        $itemsTotal = 0.0;
+        $baseAmount = (int) round((float) $order->amount); // sudah net: subtotal + tax - discount
+        $gatewayFee = (int) round((float) ($order->gateway_fee_amount ?? 0));
+        $grossAmount = (int) round((float) ($context['gross_amount'] ?? ($baseAmount + $gatewayFee)));
 
-        if ($order->relationLoaded('items') && $order->items) {
-            foreach ($order->items as $item) {
-                $price = (int) round((float) ($item->unit_price ?? 0));
-                $qty = max(1, (int) ($item->qty ?? 1));
-                $lineTotal = $price * $qty;
-                $itemsTotal += $lineTotal;
-
-                $itemDetails[] = [
-                    'id' => (string) ($item->product_id ?? $item->id ?? Str::uuid()),
-                    'price' => $price,
-                    'quantity' => $qty,
-                    'name' => Str::limit((string) ($item->product_name ?? 'Product'), 50, ''),
-                ];
-            }
-        } elseif ($order->relationLoaded('product') && $order->product) {
-            $price = (int) round((float) $order->amount);
-            $itemDetails[] = [
-                'id' => (string) ($order->product->id ?? $order->id),
-                'price' => $price,
+        $itemDetails = [
+            [
+                'id' => 'order-' . (string) $order->id,
+                'price' => max(0, $baseAmount),
                 'quantity' => 1,
-                'name' => Str::limit((string) ($order->product->name ?? 'Product'), 50, ''),
-            ];
-            $itemsTotal += $price;
-        }
+                'name' => Str::limit('Order ' . (string) $order->invoice_number, 50, ''),
+            ],
+        ];
 
-        $feeDelta = (int) round($grossAmount) - (int) round($itemsTotal);
-        if ($feeDelta > 0) {
+        if ($gatewayFee > 0) {
             $itemDetails[] = [
                 'id' => 'gateway-fee',
-                'price' => $feeDelta,
+                'price' => $gatewayFee,
                 'quantity' => 1,
                 'name' => 'Gateway Fee',
             ];
         }
 
+        $sumItems = 0;
+        foreach ($itemDetails as $it) {
+            $sumItems += ((int) $it['price'] * (int) $it['quantity']);
+        }
+
+        // jaga-jaga kalau ada selisih rounding
+        if ($sumItems !== $grossAmount) {
+            $delta = $grossAmount - $sumItems;
+            $itemDetails[0]['price'] = (int) $itemDetails[0]['price'] + $delta;
+        }
+
         $payload = [
             'transaction_details' => [
                 'order_id' => (string) $order->invoice_number,
-                'gross_amount' => (int) round($grossAmount),
+                'gross_amount' => $grossAmount,
             ],
             'item_details' => $itemDetails,
             'customer_details' => [
