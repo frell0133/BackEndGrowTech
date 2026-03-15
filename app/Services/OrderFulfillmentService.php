@@ -25,16 +25,59 @@ class OrderFulfillmentService
             'invoice_number' => $order->invoice_number ?? null,
         ]);
 
-        // cegah dobel fulfill
-        if ($order->deliveries()->count() > 0) {
-            Log::info('FULFILL SKIP ALREADY_DELIVERED', ['order_id' => $order->id]);
-            return ['ok' => true, 'message' => 'Already fulfilled'];
+        $items = $order->items()->get();
+
+        if ($items->isEmpty()) {
+            $legacyQty = (int) ($order->qty ?? 1);
+            $legacyProductId = (int) ($order->product_id ?? 0);
+
+            if ($legacyProductId > 0 && $legacyQty > 0) {
+                $items = collect([(object) [
+                    'product_id' => $legacyProductId,
+                    'qty' => $legacyQty,
+                ]]);
+            }
         }
 
-        $result = DB::transaction(function () use ($order) {
-            // Ambil item dari order_items (opsi cart/checkout baru)
-            $items = $order->items()->get();
+        $totalQty = (int) $items->sum('qty');
 
+        // kalau deliveries sudah ada, jangan fulfill ulang
+        // tapi untuk qty > 1, kalau email product belum terkirim, queue lagi
+        if ($order->deliveries()->count() > 0) {
+            Log::info('FULFILL SKIP ALREADY_DELIVERED', [
+                'order_id' => $order->id,
+                'total_qty' => $totalQty,
+            ]);
+
+            if ($totalQty > 1) {
+                $pendingDeliveries = Delivery::query()
+                    ->where('order_id', $order->id)
+                    ->whereNull('emailed_at')
+                    ->count();
+
+                if ($pendingDeliveries > 0) {
+                    Log::info('FULFILL ALREADY_DELIVERED BUT PRODUCT_EMAIL_PENDING', [
+                        'order_id' => $order->id,
+                        'pending_deliveries' => $pendingDeliveries,
+                    ]);
+
+                    $job = SendDigitalItemsFallbackEmail::dispatch($order->id)->delay(now()->addSeconds(3));
+
+                    if (method_exists($job, 'afterCommit')) {
+                        $job->afterCommit();
+                    }
+                }
+            }
+
+            return [
+                'ok' => true,
+                'message' => 'Already fulfilled',
+                'totalQty' => $totalQty,
+                'mode' => $totalQty === 1 ? 'one_time' : 'email_only',
+            ];
+        }
+
+        $result = DB::transaction(function () use ($order, $items) {
             Log::info('FULFILL ITEMS CHECK', [
                 'order_id' => $order->id,
                 'items_count' => $items->count(),
@@ -42,25 +85,12 @@ class OrderFulfillmentService
                 'legacy_qty' => $order->qty ?? null,
             ]);
 
-            // fallback legacy (order lama)
             if ($items->isEmpty()) {
-                $legacyQty = (int) ($order->qty ?? 1);
-                $legacyProductId = (int) ($order->product_id ?? 0);
+                Log::error('FULFILL FAIL ORDER_ITEMS_EMPTY', [
+                    'order_id' => $order->id,
+                ]);
 
-                if ($legacyProductId <= 0 || $legacyQty <= 0) {
-                    Log::error('FULFILL FAIL ORDER_ITEMS_EMPTY', [
-                        'order_id' => $order->id,
-                        'legacy_product_id' => $legacyProductId,
-                        'legacy_qty' => $legacyQty,
-                    ]);
-
-                    return ['ok' => false, 'message' => 'Order items empty'];
-                }
-
-                $items = collect([(object) [
-                    'product_id' => $legacyProductId,
-                    'qty' => $legacyQty,
-                ]]);
+                return ['ok' => false, 'message' => 'Order items empty'];
             }
 
             $totalQty = (int) $items->sum('qty');
@@ -70,7 +100,6 @@ class OrderFulfillmentService
                 $productId = (int) $it->product_id;
                 $qty = (int) ($it->qty ?? 1);
 
-                // lock stok supaya aman dari race condition
                 $licenses = License::query()
                     ->where('product_id', $productId)
                     ->where('status', 'available')
@@ -97,7 +126,6 @@ class OrderFulfillmentService
                     return ['ok' => false, 'message' => 'Stock not enough for product_id=' . $productId];
                 }
 
-                // tandai sold
                 License::query()
                     ->whereIn('id', $licenses->pluck('id')->all())
                     ->update([
@@ -106,12 +134,11 @@ class OrderFulfillmentService
                         'sold_at' => now(),
                     ]);
 
-                // buat delivery row
                 foreach ($licenses as $lic) {
                     Delivery::create([
                         'order_id' => $order->id,
                         'license_id' => $lic->id,
-                        'delivery_mode' => $mode, // one_time | email_only
+                        'delivery_mode' => $mode,
                         'reveal_count' => 0,
                         'revealed_at' => null,
                         'emailed_at' => null,
@@ -119,7 +146,6 @@ class OrderFulfillmentService
                 }
             }
 
-            // ✅ UPDATE PURCHASES + POPULARITY (inside transaction)
             $this->bumpPurchaseCountAndPopularity($order, $items);
 
             Log::info('FULFILL SUCCESS ALLOCATION_DONE', [
@@ -136,10 +162,6 @@ class OrderFulfillmentService
             ];
         });
 
-        /**
-         * qty > 1:
-         * Product email langsung di-queue setelah payment sukses (barengan invoice).
-         */
         if (($result['ok'] ?? false) && ((int) ($result['totalQty'] ?? 0) > 1)) {
             Log::info('FULFILL EMAIL_ONLY QUEUE_DISPATCH', [
                 'order_id' => $order->id,
@@ -148,17 +170,11 @@ class OrderFulfillmentService
 
             $job = SendDigitalItemsFallbackEmail::dispatch($order->id)->delay(now()->addSeconds(3));
 
-            // aman bila queue driver mendukung afterCommit
             if (method_exists($job, 'afterCommit')) {
                 $job->afterCommit();
             }
         }
 
-        /**
-         * qty == 1:
-         * JANGAN auto-kirim product email di sini.
-         * Product email akan dikirim saat user menutup modal (endpoint close).
-         */
         if (($result['ok'] ?? false) && ((int) ($result['totalQty'] ?? 0) === 1)) {
             Log::info('FULFILL ONE_TIME WAIT_CLOSE_TO_SEND_PRODUCT_EMAIL', [
                 'order_id' => $order->id,
@@ -167,7 +183,6 @@ class OrderFulfillmentService
 
         return $result;
     }
-
     /**
      * ✅ Naikkan purchases_count dan update popularity_score.
      * - Menggunakan $items hasil resolve (order_items atau fallback legacy)

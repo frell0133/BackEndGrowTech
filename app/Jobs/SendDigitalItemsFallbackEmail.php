@@ -24,7 +24,6 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
     public function __construct(int $orderId)
     {
         $this->orderId = $orderId;
-         $this->onQueue('default');
     }
 
     public function handle(OrderFulfillmentService $fulfill, BrevoMailService $brevo): void
@@ -45,6 +44,7 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
         }
 
         $to = $order->email ?? $order->user?->email;
+
         if (!$to) {
             Log::warning('SendDigitalItemsFallbackEmail: recipient empty', [
                 'order_id' => $order->id,
@@ -52,39 +52,43 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
             throw new \RuntimeException('Digital items email recipient is empty');
         }
 
-        // ambil deliveries + license + product
+        // Hanya ambil delivery yang BELUM pernah dikirim ke email
         $deliveries = Delivery::query()
             ->where('order_id', $order->id)
+            ->whereNull('emailed_at')
             ->with(['license.product'])
             ->get();
 
         if ($deliveries->isEmpty()) {
-            Log::warning('SendDigitalItemsFallbackEmail: no deliveries', [
-                'order_id' => $order->id,
-            ]);
-            return;
-        }
-
-        // ✅ kalau sudah emailed sukses, jangan kirim lagi
-        $alreadyEmailed = $deliveries->first(fn ($d) => !empty($d->emailed_at));
-        if ($alreadyEmailed) {
-            Log::info('SendDigitalItemsFallbackEmail: already emailed', [
+            Log::info('SendDigitalItemsFallbackEmail: nothing pending', [
                 'order_id' => $order->id,
             ]);
             return;
         }
 
         $itemsEmail = $deliveries
-            ->map(fn ($d) => $d->license ? $fulfill->formatLicense($d->license) : null)
-            ->filter()
+            ->map(function ($d) use ($fulfill) {
+                return $d->license ? $fulfill->formatLicense($d->license) : null;
+            })
+            ->filter(function ($item) {
+                if (!is_array($item)) {
+                    return false;
+                }
+
+                return !empty($item['license_key'])
+                    || !empty($item['payload'])
+                    || !empty($item['product_name']);
+            })
             ->values()
             ->all();
 
         if (empty($itemsEmail)) {
             Log::warning('SendDigitalItemsFallbackEmail: no license payload formatted', [
                 'order_id' => $order->id,
+                'delivery_ids' => $deliveries->pluck('id')->all(),
             ]);
-            return;
+
+            throw new \RuntimeException('No valid digital items payload formatted');
         }
 
         $html = view('emails.digital-items', [
@@ -101,20 +105,22 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
                 'response' => $res,
             ]);
 
-            // throw supaya retry queue / masuk failed_jobs kalau mentok
             throw new \RuntimeException('Brevo send failed for digital items email');
         }
 
-        // ✅ tandai emailed_at setelah sukses
+        // Tandai hanya delivery yang BENAR-BENAR diproses pada job ini
         Delivery::query()
-            ->where('order_id', $order->id)
+            ->whereIn('id', $deliveries->pluck('id')->all())
             ->whereNull('emailed_at')
-            ->update(['emailed_at' => now()]);
+            ->update([
+                'emailed_at' => now(),
+            ]);
 
         Log::info('SendDigitalItemsFallbackEmail: success', [
             'order_id' => $order->id,
             'to' => $to,
-            'deliveries_count' => count($itemsEmail),
+            'deliveries_count' => $deliveries->count(),
+            'delivery_ids' => $deliveries->pluck('id')->all(),
         ]);
     }
 }
