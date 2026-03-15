@@ -9,6 +9,7 @@ use App\Models\Product;
 use Illuminate\Support\Facades\DB;
 use App\Jobs\SendDigitalItemsFallbackEmail;
 use Illuminate\Support\Facades\Log;
+use App\Enums\OrderStatus;
 
 class OrderFulfillmentService
 {
@@ -24,6 +25,23 @@ class OrderFulfillmentService
             'order_id' => $order->id,
             'invoice_number' => $order->invoice_number ?? null,
         ]);
+
+        $status = (string) ($order->status?->value ?? $order->status);
+
+        if (!in_array($status, [
+            OrderStatus::PAID->value,
+            OrderStatus::FULFILLED->value,
+        ], true)) {
+            Log::warning('FULFILL BLOCKED ORDER_NOT_PAID', [
+                'order_id' => $order->id,
+                'status' => $status,
+            ]);
+
+            return [
+                'ok' => false,
+                'message' => 'Order not paid yet',
+            ];
+        }
 
         // cegah dobel fulfill
         if ($order->deliveries()->count() > 0) {

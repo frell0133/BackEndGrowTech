@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\Mail;
 use App\Mail\DigitalItemsMail;
 use App\Services\OrderFulfillmentService;
 use App\Services\BrevoMailService;
+use App\Enums\OrderStatus;
+use App\Enums\PaymentStatus;
 
 class UserDeliveryController extends Controller
 {
@@ -51,11 +53,10 @@ class UserDeliveryController extends Controller
         if (!$order) return $this->fail('Order not found', 404);
 
         $totalQty = $this->getTotalQty($order);
-
         $firstDelivery = $order->deliveries->first();
 
-        // info untuk FE: boleh reveal atau tidak
-        $canReveal = ($totalQty === 1)
+        $canReveal = $this->isPaidOrder($order)
+            && ($totalQty === 1)
             && $order->deliveries->count() === 1
             && $firstDelivery
             && $firstDelivery->delivery_mode === 'one_time'
@@ -64,20 +65,15 @@ class UserDeliveryController extends Controller
         return $this->ok([
             'order_id' => $order->id,
             'total_qty' => $totalQty,
-            'delivery_mode' => $totalQty === 1 ? 'one_time' : 'email_only',
+            'delivery_mode' => $firstDelivery?->delivery_mode ?? ($totalQty === 1 ? 'one_time' : 'email_only'),
             'deliveries_count' => $order->deliveries->count(),
             'can_reveal' => $canReveal,
             'emailed' => $order->deliveries->whereNotNull('emailed_at')->count() > 0,
-
-            // debug tambahan
             'order_status' => (string) ($order->status?->value ?? $order->status),
             'payment_status' => (string) ($order->payment->status?->value ?? $order->payment->status ?? null),
         ]);
     }
 
-    /**
-     * Reveal one-time (qty==1 only)
-     */
     public function reveal(Request $request, $id, OrderFulfillmentService $fulfill)
     {
         $user = $request->user();
@@ -86,10 +82,15 @@ class UserDeliveryController extends Controller
         $order = $this->loadOrderForUser((int)$id, (int)$user->id);
         if (!$order) return $this->fail('Order not found', 404);
 
-        // kalau belum ada deliveries, berarti belum fulfilled → coba fulfill (optional)
+        if (!$this->isPaidOrder($order)) {
+            return $this->fail('Order belum dibayar', 422);
+        }
+
         if ($order->deliveries->count() === 0) {
             $r = $fulfill->fulfillPaidOrder($order);
-            if (!($r['ok'] ?? false)) return $this->fail($r['message'] ?? 'Cannot fulfill', 422);
+            if (!($r['ok'] ?? false)) {
+                return $this->fail($r['message'] ?? 'Cannot fulfill', 422);
+            }
 
             $order->refresh();
             $order = $this->loadOrderForUser((int)$id, (int)$user->id);
@@ -97,7 +98,9 @@ class UserDeliveryController extends Controller
         }
 
         $totalQty = $this->getTotalQty($order);
-        if ($totalQty !== 1) return $this->fail('Reveal only available for total_qty=1', 422);
+        if ($totalQty !== 1) {
+            return $this->fail('Reveal only available for total_qty=1', 422);
+        }
 
         $delivery = $order->deliveries->first();
         if (!$delivery) return $this->fail('Delivery not found', 404);
@@ -110,33 +113,61 @@ class UserDeliveryController extends Controller
             return $this->fail('Already revealed', 409);
         }
 
-        // Lock supaya tidak bisa reveal 2x dalam race condition
-        $payload = DB::transaction(function () use ($delivery, $fulfill) {
+        $result = DB::transaction(function () use ($delivery, $fulfill) {
             $d = Delivery::query()
                 ->where('id', $delivery->id)
                 ->lockForUpdate()
                 ->with(['license.product'])
                 ->first();
 
-            if (!$d || !$d->license) return null;
+            if (!$d) {
+                return [
+                    'ok' => false,
+                    'status' => 404,
+                    'message' => 'Delivery not found',
+                ];
+            }
+
+            if (!$d->license) {
+                return [
+                    'ok' => false,
+                    'status' => 404,
+                    'message' => 'License not found',
+                ];
+            }
 
             if ($d->revealed_at) {
-                return null;
+                return [
+                    'ok' => false,
+                    'status' => 409,
+                    'message' => 'Already revealed',
+                ];
             }
 
             $d->revealed_at = now();
             $d->reveal_count = (int) ($d->reveal_count ?? 0) + 1;
             $d->save();
 
-            // ✅ return data yang akan ditampilkan di modal (license_key)
-            return $fulfill->formatLicense($d->license);
+            return [
+                'ok' => true,
+                'data' => $fulfill->formatLicense($d->license),
+            ];
         });
 
-        if ($payload === null) return $this->fail('Already revealed', 409);
+        if (!($result['ok'] ?? false)) {
+            return $this->fail(
+                $result['message'] ?? 'Reveal failed',
+                (int) ($result['status'] ?? 422)
+            );
+        }
+
+        $payload = $result['data'] ?? [];
 
         return $this->ok([
             'message' => 'Revealed (one-time)',
-            'data' => $payload,
+            'product_name' => $payload['product_name'] ?? null,
+            'license_key' => $payload['license_key'] ?? null,
+            'payload' => $payload['payload'] ?? null,
         ]);
     }
 
@@ -249,5 +280,18 @@ class UserDeliveryController extends Controller
         Delivery::where('order_id', $order->id)->update(['emailed_at' => now()]);
 
         return $this->ok(['message' => 'Resent']);
+    }
+
+    private function isPaidOrder(Order $order): bool
+    {
+        $orderStatus = (string) ($order->status?->value ?? $order->status);
+        $paymentStatus = (string) ($order->payment->status?->value ?? $order->payment->status ?? null);
+
+        return in_array($orderStatus, [
+            OrderStatus::PAID->value,
+            OrderStatus::FULFILLED->value,
+        ], true) || in_array($paymentStatus, [
+            PaymentStatus::PAID->value,
+        ], true);
     }
 }
