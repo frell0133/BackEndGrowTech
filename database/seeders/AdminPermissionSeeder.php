@@ -24,9 +24,6 @@ class AdminPermissionSeeder extends Seeder
             ['key' => 'manage_categories', 'label' => 'Kategori', 'group' => 'catalog', 'is_protected' => false],
             ['key' => 'manage_subcategories', 'label' => 'Sub Kategori', 'group' => 'catalog', 'is_protected' => false],
             ['key' => 'manage_products', 'label' => 'Produk', 'group' => 'catalog', 'is_protected' => false],
-            ['key' => 'manage_licenses', 'label' => 'Lisensi', 'group' => 'catalog', 'is_protected' => false],
-            ['key' => 'manage_product_stocks', 'label' => 'Stock Produk', 'group' => 'catalog', 'is_protected' => false],
-            ['key' => 'manage_stock_proofs', 'label' => 'Stock Proof', 'group' => 'catalog', 'is_protected' => false],
 
             // ===== Orders =====
             ['key' => 'manage_orders', 'label' => 'Order', 'group' => 'orders', 'is_protected' => false],

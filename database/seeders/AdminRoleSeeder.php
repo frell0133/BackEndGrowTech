@@ -85,9 +85,6 @@ class AdminRoleSeeder extends Seeder
                 'manage_categories',
                 'manage_subcategories',
                 'manage_products',
-                'manage_licenses',
-                'manage_product_stocks',
-                'manage_stock_proofs',
                 'manage_uploads',
             ],
 
@@ -123,9 +120,6 @@ class AdminRoleSeeder extends Seeder
                 'view_dashboard',
                 'manage_orders',
                 'manage_deliveries',
-                'manage_licenses',
-                'manage_product_stocks',
-                'manage_stock_proofs',
                 'view_payments',
             ],
 
