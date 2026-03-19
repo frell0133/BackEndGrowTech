@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\User;
 
 use App\Http\Controllers\Controller;
+use App\Models\PaymentGateway;
 use App\Models\WalletTopup;
 use App\Services\Payments\PaymentGatewayManager;
 use App\Support\ApiResponse;
@@ -12,6 +13,36 @@ use Illuminate\Support\Facades\DB;
 class UserTopupController extends Controller
 {
     use ApiResponse;
+
+    private function resolveGatewayFee(PaymentGateway $gateway, float $baseAmount): array
+    {
+        $type = strtolower((string) ($gateway->fee_type ?? ''));
+        $value = (float) ($gateway->fee_value ?? 0);
+
+        if ($type === 'fixed') {
+            return [
+                'type' => 'fixed',
+                'percent' => 0.0,
+                'amount' => max(0.0, round($value, 2)),
+            ];
+        }
+
+        if ($type === 'percent') {
+            $percent = max(0.0, $value);
+
+            return [
+                'type' => 'percent',
+                'percent' => $percent,
+                'amount' => round(max(0.0, $baseAmount) * ($percent / 100), 2),
+            ];
+        }
+
+        return [
+            'type' => null,
+            'percent' => 0.0,
+            'amount' => 0.0,
+        ];
+    }
 
     public function init(Request $request, PaymentGatewayManager $gatewayManager)
     {
@@ -34,12 +65,16 @@ class UserTopupController extends Controller
         }
 
         $amount = (float) $v['amount'];
+        $fee = $this->resolveGatewayFee($gateway, $amount);
+        $grossAmount = round($amount + (float) $fee['amount'], 2);
 
-        $topup = DB::transaction(function () use ($user, $amount, $gateway) {
+        $topup = DB::transaction(function () use ($user, $amount, $fee, $gateway) {
             $topup = WalletTopup::create([
                 'user_id' => (int) $user->id,
                 'order_id' => 'TMP-' . now()->format('YmdHis') . '-' . strtoupper(substr(md5((string) microtime(true)), 0, 6)),
                 'amount' => $amount,
+                'gateway_fee_percent' => (float) $fee['percent'],
+                'gateway_fee_amount' => (float) $fee['amount'],
                 'currency' => 'IDR',
                 'status' => 'initiated',
                 'gateway_code' => $gateway->code,
@@ -55,6 +90,7 @@ class UserTopupController extends Controller
         try {
             $init = $gatewayManager->driverFor($gateway)->createTopupPayment($gateway, $topup, [
                 'user' => $user,
+                'gross_amount' => $grossAmount,
             ]);
         } catch (\Throwable $e) {
             $topup->status = 'failed';
@@ -89,6 +125,9 @@ class UserTopupController extends Controller
             'order_id' => $topup->order_id,
             'status' => $topup->status,
             'amount' => (float) $topup->amount,
+            'gateway_fee_percent' => (float) ($topup->gateway_fee_percent ?? 0),
+            'gateway_fee_amount' => (float) ($topup->gateway_fee_amount ?? 0),
+            'total_payable_gateway' => (float) ((float) $topup->amount + (float) ($topup->gateway_fee_amount ?? 0)),
             'currency' => $topup->currency,
             'gateway_code' => $gateway->code,
             'gateway' => $gateway->code,
@@ -99,9 +138,16 @@ class UserTopupController extends Controller
             'simulate_pay_endpoint' => $simulatePayEndpoint,
             'status_endpoint' => rtrim((string) config('app.url'), '/') . '/api/v1/wallet/topups/' . $topup->order_id,
             'mode' => $init['mode'] ?? ($gateway->sandbox_mode ? 'sandbox' : 'production'),
+            'payment_gateway_summary' => [
+                'fee_type' => $fee['type'],
+                'fee_percent' => (float) $fee['percent'],
+                'fee_amount' => (float) $fee['amount'],
+                'total_payable' => (float) $grossAmount,
+            ],
             'payment_payload' => $init['payload'] ?? null,
         ]);
     }
+
     public function show(Request $request, string $orderId)
     {
         $user = $request->user();
@@ -120,6 +166,9 @@ class UserTopupController extends Controller
             'order_id' => $topup->order_id,
             'status' => $topup->status,
             'amount' => (float) $topup->amount,
+            'gateway_fee_percent' => (float) ($topup->gateway_fee_percent ?? 0),
+            'gateway_fee_amount' => (float) ($topup->gateway_fee_amount ?? 0),
+            'total_payable_gateway' => (float) ((float) $topup->amount + (float) ($topup->gateway_fee_amount ?? 0)),
             'currency' => $topup->currency,
             'gateway_code' => $topup->gateway_code,
             'external_id' => $topup->external_id,

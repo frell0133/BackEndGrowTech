@@ -69,21 +69,45 @@ class MidtransGatewayDriver implements PaymentGatewayDriver
     public function createTopupPayment(PaymentGateway $gateway, WalletTopup $topup, array $context = []): array
     {
         $user = $context['user'] ?? null;
-        $grossAmount = (float) $topup->amount;
+
+        $baseAmount = (int) round((float) $topup->amount);
+        $gatewayFee = (int) round((float) ($topup->gateway_fee_amount ?? 0));
+        $grossAmount = (int) round((float) ($context['gross_amount'] ?? ($baseAmount + $gatewayFee)));
+
+        $itemDetails = [
+            [
+                'id' => 'wallet-topup',
+                'price' => max(0, $baseAmount),
+                'quantity' => 1,
+                'name' => 'Wallet Topup',
+            ],
+        ];
+
+        if ($gatewayFee > 0) {
+            $itemDetails[] = [
+                'id' => 'gateway-fee',
+                'price' => $gatewayFee,
+                'quantity' => 1,
+                'name' => 'Gateway Fee',
+            ];
+        }
+
+        $sumItems = 0;
+        foreach ($itemDetails as $it) {
+            $sumItems += ((int) $it['price'] * (int) $it['quantity']);
+        }
+
+        if ($sumItems !== $grossAmount) {
+            $delta = $grossAmount - $sumItems;
+            $itemDetails[0]['price'] = (int) $itemDetails[0]['price'] + $delta;
+        }
 
         $payload = [
             'transaction_details' => [
                 'order_id' => (string) $topup->order_id,
-                'gross_amount' => (int) round($grossAmount),
+                'gross_amount' => $grossAmount,
             ],
-            'item_details' => [
-                [
-                    'id' => 'wallet-topup',
-                    'price' => (int) round($grossAmount),
-                    'quantity' => 1,
-                    'name' => 'Wallet Topup',
-                ],
-            ],
+            'item_details' => $itemDetails,
             'customer_details' => [
                 'first_name' => (string) ($user->name ?? 'Customer'),
                 'email' => (string) ($user->email ?? ''),
@@ -235,4 +259,4 @@ class MidtransGatewayDriver implements PaymentGatewayDriver
 
         return $value;
     }
-}
+}   

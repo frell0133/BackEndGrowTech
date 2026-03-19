@@ -11,6 +11,8 @@ class WalletTopup extends Model
         'user_id',
         'order_id',
         'amount',
+        'gateway_fee_percent',
+        'gateway_fee_amount',
         'currency',
         'status',
         'gateway_code',
@@ -26,6 +28,8 @@ class WalletTopup extends Model
 
     protected $casts = [
         'amount' => 'decimal:2',
+        'gateway_fee_percent' => 'decimal:3',
+        'gateway_fee_amount' => 'decimal:2',
         'raw_callback' => 'array',
         'posted_to_ledger_at' => 'datetime',
         'paid_at' => 'datetime',

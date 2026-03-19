@@ -130,7 +130,6 @@ class PaymentWebhookController extends Controller
                         'webhook' => $payload,
                     ]);
 
-
                     if ($status === 'paid' && !$locked->paid_at) {
                         $locked->paid_at = $event['paid_at'] ?? now();
                     }
@@ -138,9 +137,11 @@ class PaymentWebhookController extends Controller
                     $locked->save();
 
                     if ($status === 'paid' && !$locked->posted_to_ledger_at) {
+                        $ledgerAmount = (int) round((float) $locked->amount);
+
                         $ledger->topup(
                             (int) $locked->user_id,
-                            (int) round($amount > 0 ? $amount : (float) $locked->amount),
+                            $ledgerAmount,
                             (string) $locked->order_id,
                             'Topup via ' . (string) ($gateway->name ?? $gateway->code)
                         );
@@ -154,6 +155,9 @@ class PaymentWebhookController extends Controller
                             'user_id' => $locked->user_id,
                             'order_id' => $locked->order_id,
                             'gateway' => $gateway->code,
+                            'wallet_credit_amount' => $ledgerAmount,
+                            'gateway_paid_amount' => $amount,
+                            'gateway_fee_amount' => (float) ($locked->gateway_fee_amount ?? 0),
                         ]);
                     }
 
@@ -172,13 +176,13 @@ class PaymentWebhookController extends Controller
                     ]);
                 });
 
-                    if ($shouldDispatchTopupInvoice && $finalTopupId) {
-                        $this->dispatchInvoiceForTopup(
-                            $finalTopupId,
-                            $gateway->code . '_topup_paid',
-                            $topupOrderId
-                        );
-                    } else {
+                if ($shouldDispatchTopupInvoice && $finalTopupId) {
+                    $this->dispatchInvoiceForTopup(
+                        $finalTopupId,
+                        $gateway->code . '_topup_paid',
+                        $topupOrderId
+                    );
+                } else {
                     Log::info('TOPUP INVOICE NOT DISPATCHED', [
                         'topup_id' => $finalTopupId,
                         'status' => $status,

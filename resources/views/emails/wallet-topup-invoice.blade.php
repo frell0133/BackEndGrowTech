@@ -98,6 +98,19 @@
                       Rp {{ number_format((float) ($topup->amount ?? 0), 0, ',', '.') }}
                     </td>
                   </tr>
+                  @if ((float) ($topup->gateway_fee_amount ?? 0) > 0)
+                  <tr>
+                    <td style="padding:14px;border-bottom:1px solid #f0eee9;font-size:13px;color:#2d2a24;">
+                      Fee admin / gateway
+                      @if ((float) ($topup->gateway_fee_percent ?? 0) > 0)
+                        ({{ rtrim(rtrim(number_format((float) $topup->gateway_fee_percent, 3, '.', ''), '0'), '.') }}%)
+                      @endif
+                    </td>
+                    <td style="padding:14px;border-bottom:1px solid #f0eee9;font-size:13px;color:#2d2a24;text-align:right;">
+                      Rp {{ number_format((float) ($topup->gateway_fee_amount ?? 0), 0, ',', '.') }}
+                    </td>
+                  </tr>
+                  @endif
                 </tbody>
               </table>
             </td>
@@ -107,11 +120,25 @@
             <td style="padding:20px 40px 0;">
               <table style="margin-left:auto;min-width:320px;border-collapse:collapse;">
                 <tr>
+                  <td style="padding:2px 0;font-size:13px;color:#888580;">Nominal Masuk Wallet</td>
+                  <td style="padding:2px 0 2px 24px;font-size:13px;color:#2d2a24;text-align:right;font-weight:600;">
+                    Rp {{ number_format((float) ($topup->amount ?? 0), 0, ',', '.') }}
+                  </td>
+                </tr>
+                @if ((float) ($topup->gateway_fee_amount ?? 0) > 0)
+                <tr>
+                  <td style="padding:2px 0;font-size:13px;color:#888580;">Fee Admin</td>
+                  <td style="padding:2px 0 2px 24px;font-size:13px;color:#2d2a24;text-align:right;font-weight:600;">
+                    Rp {{ number_format((float) ($topup->gateway_fee_amount ?? 0), 0, ',', '.') }}
+                  </td>
+                </tr>
+                @endif
+                <tr>
                   <td style="padding:10px 0 0;font-size:14px;color:#2d2a24;font-weight:800;">
-                    Total Topup
+                    Total Dibayar
                   </td>
                   <td style="padding:10px 0 0 24px;font-size:14px;color:#2d2a24;text-align:right;font-weight:800;">
-                    Rp {{ number_format((float) ($topup->amount ?? 0), 0, ',', '.') }}
+                    Rp {{ number_format((float) (($topup->amount ?? 0) + ($topup->gateway_fee_amount ?? 0)), 0, ',', '.') }}
                   </td>
                 </tr>
               </table>
