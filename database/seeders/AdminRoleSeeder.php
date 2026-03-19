@@ -19,48 +19,134 @@ class AdminRoleSeeder extends Seeder
             ]
         );
 
-        AdminRole::updateOrCreate(['slug' => 'content_admin'], ['name' => 'Admin Konten', 'is_super' => false, 'is_system' => true]);
-        AdminRole::updateOrCreate(['slug' => 'catalog_admin'], ['name' => 'Admin Produk', 'is_super' => false, 'is_system' => true]);
-        AdminRole::updateOrCreate(['slug' => 'order_admin'], ['name' => 'Admin Order', 'is_super' => false, 'is_system' => true]);
-        AdminRole::updateOrCreate(['slug' => 'finance_admin'], ['name' => 'Admin Finance', 'is_super' => false, 'is_system' => true]);
-        AdminRole::updateOrCreate(['slug' => 'marketing_admin'], ['name' => 'Admin Marketing', 'is_super' => false, 'is_system' => true]);
-        AdminRole::updateOrCreate(['slug' => 'settings_admin'], ['name' => 'Admin Settings', 'is_super' => false, 'is_system' => true]);
-        AdminRole::updateOrCreate(['slug' => 'ops_admin'], ['name' => 'Admin Operasional', 'is_super' => false, 'is_system' => true]);
-        AdminRole::updateOrCreate(['slug' => 'auditor'], ['name' => 'Auditor (Read Only)', 'is_super' => false, 'is_system' => true]);
+        AdminRole::updateOrCreate(
+            ['slug' => 'user_admin'],
+            ['name' => 'Admin User / Customer', 'is_super' => false, 'is_system' => true]
+        );
+
+        AdminRole::updateOrCreate(
+            ['slug' => 'content_admin'],
+            ['name' => 'Admin Konten', 'is_super' => false, 'is_system' => true]
+        );
+
+        AdminRole::updateOrCreate(
+            ['slug' => 'catalog_admin'],
+            ['name' => 'Admin Produk', 'is_super' => false, 'is_system' => true]
+        );
+
+        AdminRole::updateOrCreate(
+            ['slug' => 'order_admin'],
+            ['name' => 'Admin Order', 'is_super' => false, 'is_system' => true]
+        );
+
+        AdminRole::updateOrCreate(
+            ['slug' => 'finance_admin'],
+            ['name' => 'Admin Finance', 'is_super' => false, 'is_system' => true]
+        );
+
+        AdminRole::updateOrCreate(
+            ['slug' => 'marketing_admin'],
+            ['name' => 'Admin Marketing', 'is_super' => false, 'is_system' => true]
+        );
+
+        AdminRole::updateOrCreate(
+            ['slug' => 'settings_admin'],
+            ['name' => 'Admin Settings', 'is_super' => false, 'is_system' => true]
+        );
+
+        AdminRole::updateOrCreate(
+            ['slug' => 'ops_admin'],
+            ['name' => 'Admin Operasional', 'is_super' => false, 'is_system' => true]
+        );
+
+        AdminRole::updateOrCreate(
+            ['slug' => 'auditor'],
+            ['name' => 'Auditor (Read Only)', 'is_super' => false, 'is_system' => true]
+        );
 
         $map = [
+            'user_admin' => [
+                'view_dashboard',
+                'manage_users',
+            ],
+
             'content_admin' => [
-                'manage_site_settings', 'manage_banners', 'manage_popups', 'manage_pages', 'manage_faqs', 'manage_uploads',
+                'view_dashboard',
+                'manage_site_settings',
+                'manage_banners',
+                'manage_popups',
+                'manage_pages',
+                'manage_faqs',
+                'manage_uploads',
             ],
+
             'catalog_admin' => [
-                'manage_categories', 'manage_subcategories', 'manage_products', 'manage_licenses', 'manage_product_stocks', 'manage_stock_proofs', 'manage_uploads', 'view_dashboard',
+                'view_dashboard',
+                'manage_categories',
+                'manage_subcategories',
+                'manage_products',
+                'manage_licenses',
+                'manage_product_stocks',
+                'manage_stock_proofs',
+                'manage_uploads',
             ],
+
             'order_admin' => [
-                'manage_orders', 'manage_deliveries', 'view_dashboard',
+                'view_dashboard',
+                'manage_orders',
+                'manage_deliveries',
             ],
+
             'finance_admin' => [
-                'view_dashboard', 'view_payments', 'manage_wallets', 'manage_withdraws',
+                'view_dashboard',
+                'view_payments',
+                'manage_wallets',
+                'manage_withdraws',
             ],
+
             'marketing_admin' => [
-                'manage_referrals', 'manage_discounts', 'manage_vouchers', 'view_dashboard',
+                'view_dashboard',
+                'manage_referrals',
+                'manage_discounts',
+                'manage_vouchers',
             ],
+
             'settings_admin' => [
-                'view_dashboard', 'manage_site_settings', 'manage_system_access', 'manage_payment_gateways', 'manage_uploads',
+                'view_dashboard',
+                'manage_site_settings',
+                'manage_system_access',
+                'manage_payment_gateways',
+                'manage_uploads',
             ],
+
             'ops_admin' => [
-                'view_dashboard', 'manage_orders', 'manage_deliveries', 'manage_licenses', 'manage_product_stocks', 'manage_stock_proofs',
+                'view_dashboard',
+                'manage_orders',
+                'manage_deliveries',
+                'manage_licenses',
+                'manage_product_stocks',
+                'manage_stock_proofs',
+                'view_payments',
             ],
+
             'auditor' => [
-                'view_dashboard', 'view_audit_logs', 'view_payments',
+                'view_dashboard',
+                'view_payments',
             ],
         ];
 
         foreach ($map as $slug => $keys) {
             $role = AdminRole::where('slug', $slug)->first();
+
+            if (!$role) {
+                continue;
+            }
+
             $permIds = AdminPermission::whereIn('key', $keys)->pluck('id')->all();
             $role->permissions()->sync($permIds);
         }
 
+        // Owner tetap super admin, jadi tidak perlu sync permission biasa
         $owner->permissions()->sync([]);
     }
 }

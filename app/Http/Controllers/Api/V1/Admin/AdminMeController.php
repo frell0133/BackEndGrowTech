@@ -21,8 +21,13 @@ class AdminMeController extends Controller
             'email' => $u->email,
             'role' => $u->role,
             'tier' => $u->tier,
+
             'is_super_admin' => $u->isSuperAdmin(),
+
+            // tetap super admin only
             'can_manage_rbac' => $u->isSuperAdmin(),
+            'can_view_audit_logs' => $u->isSuperAdmin(),
+
             'admin_role' => $u->adminRole ? [
                 'id' => $u->adminRole->id,
                 'name' => $u->adminRole->name,
@@ -30,6 +35,7 @@ class AdminMeController extends Controller
                 'is_super' => (bool) $u->adminRole->is_super,
                 'is_system' => (bool) ($u->adminRole->is_system ?? false),
             ] : null,
+
             'permissions' => $u->adminPermissionKeys(),
         ]);
     }
