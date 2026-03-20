@@ -3,13 +3,11 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Support\PublicCache;
+use App\Services\SupabaseStorageService;
 use App\Support\ApiResponse;
+use App\Support\PublicCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use App\Http\Requests\Admin\SettingIconSignRequest;
-use App\Services\SupabaseStorageService;
-
 
 class AdminSiteSettingController extends Controller
 {
@@ -25,10 +23,10 @@ class AdminSiteSettingController extends Controller
         }
 
         $rows = $q->get()->map(function ($r) {
-            // jsonb di postgres kadang sudah object, tapi aman kita decode kalau string
             if (is_string($r->value)) {
                 $r->value = json_decode($r->value, true);
             }
+
             return $r;
         });
 
@@ -41,32 +39,28 @@ class AdminSiteSettingController extends Controller
         $key   = (string) $request->input('key');
 
         $rules = [
-            'group' => ['required','string','max:64'],
-            'key' => ['required','string','max:128'],
+            'group' => ['required', 'string', 'max:64'],
+            'key' => ['required', 'string', 'max:128'],
             'value' => ['required'],
-            'is_public' => ['required','boolean'],
+            'is_public' => ['required', 'boolean'],
         ];
 
-        // Contact rules
         if ($group === 'contact') {
-            $rules['value'] = ['required','array'];
-            $rules['value.name'] = ['required','string'];
-            $rules['value.link'] = ['required','string'];
-            $rules['value.display'] = ['nullable','string'];
-            $rules['value.icon_path'] = ['required','string'];
-            $rules['value.icon_url']  = ['required','string'];
+            $rules['value'] = ['required', 'array'];
+            $rules['value.name'] = ['required', 'string'];
+            $rules['value.link'] = ['required', 'string'];
+            $rules['value.display'] = ['nullable', 'string'];
+            $rules['value.icon_path'] = ['required', 'string'];
+            $rules['value.icon_url']  = ['required', 'string'];
         }
 
-        // ✅ Payment rules (fee_percent / tax_percent)
         if ($group === 'payment' && in_array($key, ['fee_percent', 'tax_percent'], true)) {
-            // kita prefer format { "percent": 0.7 }
-            $rules['value'] = ['required','array'];
-            $rules['value.percent'] = ['required','numeric','min:0','max:100'];
+            $rules['value'] = ['required', 'array'];
+            $rules['value.percent'] = ['required', 'numeric', 'min:0', 'max:100'];
         }
 
         $data = $request->validate($rules);
 
-        // simpan value sebagai JSON string
         $value = $data['value'];
         if (is_array($value) || is_object($value)) {
             $value = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
@@ -81,18 +75,20 @@ class AdminSiteSettingController extends Controller
                 'created_at' => now(),
             ]
         );
-        
-        return response()->json(['success' => true, 'data' => ['saved' => true]]);
 
         PublicCache::bumpContent();
-        
+
+        return response()->json([
+            'success' => true,
+            'data' => ['saved' => true],
+        ]);
     }
 
     public function destroy(Request $request)
     {
         $data = $request->validate([
-            'group' => ['required','string'],
-            'key' => ['required','string'],
+            'group' => ['required', 'string'],
+            'key' => ['required', 'string'],
         ]);
 
         DB::table('site_settings')
@@ -100,17 +96,15 @@ class AdminSiteSettingController extends Controller
             ->where('key', $data['key'])
             ->delete();
 
-        return $this->ok(['deleted' => true]);
-        
         PublicCache::bumpContent();
-        
+
+        return $this->ok(['deleted' => true]);
     }
 
-    // POST /api/v1/admin/settings/icon/sign
     public function signIconUpload(Request $request, SupabaseStorageService $supabase)
     {
         $data = $request->validate([
-            'mime' => ['required','string','starts_with:image/'],
+            'mime' => ['required', 'string', 'starts_with:image/'],
         ]);
 
         $adminId = auth()->id() ?? 0;
@@ -127,7 +121,4 @@ class AdminSiteSettingController extends Controller
             'public_url' => $supabase->publicObjectUrl($bucket, $signed['path']),
         ]);
     }
-
-    
-
 }

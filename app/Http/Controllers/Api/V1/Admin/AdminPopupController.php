@@ -3,16 +3,12 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Support\PublicCache;
 use App\Models\Popup;
+use App\Support\PublicCache;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class AdminPopupController extends Controller
 {
-    /**
-     * GET /api/v1/admin/popups
-     */
     public function index()
     {
         $rows = Popup::orderByDesc('id')->get();
@@ -20,14 +16,11 @@ class AdminPopupController extends Controller
         return response()->json([
             'success' => true,
             'data' => $rows,
-            'meta' => (object)[],
+            'meta' => (object) [],
             'error' => null,
         ]);
     }
 
-    /**
-     * POST /api/v1/admin/popups
-     */
     public function store(Request $request)
     {
         $data = $request->validate([
@@ -39,38 +32,30 @@ class AdminPopupController extends Controller
             'target' => ['required', 'string', 'max:50'],
         ]);
 
-        // pastikan boolean beneran
         $data['is_active'] = filter_var($data['is_active'], FILTER_VALIDATE_BOOLEAN);
 
         $popup = Popup::create($data);
 
+        PublicCache::bumpContent();
+
         return response()->json([
             'success' => true,
             'data' => $popup,
-            'meta' => (object)[],
+            'meta' => (object) [],
             'error' => null,
         ], 201);
-
-        PublicCache::bumpContent();
-
     }
 
-    /**
-     * GET /api/v1/admin/popups/{popup}
-     */
     public function show(Popup $popup)
     {
         return response()->json([
             'success' => true,
             'data' => $popup,
-            'meta' => (object)[],
+            'meta' => (object) [],
             'error' => null,
         ]);
     }
 
-    /**
-     * PATCH /api/v1/admin/popups/{popup}
-     */
     public function update(Request $request, Popup $popup)
     {
         $data = $request->validate([
@@ -88,32 +73,27 @@ class AdminPopupController extends Controller
 
         $popup->update($data);
 
+        PublicCache::bumpContent();
+
         return response()->json([
             'success' => true,
             'data' => $popup->fresh(),
-            'meta' => (object)[],
+            'meta' => (object) [],
             'error' => null,
         ]);
-
-        PublicCache::bumpContent();
-
     }
 
-    /**
-     * DELETE /api/v1/admin/popups/{popup}
-     */
     public function destroy(Popup $popup)
     {
         $popup->delete();
 
+        PublicCache::bumpContent();
+
         return response()->json([
             'success' => true,
             'data' => true,
-            'meta' => (object)[],
+            'meta' => (object) [],
             'error' => null,
         ]);
-
-        PublicCache::bumpContent();
-
     }
 }

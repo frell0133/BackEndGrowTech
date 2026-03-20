@@ -67,20 +67,20 @@ class AdminProductController extends Controller
     public function store(Request $request)
     {
         $v = $request->validate([
-            'category_id' => ['required','exists:categories,id'],
-            'subcategory_id' => ['required','exists:subcategories,id'],
-            'name' => ['required','string','max:180'],
-            'slug' => ['nullable','string','max:180','unique:products,slug'],
-            'type' => ['required','string','max:60'],
-            'duration_days' => ['nullable','integer','min:1'],
-            'description' => ['nullable','string'],
-            'tier_pricing' => ['required','array'],
-            'is_active' => ['nullable','boolean'],
-            'is_published' => ['nullable','boolean'],
-            'track_stock' => ['nullable','boolean'],
-            'stock_min_alert' => ['nullable','integer','min:0'],
-            'rating' => ['nullable','numeric','min:0','max:5'],
-            'rating_count' => ['nullable','integer','min:0'],
+            'category_id' => ['required', 'exists:categories,id'],
+            'subcategory_id' => ['required', 'exists:subcategories,id'],
+            'name' => ['required', 'string', 'max:180'],
+            'slug' => ['nullable', 'string', 'max:180', 'unique:products,slug'],
+            'type' => ['required', 'string', 'max:60'],
+            'duration_days' => ['nullable', 'integer', 'min:1'],
+            'description' => ['nullable', 'string'],
+            'tier_pricing' => ['required', 'array'],
+            'is_active' => ['nullable', 'boolean'],
+            'is_published' => ['nullable', 'boolean'],
+            'track_stock' => ['nullable', 'boolean'],
+            'stock_min_alert' => ['nullable', 'integer', 'min:0'],
+            'rating' => ['nullable', 'numeric', 'min:0', 'max:5'],
+            'rating_count' => ['nullable', 'integer', 'min:0'],
         ]);
 
         $v['slug'] = $v['slug'] ?? Str::slug($v['name']);
@@ -105,23 +105,25 @@ class AdminProductController extends Controller
     public function update(Request $request, $id)
     {
         $p = Product::find($id);
-        if (!$p) return $this->fail('Product not found', 404);
+        if (!$p) {
+            return $this->fail('Product not found', 404);
+        }
 
         $v = $request->validate([
-            'category_id' => ['sometimes','exists:categories,id'],
-            'subcategory_id' => ['sometimes','exists:subcategories,id'],
-            'name' => ['sometimes','string','max:180'],
-            'slug' => ['sometimes','string','max:180','unique:products,slug,'.$p->id],
-            'type' => ['sometimes','string','max:60'],
-            'duration_days' => ['sometimes','nullable','integer','min:1'],
-            'description' => ['sometimes','nullable','string'],
-            'tier_pricing' => ['sometimes','array'],
-            'is_active' => ['sometimes','boolean'],
-            'is_published' => ['sometimes','boolean'],
-            'track_stock' => ['sometimes','boolean'],
-            'stock_min_alert' => ['sometimes','integer','min:0'],
-            'rating' => ['sometimes','numeric','min:0','max:5'],
-            'rating_count' => ['sometimes','integer','min:0'],
+            'category_id' => ['sometimes', 'exists:categories,id'],
+            'subcategory_id' => ['sometimes', 'exists:subcategories,id'],
+            'name' => ['sometimes', 'string', 'max:180'],
+            'slug' => ['sometimes', 'string', 'max:180', 'unique:products,slug,' . $p->id],
+            'type' => ['sometimes', 'string', 'max:60'],
+            'duration_days' => ['sometimes', 'nullable', 'integer', 'min:1'],
+            'description' => ['sometimes', 'nullable', 'string'],
+            'tier_pricing' => ['sometimes', 'array'],
+            'is_active' => ['sometimes', 'boolean'],
+            'is_published' => ['sometimes', 'boolean'],
+            'track_stock' => ['sometimes', 'boolean'],
+            'stock_min_alert' => ['sometimes', 'integer', 'min:0'],
+            'rating' => ['sometimes', 'numeric', 'min:0', 'max:5'],
+            'rating_count' => ['sometimes', 'integer', 'min:0'],
         ]);
 
         if (array_key_exists('name', $v) && !array_key_exists('slug', $v)) {
@@ -142,14 +144,16 @@ class AdminProductController extends Controller
     public function publish(Request $request, $id)
     {
         $p = Product::find($id);
-        if (!$p) return $this->fail('Product not found', 404);
+        if (!$p) {
+            return $this->fail('Product not found', 404);
+        }
 
         $v = $request->validate([
-            'is_published' => ['required','boolean']
+            'is_published' => ['required', 'boolean'],
         ]);
 
         $p->update([
-            'is_published' => $v['is_published']
+            'is_published' => $v['is_published'],
         ]);
 
         PublicCache::bumpCatalog();
@@ -161,16 +165,18 @@ class AdminProductController extends Controller
     public function destroy($id)
     {
         $p = Product::find($id);
-        if (!$p) return $this->fail('Product not found', 404);
+        if (!$p) {
+            return $this->fail('Product not found', 404);
+        }
 
         $p->update([
             'is_active' => false,
             'is_published' => false,
         ]);
 
-        return $this->ok(['deleted' => false, 'deactivated' => true]);
-        
         PublicCache::bumpCatalog();
         PublicCache::bumpDashboard();
+
+        return $this->ok(['deleted' => false, 'deactivated' => true]);
     }
 }

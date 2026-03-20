@@ -4,12 +4,11 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Page;
-use Illuminate\Http\Request;
 use App\Support\PublicCache;
+use Illuminate\Http\Request;
 
 class AdminPageController extends Controller
 {
-    // GET /api/v1/admin/pages
     public function index()
     {
         $pages = Page::orderByDesc('updated_at')->paginate(20);
@@ -20,24 +19,22 @@ class AdminPageController extends Controller
         ]);
     }
 
-    // GET /api/v1/admin/pages/slug/{slug}  (buat load form edit)
     public function showBySlug(string $slug)
     {
         $page = Page::where('slug', $slug)->first();
 
         return response()->json([
             'success' => true,
-            'data' => $page, // bisa null kalau belum ada
+            'data' => $page,
         ]);
     }
 
-    // PUT /api/v1/admin/pages/slug/{slug} (UPSERT)
     public function upsertBySlug(Request $request, string $slug)
     {
         $data = $request->validate([
             'title'        => ['required', 'string', 'max:255'],
             'content'      => ['required', 'string'],
-            'is_published' => ['sometimes', 'boolean'], // optional
+            'is_published' => ['sometimes', 'boolean'],
         ]);
 
         $page = Page::updateOrCreate(
@@ -49,16 +46,14 @@ class AdminPageController extends Controller
             ]
         );
 
+        PublicCache::bumpContent();
+
         return response()->json([
             'success' => true,
             'data' => $page,
         ]);
-
-        PublicCache::bumpCatalog();
-        PublicCache::bumpDashboard();
     }
 
-    // PATCH /api/v1/admin/pages/{id}
     public function patch(Request $request, int $id)
     {
         $data = $request->validate([
@@ -71,25 +66,23 @@ class AdminPageController extends Controller
         $page = Page::findOrFail($id);
         $page->fill($data)->save();
 
+        PublicCache::bumpContent();
+
         return response()->json([
             'success' => true,
             'data' => $page,
         ]);
-
-        PublicCache::bumpCatalog();
-        PublicCache::bumpDashboard();
     }
 
-
-    // (opsional) DELETE /api/v1/admin/pages/{id}
     public function destroy(int $id)
     {
         $page = Page::findOrFail($id);
         $page->delete();
 
-        return response()->json(['success' => true]);
-        
-        PublicCache::bumpCatalog();
-        PublicCache::bumpDashboard();
+        PublicCache::bumpContent();
+
+        return response()->json([
+            'success' => true,
+        ]);
     }
 }

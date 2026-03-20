@@ -7,12 +7,11 @@ use App\Http\Requests\Admin\BannerSignImageRequest;
 use App\Http\Requests\Admin\BannerUpdateImageRequest;
 use App\Models\Banner;
 use App\Services\SupabaseStorageService;
-use Illuminate\Http\Request;
 use App\Support\PublicCache;
+use Illuminate\Http\Request;
 
 class AdminBannerController extends Controller
 {
-    // GET /api/v1/admin/banners
     public function index(Request $request)
     {
         $perPage = (int) $request->get('per_page', 15);
@@ -28,14 +27,12 @@ class AdminBannerController extends Controller
         ]);
     }
 
-    // POST /api/v1/admin/banners
-    // Create banner row only (image_path optional, biasanya null dulu)
     public function store(Request $request)
     {
         $payload = $request->validate([
             'sort_order' => ['sometimes', 'integer', 'min:0'],
             'is_active'  => ['sometimes', 'boolean'],
-            'image_path' => ['sometimes', 'nullable', 'string'], // optional
+            'image_path' => ['sometimes', 'nullable', 'string'],
         ]);
 
         $banner = Banner::create([
@@ -44,14 +41,14 @@ class AdminBannerController extends Controller
             'image_path' => $payload['image_path'] ?? null,
         ]);
 
+        PublicCache::bumpContent();
+
         return response()->json([
             'success' => true,
             'data' => $banner,
         ], 201);
-        PublicCache::bumpContent();
     }
 
-    // PATCH /api/v1/admin/banners/{banner}
     public function update(Request $request, Banner $banner)
     {
         $payload = $request->validate([
@@ -61,13 +58,14 @@ class AdminBannerController extends Controller
 
         $banner->fill($payload)->save();
 
+        PublicCache::bumpContent();
+
         return response()->json([
             'success' => true,
             'data' => $banner,
         ]);
     }
 
-    // POST /api/v1/admin/banners/image/sign
     public function signImageUpload(BannerSignImageRequest $request, SupabaseStorageService $supabase)
     {
         $adminId = auth()->id() ?? 0;
@@ -87,34 +85,30 @@ class AdminBannerController extends Controller
                 'signed_url' => $signed['signedUrl'],
             ],
         ]);
-
-        PublicCache::bumpContent();
-
     }
 
-    // PATCH /api/v1/admin/banners/{banner}/image
     public function updateImage(BannerUpdateImageRequest $request, Banner $banner)
     {
         $banner->image_path = $request->input('image_path');
         $banner->save();
 
+        PublicCache::bumpContent();
+
         return response()->json([
             'success' => true,
             'data' => $banner,
         ]);
-        PublicCache::bumpContent();
     }
-    
 
-    // DELETE /api/v1/admin/banners/{banner}
     public function destroy(Banner $banner)
     {
         $banner->delete();
+
+        PublicCache::bumpContent();
 
         return response()->json([
             'success' => true,
             'data' => true,
         ]);
-        PublicCache::bumpContent();
     }
 }
