@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use App\Support\PublicCache;
 use App\Models\Faq;
 use Illuminate\Http\Request;
 
@@ -36,6 +37,8 @@ class AdminFaqController extends Controller
         $data['sort_order'] = $data['sort_order'] ?? 0;
 
         return $this->ok(Faq::create($data));
+
+        PublicCache::bumpContent();
     }
 
     public function update(Request $request, int $id)
@@ -53,6 +56,8 @@ class AdminFaqController extends Controller
         $faq->update($data);
 
         return $this->ok($faq);
+
+        PublicCache::bumpContent();
     }
 
     public function destroy(int $id)
@@ -63,5 +68,8 @@ class AdminFaqController extends Controller
         $faq->delete();
 
         return $this->ok(['deleted' => true]);
+
+        PublicCache::bumpContent();
+
     }
 }

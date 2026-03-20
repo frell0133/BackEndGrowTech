@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Support\PublicCache;
 use App\Models\Popup;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -49,6 +50,9 @@ class AdminPopupController extends Controller
             'meta' => (object)[],
             'error' => null,
         ], 201);
+
+        PublicCache::bumpContent();
+
     }
 
     /**
@@ -90,6 +94,9 @@ class AdminPopupController extends Controller
             'meta' => (object)[],
             'error' => null,
         ]);
+
+        PublicCache::bumpContent();
+
     }
 
     /**
@@ -105,5 +112,8 @@ class AdminPopupController extends Controller
             'meta' => (object)[],
             'error' => null,
         ]);
+
+        PublicCache::bumpContent();
+
     }
 }

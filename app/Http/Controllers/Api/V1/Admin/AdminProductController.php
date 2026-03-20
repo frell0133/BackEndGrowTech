@@ -3,12 +3,11 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Support\ApiResponse;
 use App\Models\Product;
+use App\Support\ApiResponse;
+use App\Support\PublicCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
-use Illuminate\Database\QueryException;
-use Illuminate\Support\Facades\DB;
 
 class AdminProductController extends Controller
 {
@@ -16,28 +15,53 @@ class AdminProductController extends Controller
 
     public function index(Request $request)
     {
-        $q = $request->query('q');
+        $q = trim((string) ($request->query('q') ?? $request->query('search', '')));
         $categoryId = $request->query('category_id');
         $subcategoryId = $request->query('subcategory_id');
+        $perPage = max(1, min((int) $request->query('per_page', 20), 100));
 
-        $data = Product::query()
+        $paginator = Product::query()
+            ->select([
+                'id',
+                'category_id',
+                'subcategory_id',
+                'name',
+                'slug',
+                'type',
+                'duration_days',
+                'tier_pricing',
+                'is_active',
+                'is_published',
+                'rating',
+                'rating_count',
+                'purchases_count',
+                'popularity_score',
+                'created_at',
+            ])
             ->with([
                 'category:id,name,slug',
-                // ✅ include logo subkategori
-                'subcategory:id,category_id,name,slug,provider,image_url,image_path'
+                'subcategory:id,category_id,name,slug,provider,image_url,image_path',
             ])
-            ->when($categoryId, fn($qq) => $qq->where('category_id', $categoryId))
-            ->when($subcategoryId, fn($qq) => $qq->where('subcategory_id', $subcategoryId))
-            ->when($q, function ($qq) use ($q) {
+            ->when($categoryId, fn ($qq) => $qq->where('category_id', $categoryId))
+            ->when($subcategoryId, fn ($qq) => $qq->where('subcategory_id', $subcategoryId))
+            ->when($q !== '', function ($qq) use ($q) {
                 $qq->where(function ($w) use ($q) {
-                    $w->where('name','ilike',"%{$q}%")
-                      ->orWhere('slug','ilike',"%{$q}%");
+                    $w->where('name', 'ilike', "%{$q}%")
+                        ->orWhere('slug', 'ilike', "%{$q}%");
                 });
             })
-            ->orderBy('id','desc')
-            ->get();
+            ->orderByDesc('id')
+            ->paginate($perPage);
 
-        return $this->ok($data);
+        return $this->ok(
+            $paginator->items(),
+            [
+                'current_page' => $paginator->currentPage(),
+                'last_page' => $paginator->lastPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+            ]
+        );
     }
 
     public function store(Request $request)
@@ -47,10 +71,10 @@ class AdminProductController extends Controller
             'subcategory_id' => ['required','exists:subcategories,id'],
             'name' => ['required','string','max:180'],
             'slug' => ['nullable','string','max:180','unique:products,slug'],
-            'type' => ['required','string','max:60'], // ACCOUNT_CREDENTIAL / LICENSE_KEY
+            'type' => ['required','string','max:60'],
             'duration_days' => ['nullable','integer','min:1'],
             'description' => ['nullable','string'],
-            'tier_pricing' => ['required','array'], // {"member":19500,"reseller":18500}
+            'tier_pricing' => ['required','array'],
             'is_active' => ['nullable','boolean'],
             'is_published' => ['nullable','boolean'],
             'track_stock' => ['nullable','boolean'],
@@ -69,7 +93,9 @@ class AdminProductController extends Controller
 
         $p = Product::create($v);
 
-        // ✅ include logo subkategori saat return
+        PublicCache::bumpCatalog();
+        PublicCache::bumpDashboard();
+
         return $this->ok($p->load(
             'category:id,name,slug',
             'subcategory:id,category_id,name,slug,provider,image_url,image_path'
@@ -98,14 +124,15 @@ class AdminProductController extends Controller
             'rating_count' => ['sometimes','integer','min:0'],
         ]);
 
-        // optional: auto slug kalau name diubah tapi slug tidak dikirim
         if (array_key_exists('name', $v) && !array_key_exists('slug', $v)) {
             $v['slug'] = Str::slug($v['name']);
         }
 
         $p->fill($v)->save();
 
-        // ✅ include logo subkategori saat return
+        PublicCache::bumpCatalog();
+        PublicCache::bumpDashboard();
+
         return $this->ok($p->load(
             'category:id,name,slug',
             'subcategory:id,category_id,name,slug,provider,image_url,image_path'
@@ -125,6 +152,9 @@ class AdminProductController extends Controller
             'is_published' => $v['is_published']
         ]);
 
+        PublicCache::bumpCatalog();
+        PublicCache::bumpDashboard();
+
         return $this->ok($p);
     }
 
@@ -139,6 +169,8 @@ class AdminProductController extends Controller
         ]);
 
         return $this->ok(['deleted' => false, 'deactivated' => true]);
+        
+        PublicCache::bumpCatalog();
+        PublicCache::bumpDashboard();
     }
-
 }

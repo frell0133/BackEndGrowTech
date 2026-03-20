@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Support\PublicCache;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -80,8 +81,11 @@ class AdminSiteSettingController extends Controller
                 'created_at' => now(),
             ]
         );
-
+        
         return response()->json(['success' => true, 'data' => ['saved' => true]]);
+
+        PublicCache::bumpContent();
+        
     }
 
     public function destroy(Request $request)
@@ -97,6 +101,9 @@ class AdminSiteSettingController extends Controller
             ->delete();
 
         return $this->ok(['deleted' => true]);
+        
+        PublicCache::bumpContent();
+        
     }
 
     // POST /api/v1/admin/settings/icon/sign

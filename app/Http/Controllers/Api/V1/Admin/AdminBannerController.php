@@ -8,6 +8,7 @@ use App\Http\Requests\Admin\BannerUpdateImageRequest;
 use App\Models\Banner;
 use App\Services\SupabaseStorageService;
 use Illuminate\Http\Request;
+use App\Support\PublicCache;
 
 class AdminBannerController extends Controller
 {
@@ -47,6 +48,7 @@ class AdminBannerController extends Controller
             'success' => true,
             'data' => $banner,
         ], 201);
+        PublicCache::bumpContent();
     }
 
     // PATCH /api/v1/admin/banners/{banner}
@@ -85,6 +87,9 @@ class AdminBannerController extends Controller
                 'signed_url' => $signed['signedUrl'],
             ],
         ]);
+
+        PublicCache::bumpContent();
+
     }
 
     // PATCH /api/v1/admin/banners/{banner}/image
@@ -97,7 +102,9 @@ class AdminBannerController extends Controller
             'success' => true,
             'data' => $banner,
         ]);
+        PublicCache::bumpContent();
     }
+    
 
     // DELETE /api/v1/admin/banners/{banner}
     public function destroy(Banner $banner)
@@ -108,5 +115,6 @@ class AdminBannerController extends Controller
             'success' => true,
             'data' => true,
         ]);
+        PublicCache::bumpContent();
     }
 }

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Page;
 use Illuminate\Http\Request;
+use App\Support\PublicCache;
 
 class AdminPageController extends Controller
 {
@@ -52,6 +53,9 @@ class AdminPageController extends Controller
             'success' => true,
             'data' => $page,
         ]);
+
+        PublicCache::bumpCatalog();
+        PublicCache::bumpDashboard();
     }
 
     // PATCH /api/v1/admin/pages/{id}
@@ -71,6 +75,9 @@ class AdminPageController extends Controller
             'success' => true,
             'data' => $page,
         ]);
+
+        PublicCache::bumpCatalog();
+        PublicCache::bumpDashboard();
     }
 
 
@@ -81,5 +88,8 @@ class AdminPageController extends Controller
         $page->delete();
 
         return response()->json(['success' => true]);
+        
+        PublicCache::bumpCatalog();
+        PublicCache::bumpDashboard();
     }
 }

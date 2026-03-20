@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\SubCategory;
 use App\Services\SupabaseStorageService;
 use App\Support\ApiResponse;
+use App\Support\PublicCache;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -43,6 +44,8 @@ class AdminSubCategoryController extends Controller
         $sub = SubCategory::create($validated);
 
         return $this->ok($sub->load('category'), 201);
+        PublicCache::bumpCatalog();
+        PublicCache::bumpDashboard();
     }
 
     public function update(Request $request, $id)
@@ -70,6 +73,9 @@ class AdminSubCategoryController extends Controller
         $sub->update($validated);
 
         return $this->ok($sub->load('category'));
+        
+        PublicCache::bumpCatalog();
+        PublicCache::bumpDashboard();
     }
 
     public function destroy($id)

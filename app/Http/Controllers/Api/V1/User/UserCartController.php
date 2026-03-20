@@ -182,50 +182,50 @@ class UserCartController extends Controller
         $taxPercent = $this->getTaxPercent();
         $feePercent = $this->getGatewayFeePercent();
 
-        $items = CartItem::query()
+        $cartItems = CartItem::query()
             ->where('cart_id', $cart->id)
-            ->with(['product', 'product.category', 'product.subcategory'])
-            ->get()
-            ->map(function (CartItem $item) use ($tierKey) {
-                $p = $item->product;
+            ->with([
+                'product:id,category_id,subcategory_id,name,slug,type,description,tier_pricing,duration_days,price,is_active,is_published,rating,rating_count,purchases_count,popularity_score',
+                'product.category:id,name,slug',
+                'product.subcategory:id,category_id,name,description,slug,provider,image_url,image_path',
+            ])
+            ->get();
 
-                $stock = License::query()
-                    ->where('product_id', $item->product_id)
-                    ->where('status', License::STATUS_AVAILABLE)
-                    ->count();
+        $stockMap = $this->getAvailableStockMap(
+            $cartItems->pluck('product_id')->filter()->unique()->map(fn ($id) => (int) $id)->values()->all()
+        );
 
-                $canBuy = (bool) ($p?->is_active && $p?->is_published && $stock > 0);
+        $items = $cartItems->map(function (CartItem $item) use ($tierKey, $stockMap) {
+            $product = $item->product;
+            $stock = (int) ($stockMap[(int) $item->product_id] ?? 0);
+            $qty = (int) ($item->qty ?? 1);
 
-                $unitPrice = 0;
-                if ($p) $unitPrice = $this->resolveUnitPrice($p, $tierKey);
+            $unitPrice = $product ? $this->resolveUnitPrice($product, $tierKey) : 0;
+            $canBuy = (bool) ($product?->is_active && $product?->is_published && $stock > 0);
 
-                $qty = (int) ($item->qty ?? 1);
-
-                return [
-                    'id' => $item->id,
-                    'qty' => $qty,
-                    'unit_price' => (int) $unitPrice,
-                    'line_subtotal' => (int) $unitPrice * $qty,
-                    'product' => $p,
-                    'stock_available' => $stock,
-                    'can_buy' => $canBuy,
-                ];
-            });
+            return [
+                'id' => $item->id,
+                'qty' => $qty,
+                'unit_price' => (int) $unitPrice,
+                'line_subtotal' => (int) $unitPrice * $qty,
+                'product' => $product,
+                'stock_available' => $stock,
+                'can_buy' => $canBuy,
+            ];
+        });
 
         $subtotal = (float) $items->sum('line_subtotal');
         $discountTotal = 0.0;
 
-        $taxAmount = 0.0;
-        if ($taxPercent > 0) {
-            $taxAmount = round($subtotal * ($taxPercent / 100), 2);
-        }
+        $taxAmount = $taxPercent > 0
+            ? round($subtotal * ($taxPercent / 100), 2)
+            : 0.0;
 
         $total = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
 
-        $gatewayFeeAmount = 0.0;
-        if ($feePercent > 0) {
-            $gatewayFeeAmount = round($total * ($feePercent / 100), 2);
-        }
+        $gatewayFeeAmount = $feePercent > 0
+            ? round($total * ($feePercent / 100), 2)
+            : 0.0;
 
         return $this->ok([
             'items' => $items,
@@ -235,7 +235,7 @@ class UserCartController extends Controller
                 'discount_total' => $discountTotal,
                 'tax_percent' => $taxPercent,
                 'tax_amount' => $taxAmount,
-                'total' => $total, // base (tanpa fee gateway)
+                'total' => $total,
                 'gateway_fee_percent' => (float) $feePercent,
                 'gateway_fee_amount' => (float) $gatewayFeeAmount,
                 'total_payable_gateway' => (float) ($total + $gatewayFeeAmount),
@@ -799,5 +799,21 @@ class UserCartController extends Controller
                 'total_payable_gateway' => (float) ($total + $gatewayFeeAmount),
             ],
         ]);
+    }
+
+        private function getAvailableStockMap(array $productIds): array
+    {
+        if (empty($productIds)) {
+            return [];
+        }
+
+        return License::query()
+            ->select('product_id', DB::raw('COUNT(*) as total'))
+            ->whereIn('product_id', $productIds)
+            ->where('status', License::STATUS_AVAILABLE)
+            ->groupBy('product_id')
+            ->pluck('total', 'product_id')
+            ->map(fn ($total) => (int) $total)
+            ->toArray();
     }
 }

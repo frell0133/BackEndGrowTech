@@ -103,6 +103,7 @@ Route::prefix('v1')->group(function () {
 
         Route::prefix('content')->group(function () {
             Route::get('settings', [ContentController::class, 'settings']);
+            Route::get('feature-access', [ContentController::class, 'featureAccess']);
             Route::get('banners', [ContentController::class, 'banners']);
             Route::get('popup', [ContentController::class, 'popup']);
             Route::get('pages/{slug}', [ContentController::class, 'page']);
