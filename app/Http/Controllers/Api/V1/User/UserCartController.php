@@ -13,6 +13,7 @@ use App\Models\Voucher;
 use App\Models\Setting;
 use App\Enums\OrderStatus;
 use App\Support\ApiResponse;
+use App\Support\PublicCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -40,59 +41,49 @@ class UserCartController extends Controller
         return Cart::firstOrCreate(['user_id' => $userId]);
     }
 
-    private function getTaxPercent(): int
+    private function decodeSettingValue(mixed $value): mixed
     {
-        $row = Setting::query()
-            ->where('group', 'payment')
-            ->where('key', 'tax_percent')
-            ->first();
-
-        if (!$row) return 0;
-
-        $val = $row->value;
-
-        if (is_string($val)) {
-            $decoded = json_decode($val, true);
-            if (json_last_error() === JSON_ERROR_NONE) $val = $decoded;
+        if (!is_string($value)) {
+            return $value;
         }
 
-        if (is_array($val)) {
-            return (int) ($val['percent'] ?? 0);
-        }
+        $decoded = json_decode($value, true);
 
-        if (is_numeric($val)) return (int) $val;
-
-        return 0;
+        return json_last_error() === JSON_ERROR_NONE ? $decoded : $value;
     }
 
-    /**
-     * Fee percent untuk payment gateway (mis. 0.7 artinya 0.7%).
-     * Disimpan di site_settings: group=payment, key=fee_percent.
-     */
-    private function getGatewayFeePercent(): float
+    private function getPaymentSettings(): array
     {
-        $row = Setting::query()
-            ->where('group', 'payment')
-            ->where('key', 'fee_percent')
-            ->first();
+        return PublicCache::rememberContent('cart:payment-settings', 60, function () {
+            $rows = Setting::query()
+                ->where('group', 'payment')
+                ->whereIn('key', ['tax_percent', 'fee_percent'])
+                ->get(['key', 'value'])
+                ->keyBy('key');
 
-        if (!$row) return 0.0;
+            $taxValue = $this->decodeSettingValue($rows->get('tax_percent')?->value);
+            $feeValue = $this->decodeSettingValue($rows->get('fee_percent')?->value);
 
-        $val = $row->value;
+            $taxPercent = 0;
+            if (is_array($taxValue)) {
+                $taxPercent = (int) ($taxValue['percent'] ?? 0);
+            } elseif (is_numeric($taxValue)) {
+                $taxPercent = (int) $taxValue;
+            }
 
-        if (is_string($val)) {
-            $decoded = json_decode($val, true);
-            if (json_last_error() === JSON_ERROR_NONE) $val = $decoded;
-        }
+            $feePercent = 0.0;
+            if (is_array($feeValue)) {
+                $rawFee = $feeValue['percent'] ?? $feeValue['value'] ?? 0;
+                $feePercent = is_numeric($rawFee) ? (float) $rawFee : 0.0;
+            } elseif (is_numeric($feeValue)) {
+                $feePercent = (float) $feeValue;
+            }
 
-        if (is_array($val)) {
-            $v = $val['percent'] ?? $val['value'] ?? 0;
-            return is_numeric($v) ? (float) $v : 0.0;
-        }
-
-        if (is_numeric($val)) return (float) $val;
-
-        return 0.0;
+            return [
+                'tax_percent' => $taxPercent,
+                'gateway_fee_percent' => $feePercent,
+            ];
+        });
     }
 
     /**
@@ -179,8 +170,9 @@ class UserCartController extends Controller
         $cart = $this->cartForUser((int) $user->id);
 
         $tierKey = (string) ($user->tier ?? 'member');
-        $taxPercent = $this->getTaxPercent();
-        $feePercent = $this->getGatewayFeePercent();
+        $paymentSettings = $this->getPaymentSettings();
+        $taxPercent = (int) ($paymentSettings['tax_percent'] ?? 0);
+        $feePercent = (float) ($paymentSettings['gateway_fee_percent'] ?? 0.0);
 
         $cartItems = CartItem::query()
             ->where('cart_id', $cart->id)
@@ -364,8 +356,9 @@ class UserCartController extends Controller
         ]);
 
         $tierKey = (string) ($user->tier ?? 'member');
-        $taxPercent = $this->getTaxPercent();
-        $feePercent = $this->getGatewayFeePercent();
+        $paymentSettings = $this->getPaymentSettings();
+        $taxPercent = (int) ($paymentSettings['tax_percent'] ?? 0);
+        $feePercent = (float) ($paymentSettings['gateway_fee_percent'] ?? 0.0);
 
         $cartItems = CartItem::query()
             ->where('cart_id', $cart->id)
@@ -373,6 +366,10 @@ class UserCartController extends Controller
             ->get();
 
         if ($cartItems->isEmpty()) return $this->fail('Cart kosong', 422);
+
+        $stockMap = $this->getAvailableStockMap(
+            $cartItems->pluck('product_id')->filter()->unique()->map(fn ($id) => (int) $id)->values()->all()
+        );
 
         foreach ($cartItems as $ci) {
             $p = $ci->product;
@@ -383,10 +380,7 @@ class UserCartController extends Controller
             }
 
             $need = (int) ($ci->qty ?? 1);
-            $stock = License::query()
-                ->where('product_id', (int) $ci->product_id)
-                ->where('status', License::STATUS_AVAILABLE)
-                ->count();
+            $stock = (int) ($stockMap[(int) $ci->product_id] ?? 0);
 
             if ($stock < $need) {
                 return $this->fail('Stock tidak cukup', 422, [
@@ -605,8 +599,9 @@ class UserCartController extends Controller
         ]);
 
         $tierKey = (string) ($user->tier ?? 'member');
-        $taxPercent = $this->getTaxPercent();
-        $feePercent = $this->getGatewayFeePercent();
+        $paymentSettings = $this->getPaymentSettings();
+        $taxPercent = (int) ($paymentSettings['tax_percent'] ?? 0);
+        $feePercent = (float) ($paymentSettings['gateway_fee_percent'] ?? 0.0);
 
         $cartItems = CartItem::query()
             ->where('cart_id', $cart->id)
@@ -641,6 +636,10 @@ class UserCartController extends Controller
             ]);
         }
 
+        $stockMap = $this->getAvailableStockMap(
+            $cartItems->pluck('product_id')->filter()->unique()->map(fn ($id) => (int) $id)->values()->all()
+        );
+
         foreach ($cartItems as $ci) {
             $p = $ci->product;
             if (!$p || !$p->is_active || !$p->is_published) {
@@ -650,10 +649,7 @@ class UserCartController extends Controller
             }
 
             $need = (int) ($ci->qty ?? 1);
-            $stock = License::query()
-                ->where('product_id', (int) $ci->product_id)
-                ->where('status', License::STATUS_AVAILABLE)
-                ->count();
+            $stock = (int) ($stockMap[(int) $ci->product_id] ?? 0);
 
             if ($stock < $need) {
                 return $this->fail('Stock tidak cukup', 422, [
@@ -801,7 +797,7 @@ class UserCartController extends Controller
         ]);
     }
 
-        private function getAvailableStockMap(array $productIds): array
+    private function getAvailableStockMap(array $productIds): array
     {
         if (empty($productIds)) {
             return [];

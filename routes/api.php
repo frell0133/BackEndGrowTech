@@ -89,10 +89,24 @@ Route::prefix('v1')->group(function () {
     Route::middleware(['public.access'])->group(function () {
         Route::get('categories', [PublicCategoryController::class, 'index']);
         Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories']);
+
         Route::get('subcategories', [PublicSubcategoryController::class, 'index']);
+        Route::get('subcategories/{idOrSlug}', [PublicSubcategoryController::class, 'show']);
 
         Route::get('products', [ProductController::class, 'index']);
         Route::get('products/{product}', [ProductController::class, 'show']);
+
+        // alias public supaya FE existing /api/v1/catalog/* tetap jalan
+        Route::prefix('catalog')->group(function () {
+            Route::get('categories', [PublicCategoryController::class, 'index']);
+            Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories']);
+
+            Route::get('subcategories', [PublicSubcategoryController::class, 'index']);
+            Route::get('subcategories/{idOrSlug}', [PublicSubcategoryController::class, 'show']);
+
+            Route::get('products', [ProductController::class, 'index']);
+            Route::get('products/{product}', [ProductController::class, 'show']);
+        });
 
         Route::get('products/{product}/availability', fn () => response()->json([
             'success' => true,
@@ -110,7 +124,6 @@ Route::prefix('v1')->group(function () {
             Route::get('faqs', [ContentController::class, 'faqs']);
         });
 
-        // CHECK PUBLIK
         Route::get('maintenance/public-check', fn () => response()->json([
             'success' => true,
             'data' => [
@@ -189,11 +202,15 @@ Route::prefix('v1')->group(function () {
          */
         Route::prefix('catalog')->group(function () {
             Route::get('categories', [PublicCategoryController::class, 'index'])
-            ->middleware('feature.access:catalog');
+                ->middleware('feature.access:catalog');
             Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories'])
                 ->middleware('feature.access:catalog');
+
             Route::get('subcategories', [PublicSubcategoryController::class, 'index'])
                 ->middleware('feature.access:catalog');
+            Route::get('subcategories/{idOrSlug}', [PublicSubcategoryController::class, 'show'])
+                ->middleware('feature.access:catalog');
+
             Route::get('products', [ProductController::class, 'index'])
                 ->middleware('feature.access:catalog');
             Route::get('products/{product}', [ProductController::class, 'show'])
