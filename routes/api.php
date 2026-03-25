@@ -55,6 +55,10 @@ use App\Http\Controllers\Api\V1\Admin\AdminDashboardController;
 use App\Http\Controllers\Api\V1\Admin\AdminProductStockController;
 use App\Http\Controllers\Api\V1\Admin\AdminSystemAccessController;
 
+// boostrap
+use App\Http\Controllers\Api\V1\Bootstrap\CustomerHomeBootstrapController;
+use App\Http\Controllers\Api\V1\Bootstrap\ShellBootstrapController;
+
 // Controllers (Public Catalog)
 use App\Http\Controllers\Api\V1\Public\CategoryController as PublicCategoryController;
 use App\Http\Controllers\Api\V1\Public\SubcategoryController as PublicSubcategoryController;
