@@ -227,6 +227,11 @@ Route::prefix('v1')->group(function () {
             'error' => null,
         ]));
 
+        Route::prefix('bootstrap')->group(function () {
+            Route::get('shell', \App\Http\Controllers\Api\V1\Bootstrap\ShellBootstrapController::class);
+            Route::get('customer-home', \App\Http\Controllers\Api\V1\Bootstrap\CustomerHomeBootstrapController::class);
+        });
+
         // Cart
         Route::get('cart', [UserCartController::class, 'show']);
         Route::post('cart/items', [UserCartController::class, 'add']);
