@@ -13,6 +13,9 @@ class ProductController extends Controller
 {
     use ApiResponse;
 
+    private const INDEX_CACHE_TTL = 300;
+    private const SHOW_CACHE_TTL = 300;
+
     private function normalizeSort(string $sort): string
     {
         $sort = strtolower(trim($sort));
@@ -69,7 +72,7 @@ class ProductController extends Controller
             $dir
         );
 
-        $data = PublicCache::rememberCatalog($cacheKey, 60, function () use (
+        $data = PublicCache::rememberCatalog($cacheKey, self::INDEX_CACHE_TTL, function () use (
             $search,
             $perPage,
             $categoryId,
@@ -87,19 +90,13 @@ class ProductController extends Controller
                     'type',
                     'description',
                     'tier_pricing',
-                    'duration_days',
                     'price',
-                    'is_active',
-                    'is_published',
                     'rating',
                     'rating_count',
-                    'purchases_count',
-                    'popularity_score',
-                    'created_at',
                 ])
                 ->with([
                     'category:id,name,slug',
-                    'subcategory:id,category_id,name,description,slug,provider,image_url,image_path',
+                    'subcategory:id,category_id,name,description,slug,provider,image_url',
                 ])
                 ->withCount([
                     'licenses as available_stock' => function ($q) {
@@ -109,10 +106,12 @@ class ProductController extends Controller
                 ->when($sort === 'favorite', fn ($q) => $q->withCount('favorites'))
                 ->when($categoryId, fn ($q) => $q->where('category_id', $categoryId))
                 ->when($subcategoryId, fn ($q) => $q->where('subcategory_id', $subcategoryId))
-                ->when($search !== '', fn ($q) => $q->where(function ($w) use ($search) {
-                    $w->where('name', 'ilike', "%{$search}%")
-                        ->orWhere('slug', 'ilike', "%{$search}%");
-                }))
+                ->when($search !== '', function ($q) use ($search) {
+                    $q->where(function ($w) use ($search) {
+                        $w->where('name', 'ilike', "%{$search}%")
+                            ->orWhere('slug', 'ilike', "%{$search}%");
+                    });
+                })
                 ->where('is_active', true)
                 ->where('is_published', true);
 
@@ -159,7 +158,7 @@ class ProductController extends Controller
             return $this->fail('Product not found', 404);
         }
 
-        $data = PublicCache::rememberCatalog('products:show:' . $product->id, 60, function () use ($product) {
+        $data = PublicCache::rememberCatalog('products:show:' . $product->id, self::SHOW_CACHE_TTL, function () use ($product) {
             $fresh = Product::query()
                 ->select([
                     'id',

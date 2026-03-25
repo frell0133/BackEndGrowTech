@@ -2,11 +2,11 @@
 
 namespace App\Http\Controllers\Api\V1\User;
 
+use App\Enums\OrderStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Favorite;
-use App\Models\Product;
 use App\Models\Order;
-use App\Enums\OrderStatus;
+use App\Models\Product;
 use App\Support\ApiResponse;
 use App\Support\PublicCache;
 use Illuminate\Http\Request;
@@ -22,11 +22,17 @@ class UserFavoriteController extends Controller
         $perPage = max(1, min((int) $request->query('per_page', 20), 200));
 
         $data = Favorite::query()
+            ->select([
+                'id',
+                'user_id',
+                'product_id',
+                'rating',
+                'created_at',
+            ])
             ->where('user_id', $user->id)
             ->with([
-                'product:id,category_id,subcategory_id,name,slug,type,description,tier_pricing,duration_days,price,is_active,is_published,rating,rating_count,purchases_count,popularity_score',
-                'product.category:id,name,slug',
-                'product.subcategory:id,category_id,name,slug,provider,image_url,image_path',
+                'product:id,category_id,subcategory_id,name,slug,rating,rating_count',
+                'product.subcategory:id,category_id,name,slug,image_url',
             ])
             ->latest()
             ->paginate($perPage);
