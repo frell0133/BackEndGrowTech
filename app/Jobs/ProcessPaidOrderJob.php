@@ -19,14 +19,14 @@ class ProcessPaidOrderJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, DispatchesInvoiceEmail;
 
+    public string $queue = 'fulfillment';
     public int $tries = 3;
-    public int $timeout = 180;
+    public int $timeout = 300;
 
     public function __construct(
         public int $orderId,
         public string $source = 'unknown'
     ) {
-        $this->onQueue('default');
     }
 
     public function handle(
@@ -64,6 +64,7 @@ class ProcessPaidOrderJob implements ShouldQueue
             'order_id' => $order->id,
             'status' => $status,
             'source' => $this->source,
+            'queue' => $this->queue,
         ]);
 
         try {
@@ -133,6 +134,7 @@ class ProcessPaidOrderJob implements ShouldQueue
         Log::info('PROCESS PAID ORDER DONE', [
             'order_id' => $order->id,
             'source' => $this->source,
+            'queue' => $this->queue,
             'fulfillment' => $fulfillmentResult,
             'has_deliveries' => $hasDeliveries,
             'final_status' => (string) ($order->fresh()->status?->value ?? $order->fresh()->status),

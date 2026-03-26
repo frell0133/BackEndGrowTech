@@ -5,13 +5,12 @@ namespace App\Http\Controllers\Api\V1\Webhook;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
 use App\Http\Controllers\Controller;
+use App\Jobs\ProcessPaidOrderJob;
 use App\Models\Order;
 use App\Models\Payment;
 use App\Models\WalletTopup;
 use App\Services\LedgerService;
-use App\Services\OrderFulfillmentService;
 use App\Services\Payments\PaymentGatewayManager;
-use App\Services\ReferralCommissionService;
 use App\Support\DispatchesInvoiceEmail;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -25,37 +24,33 @@ class PaymentWebhookController extends Controller
     public function handleMidtrans(
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger,
-        OrderFulfillmentService $fulfillment
+        LedgerService $ledger
     ) {
-        return $this->processWebhook('midtrans', $request, $gatewayManager, $ledger, $fulfillment);
+        return $this->processWebhook('midtrans', $request, $gatewayManager, $ledger);
     }
 
     public function handleDuitku(
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger,
-        OrderFulfillmentService $fulfillment
+        LedgerService $ledger
     ) {
-        return $this->processWebhook('duitku', $request, $gatewayManager, $ledger, $fulfillment);
+        return $this->processWebhook('duitku', $request, $gatewayManager, $ledger);
     }
 
     public function handle(
         string $gateway_code,
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger,
-        OrderFulfillmentService $fulfillment
+        LedgerService $ledger
     ) {
-        return $this->processWebhook($gateway_code, $request, $gatewayManager, $ledger, $fulfillment);
+        return $this->processWebhook($gateway_code, $request, $gatewayManager, $ledger);
     }
 
     protected function processWebhook(
         string $gatewayKey,
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger,
-        OrderFulfillmentService $fulfillment
+        LedgerService $ledger
     ) {
         try {
             $gateway = $gatewayManager->resolveWebhookGateway($gatewayKey);
@@ -228,6 +223,8 @@ class PaymentWebhookController extends Controller
             $finalOrderId = null;
             $finalInvoiceNumber = null;
             $shouldDispatchOrderInvoice = false;
+            $shouldDispatchPaidOrderJob = false;
+            $paidOrderJobSource = $gateway->code . '_webhook_paid';
 
             DB::transaction(function () use (
                 $order,
@@ -236,15 +233,14 @@ class PaymentWebhookController extends Controller
                 $externalId,
                 $payload,
                 $amount,
-                $ledger,
-                $fulfillment,
                 &$finalOrderId,
                 &$finalInvoiceNumber,
-                &$shouldDispatchOrderInvoice
+                &$shouldDispatchOrderInvoice,
+                &$shouldDispatchPaidOrderJob,
+                $paidOrderJobSource
             ) {
                 $lockedOrder = Order::query()
                     ->where('id', $order->id)
-                    ->with(['items.product', 'product', 'payment'])
                     ->lockForUpdate()
                     ->first();
 
@@ -252,10 +248,7 @@ class PaymentWebhookController extends Controller
                     throw new \RuntimeException('Order not found during transaction');
                 }
 
-                $alreadyPaid = in_array((string) ($lockedOrder->status?->value ?? $lockedOrder->status), [
-                    OrderStatus::PAID->value,
-                    OrderStatus::FULFILLED->value,
-                ], true);
+                $currentStatus = (string) ($lockedOrder->status?->value ?? $lockedOrder->status);
 
                 $payment = Payment::query()->firstOrNew([
                     'order_id' => (int) $lockedOrder->id,
@@ -281,53 +274,31 @@ class PaymentWebhookController extends Controller
 
                 $lockedOrder->payment_gateway_code = $gateway->code;
 
-                if ($status === 'paid' && !$alreadyPaid) {
+                if ($status === 'paid' && !in_array($currentStatus, [
+                    OrderStatus::PAID->value,
+                    OrderStatus::FULFILLED->value,
+                ], true)) {
                     $lockedOrder->status = OrderStatus::PAID->value;
-                    $lockedOrder->save();
-
-                    Log::info('ORDER MARKED PAID', [
-                        'order_id' => $lockedOrder->id,
-                        'invoice_number' => $lockedOrder->invoice_number,
-                        'gateway' => $gateway->code,
-                    ]);
-
-                    app(ReferralCommissionService::class)->handleOrderPaid(
-                        $lockedOrder->fresh(),
-                        $ledger,
-                        [
-                            'gateway' => $gateway->code,
-                            'webhook' => true,
-                            'external_id' => $externalId,
-                        ]
-                    );
-
-                    $result = $this->runFulfillment(
-                        $fulfillment,
-                        $lockedOrder->fresh(['items.product', 'product', 'payment'])
-                    );
-
-                    $hasDeliveries = method_exists($lockedOrder, 'deliveries')
-                        ? $lockedOrder->deliveries()->exists()
-                        : false;
-
-                    if (($result['success'] ?? false) || ($result['ok'] ?? false) || $hasDeliveries) {
-                        $lockedOrder->status = OrderStatus::FULFILLED->value;
-
-                        Log::info('ORDER MARKED FULFILLED', [
-                            'order_id' => $lockedOrder->id,
-                            'invoice_number' => $lockedOrder->invoice_number,
-                            'has_deliveries' => $hasDeliveries,
-                            'result' => $result,
-                        ]);
-                    }
-
-                    $lockedOrder->save();
                 }
 
                 if ($status === 'refunded') {
                     $lockedOrder->status = OrderStatus::REFUNDED->value;
-                    $lockedOrder->save();
+                }
 
+                if ($lockedOrder->isDirty()) {
+                    $lockedOrder->save();
+                }
+
+                if ($status === 'paid' && $currentStatus !== OrderStatus::FULFILLED->value) {
+                    Log::info('ORDER MARKED / CONFIRMED PAID', [
+                        'order_id' => $lockedOrder->id,
+                        'invoice_number' => $lockedOrder->invoice_number,
+                        'gateway' => $gateway->code,
+                        'previous_status' => $currentStatus,
+                    ]);
+                }
+
+                if ($status === 'refunded') {
                     Log::info('ORDER MARKED REFUNDED', [
                         'order_id' => $lockedOrder->id,
                         'invoice_number' => $lockedOrder->invoice_number,
@@ -337,18 +308,50 @@ class PaymentWebhookController extends Controller
                 $finalOrderId = (int) $lockedOrder->id;
                 $finalInvoiceNumber = (string) $lockedOrder->invoice_number;
 
-                if ($status === 'paid' && empty($lockedOrder->invoice_emailed_at)) {
-                    $shouldDispatchOrderInvoice = true;
-                }
+                $shouldDispatchPaidOrderJob = $status === 'paid'
+                    && !in_array($currentStatus, [
+                        OrderStatus::FULFILLED->value,
+                        OrderStatus::REFUNDED->value,
+                    ], true);
+
+                $shouldDispatchOrderInvoice = $status === 'paid'
+                    && empty($lockedOrder->invoice_emailed_at);
 
                 Log::info('ORDER WEBHOOK PROCESSED IN TX', [
                     'order_id' => $lockedOrder->id,
                     'invoice_number' => $lockedOrder->invoice_number,
                     'status' => $status,
+                    'previous_status' => $currentStatus,
+                    'should_dispatch_paid_order_job' => $shouldDispatchPaidOrderJob,
+                    'paid_order_job_source' => $paidOrderJobSource,
                     'should_dispatch_order_invoice' => $shouldDispatchOrderInvoice,
                     'invoice_emailed_at' => $lockedOrder->invoice_emailed_at,
                 ]);
             });
+
+            if ($shouldDispatchPaidOrderJob && $finalOrderId) {
+                $job = ProcessPaidOrderJob::dispatch($finalOrderId, $paidOrderJobSource)->delay(now()->addSecond());
+
+                if (method_exists($job, 'afterCommit')) {
+                    $job->afterCommit();
+                }
+
+                Log::info('PROCESS PAID ORDER JOB DISPATCHED', [
+                    'order_id' => $finalOrderId,
+                    'invoice_number' => $finalInvoiceNumber,
+                    'source' => $paidOrderJobSource,
+                    'queue' => 'fulfillment',
+                ]);
+            } else {
+                Log::info('PROCESS PAID ORDER JOB NOT DISPATCHED', [
+                    'order_id' => $finalOrderId,
+                    'invoice_number' => $finalInvoiceNumber,
+                    'status' => $status,
+                    'reason' => $status !== 'paid'
+                        ? 'status_not_paid'
+                        : 'already_fulfilled_or_refunded',
+                ]);
+            }
 
             if ($shouldDispatchOrderInvoice && $finalOrderId) {
                 $this->dispatchInvoiceForOrder(
@@ -392,57 +395,6 @@ class PaymentWebhookController extends Controller
                 'message' => $e->getMessage(),
             ], 500);
         }
-    }
-
-    protected function runFulfillment(OrderFulfillmentService $fulfillment, Order $order): array
-    {
-        foreach (['fulfillPaidOrder', 'handlePaidOrder', 'processPaidOrder', 'fulfill'] as $method) {
-            if (!method_exists($fulfillment, $method)) {
-                continue;
-            }
-
-            try {
-                $result = $fulfillment->{$method}($order);
-
-                Log::info('ORDER FULFILLMENT METHOD EXECUTED', [
-                    'method' => $method,
-                    'order_id' => $order->id,
-                    'invoice_number' => $order->invoice_number,
-                    'result_type' => gettype($result),
-                ]);
-
-                if (is_array($result)) {
-                    return $result;
-                }
-
-                return ['success' => $result !== false];
-            } catch (\ArgumentCountError $e) {
-                Log::warning('ORDER FULFILLMENT ARGUMENT COUNT ERROR', [
-                    'method' => $method,
-                    'order_id' => $order->id,
-                    'invoice_number' => $order->invoice_number,
-                    'error' => $e->getMessage(),
-                ]);
-
-                continue;
-            } catch (\Throwable $e) {
-                Log::error('ORDER FULFILLMENT EXECUTION FAILED', [
-                    'method' => $method,
-                    'order_id' => $order->id,
-                    'invoice_number' => $order->invoice_number,
-                    'error' => $e->getMessage(),
-                ]);
-
-                return ['success' => false, 'error' => $e->getMessage()];
-            }
-        }
-
-        Log::warning('ORDER FULFILLMENT NO METHOD MATCHED', [
-            'order_id' => $order->id,
-            'invoice_number' => $order->invoice_number,
-        ]);
-
-        return ['success' => false];
     }
 
     protected function dispatchInvoiceForOrder(Order $order, string $reason): void

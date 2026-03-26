@@ -2,10 +2,10 @@
 
 namespace App\Jobs;
 
-use App\Models\Order;
 use App\Models\Delivery;
-use App\Services\OrderFulfillmentService;
+use App\Models\Order;
 use App\Services\BrevoMailService;
+use App\Services\OrderFulfillmentService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -17,6 +17,7 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    public string $queue = 'mail';
     public int $orderId;
     public int $tries = 3;
     public int $timeout = 120;
@@ -24,7 +25,6 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
     public function __construct(int $orderId)
     {
         $this->orderId = $orderId;
-        $this->onQueue('default');
     }
 
     public function handle(OrderFulfillmentService $fulfill, BrevoMailService $brevo): void
@@ -52,7 +52,6 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
             throw new \RuntimeException('Digital items email recipient is empty');
         }
 
-        // ambil deliveries + license + product
         $deliveries = Delivery::query()
             ->where('order_id', $order->id)
             ->with(['license.product'])
@@ -65,7 +64,6 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
             return;
         }
 
-        // ✅ kalau sudah emailed sukses, jangan kirim lagi
         $alreadyEmailed = $deliveries->first(fn ($d) => !empty($d->emailed_at));
         if ($alreadyEmailed) {
             Log::info('SendDigitalItemsFallbackEmail: already emailed', [
@@ -77,7 +75,6 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
         $itemsEmail = $deliveries
             ->map(fn ($d) => $d->license ? $fulfill->formatLicense($d->license) : null)
             ->filter(fn ($item) => !empty($item['license_key']) || !empty($item['payload']) || !empty($item['product_name']))
-            ->values()
             ->values()
             ->all();
 
@@ -102,11 +99,9 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
                 'response' => $res,
             ]);
 
-            // throw supaya retry queue / masuk failed_jobs kalau mentok
             throw new \RuntimeException('Brevo send failed for digital items email');
         }
 
-        // ✅ tandai emailed_at setelah sukses
         Delivery::query()
             ->where('order_id', $order->id)
             ->whereNull('emailed_at')
