@@ -11,6 +11,7 @@ return [
 
     'allowed_origins' => [
         'https://frontendgrowtechtesting1-production-dfb9.up.railway.app',
+        'https://frontendgrowtechtesting1-production-6d21.up.railway.app',
         'http://localhost:3000',
     ],
 
