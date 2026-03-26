@@ -17,7 +17,6 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public string $queue = 'mail';
     public int $orderId;
     public int $tries = 3;
     public int $timeout = 120;
@@ -25,6 +24,7 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
     public function __construct(int $orderId)
     {
         $this->orderId = $orderId;
+        $this->onQueue('mail');
     }
 
     public function handle(OrderFulfillmentService $fulfill, BrevoMailService $brevo): void

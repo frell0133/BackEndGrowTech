@@ -15,12 +15,12 @@ class SendWalletTopupInvoiceJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public string $queue = 'mail';
     public int $tries = 3;
     public int $timeout = 120;
 
     public function __construct(public int $topupId)
     {
+        $this->onQueue('mail');
     }
 
     protected function resolveRecipientEmail(WalletTopup $topup): array

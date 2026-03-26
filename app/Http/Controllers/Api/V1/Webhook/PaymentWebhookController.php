@@ -13,6 +13,7 @@ use App\Services\LedgerService;
 use App\Services\Payments\PaymentGatewayManager;
 use App\Support\DispatchesInvoiceEmail;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
@@ -330,18 +331,21 @@ class PaymentWebhookController extends Controller
             });
 
             if ($shouldDispatchPaidOrderJob && $finalOrderId) {
-                $job = ProcessPaidOrderJob::dispatch($finalOrderId, $paidOrderJobSource)->delay(now()->addSecond());
+                $dispatched = $this->dispatchPaidOrderJobOnce(
+                    $finalOrderId,
+                    $paidOrderJobSource,
+                    $finalInvoiceNumber
+                );
 
-                if (method_exists($job, 'afterCommit')) {
-                    $job->afterCommit();
+                if (!$dispatched) {
+                    Log::info('PROCESS PAID ORDER JOB NOT DISPATCHED', [
+                        'order_id' => $finalOrderId,
+                        'invoice_number' => $finalInvoiceNumber,
+                        'status' => $status,
+                        'reason' => 'dispatch_lock_active',
+                        'source' => $paidOrderJobSource,
+                    ]);
                 }
-
-                Log::info('PROCESS PAID ORDER JOB DISPATCHED', [
-                    'order_id' => $finalOrderId,
-                    'invoice_number' => $finalInvoiceNumber,
-                    'source' => $paidOrderJobSource,
-                    'queue' => 'fulfillment',
-                ]);
             } else {
                 Log::info('PROCESS PAID ORDER JOB NOT DISPATCHED', [
                     'order_id' => $finalOrderId,
@@ -394,6 +398,64 @@ class PaymentWebhookController extends Controller
                 'success' => false,
                 'message' => $e->getMessage(),
             ], 500);
+        }
+    }
+
+    protected function dispatchPaidOrderJobOnce(
+        int $orderId,
+        string $source,
+        ?string $invoiceNumber = null
+    ): bool {
+        $lockKey = 'dispatch:process_paid_order:' . $orderId;
+        $lockSeconds = 45;
+        $lock = Cache::lock($lockKey, $lockSeconds);
+
+        if (!$lock->get()) {
+            Log::warning('PROCESS PAID ORDER JOB DUPLICATE DISPATCH BLOCKED', [
+                'order_id' => $orderId,
+                'invoice_number' => $invoiceNumber,
+                'source' => $source,
+                'queue' => 'fulfillment',
+                'lock_key' => $lockKey,
+                'lock_ttl_seconds' => $lockSeconds,
+            ]);
+
+            return false;
+        }
+
+        try {
+            $job = ProcessPaidOrderJob::dispatch($orderId, $source)->delay(now()->addSecond());
+
+            if (method_exists($job, 'afterCommit')) {
+                $job->afterCommit();
+            }
+
+            Log::info('PROCESS PAID ORDER JOB DISPATCHED', [
+                'order_id' => $orderId,
+                'invoice_number' => $invoiceNumber,
+                'source' => $source,
+                'queue' => 'fulfillment',
+                'lock_key' => $lockKey,
+                'lock_ttl_seconds' => $lockSeconds,
+            ]);
+
+            return true;
+        } catch (\Throwable $e) {
+            try {
+                $lock->release();
+            } catch (\Throwable $ignored) {
+            }
+
+            Log::error('PROCESS PAID ORDER JOB DISPATCH FAILED', [
+                'order_id' => $orderId,
+                'invoice_number' => $invoiceNumber,
+                'source' => $source,
+                'queue' => 'fulfillment',
+                'lock_key' => $lockKey,
+                'error' => $e->getMessage(),
+            ]);
+
+            throw $e;
         }
     }
 

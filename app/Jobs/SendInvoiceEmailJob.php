@@ -16,12 +16,12 @@ class SendInvoiceEmailJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public string $queue = 'mail';
     public int $tries = 3;
     public int $timeout = 120;
 
     public function __construct(public int $orderId)
     {
+        $this->onQueue('mail');
     }
 
     private function decodePercent($val): float

@@ -19,7 +19,6 @@ class ProcessPaidOrderJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, DispatchesInvoiceEmail;
 
-    public string $queue = 'fulfillment';
     public int $tries = 3;
     public int $timeout = 300;
 
@@ -27,6 +26,7 @@ class ProcessPaidOrderJob implements ShouldQueue
         public int $orderId,
         public string $source = 'unknown'
     ) {
+        $this->onQueue('fulfillment');
     }
 
     public function handle(
