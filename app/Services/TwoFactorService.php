@@ -344,7 +344,7 @@ class TwoFactorService
 
     private function subjectForPurpose(string $purpose): string
     {
-        $appName = (string) config('app.name', 'GrowTech');
+        $appName = 'Grow Tech';
 
         return match ($purpose) {
             'register' => "{$appName} - OTP Verifikasi Registrasi",
