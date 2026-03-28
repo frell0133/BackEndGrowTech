@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Public;
 
 use App\Http\Controllers\Controller;
+use App\Models\Product;
 use App\Models\SubCategory;
 use App\Support\ApiResponse;
 use App\Support\PublicCache;
@@ -18,32 +19,39 @@ class SubcategoryController extends Controller
         $categoryId = $request->query('category_id', 'all');
 
         $data = PublicCache::rememberCatalog('subcategories:index:' . $categoryId, 300, function () use ($categoryId) {
+            $productCounts = Product::query()
+                ->selectRaw('subcategory_id, COUNT(*) as products_count')
+                ->where('is_active', true)
+                ->where('is_published', true)
+                ->when($categoryId !== 'all' && $categoryId !== null && $categoryId !== '', function ($query) use ($categoryId) {
+                    $query->where('category_id', $categoryId);
+                })
+                ->groupBy('subcategory_id');
+
             return SubCategory::query()
                 ->select([
-                    'id',
-                    'category_id',
-                    'name',
-                    'description',
-                    'slug',
-                    'provider',
-                    'image_url',
-                    'image_path',
-                    'is_active',
-                    DB::raw('image_url as image'),
+                    'subcategories.id',
+                    'subcategories.category_id',
+                    'subcategories.name',
+                    'subcategories.description',
+                    'subcategories.slug',
+                    'subcategories.provider',
+                    'subcategories.image_url',
+                    'subcategories.image_path',
+                    'subcategories.is_active',
+                    DB::raw('subcategories.image_url as image'),
+                    DB::raw('pc.products_count as products_count'),
                 ])
-                ->where('is_active', true)
-                ->when($categoryId !== 'all' && $categoryId !== null && $categoryId !== '', function ($q) use ($categoryId) {
-                    $q->where('category_id', $categoryId);
+                ->joinSub($productCounts, 'pc', function ($join) {
+                    $join->on('pc.subcategory_id', '=', 'subcategories.id');
                 })
-                ->whereHas('category', fn ($q) => $q->where('is_active', true))
-                ->whereHas('products', function ($q) {
-                    $q->where('is_active', true)->where('is_published', true);
+                ->where('subcategories.is_active', true)
+                ->when($categoryId !== 'all' && $categoryId !== null && $categoryId !== '', function ($q) use ($categoryId) {
+                    $q->where('subcategories.category_id', $categoryId);
                 })
                 ->with(['category:id,name,slug'])
-                ->withCount(['products as products_count' => function ($q) {
-                    $q->where('is_active', true)->where('is_published', true);
-                }])
-                ->orderBy('name')
+                ->orderBy('subcategories.sort_order')
+                ->orderBy('subcategories.name')
                 ->get();
         });
 

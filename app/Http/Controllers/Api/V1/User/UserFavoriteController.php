@@ -16,10 +16,12 @@ class UserFavoriteController extends Controller
 {
     use ApiResponse;
 
+    private const INDEX_MAX_PER_PAGE = 50;
+
     public function index(Request $request)
     {
         $user = $request->user();
-        $perPage = max(1, min((int) $request->query('per_page', 20), 200));
+        $perPage = max(1, min((int) $request->query('per_page', 20), self::INDEX_MAX_PER_PAGE));
 
         $data = Favorite::query()
             ->select([
@@ -34,7 +36,7 @@ class UserFavoriteController extends Controller
                 'product:id,category_id,subcategory_id,name,slug,rating,rating_count',
                 'product.subcategory:id,category_id,name,slug,image_url',
             ])
-            ->latest()
+            ->orderByDesc('created_at')
             ->paginate($perPage);
 
         return $this->ok($data);
@@ -67,19 +69,7 @@ class UserFavoriteController extends Controller
                 ['rating' => $rating]
             );
 
-            $agg = Favorite::query()
-                ->where('product_id', $product->id)
-                ->whereNotNull('rating')
-                ->selectRaw('COUNT(*) as c, AVG(rating) as a')
-                ->first();
-
-            $product->rating_count = (int) ($agg->c ?? 0);
-            $product->rating = (float) ($agg->a ?? 0);
-
-            $purchases = (int) ($product->purchases_count ?? 0);
-            $product->popularity_score = ((float) $product->rating * 20) + $purchases;
-
-            $product->save();
+            $this->refreshProductRatingAggregate($product->id, (int) ($product->purchases_count ?? 0));
         });
 
         PublicCache::bumpCatalog();
@@ -106,25 +96,34 @@ class UserFavoriteController extends Controller
             $fav->delete();
 
             if ($product) {
-                $agg = Favorite::query()
-                    ->where('product_id', $product->id)
-                    ->whereNotNull('rating')
-                    ->selectRaw('COUNT(*) as c, AVG(rating) as a')
-                    ->first();
-
-                $product->rating_count = (int) ($agg->c ?? 0);
-                $product->rating = (float) ($agg->a ?? 0);
-
-                $purchases = (int) ($product->purchases_count ?? 0);
-                $product->popularity_score = ((float) $product->rating * 20) + $purchases;
-
-                $product->save();
+                $this->refreshProductRatingAggregate($product->id, (int) ($product->purchases_count ?? 0));
             }
         });
 
         PublicCache::bumpCatalog();
 
         return $this->ok(['message' => 'Removed from favorites']);
+    }
+
+    private function refreshProductRatingAggregate(int $productId, int $purchases): void
+    {
+        $agg = Favorite::query()
+            ->where('product_id', $productId)
+            ->whereNotNull('rating')
+            ->selectRaw('COUNT(*) as rating_count, COALESCE(AVG(rating), 0) as rating_avg')
+            ->first();
+
+        $ratingCount = (int) ($agg->rating_count ?? 0);
+        $rating = round((float) ($agg->rating_avg ?? 0), 2);
+        $popularityScore = ($rating * 20) + $purchases;
+
+        Product::query()
+            ->whereKey($productId)
+            ->update([
+                'rating_count' => $ratingCount,
+                'rating' => $rating,
+                'popularity_score' => $popularityScore,
+            ]);
     }
 
     private function hasPurchasedProduct(int $userId, int $productId): bool
