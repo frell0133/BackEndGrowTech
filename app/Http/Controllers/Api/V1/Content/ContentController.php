@@ -20,7 +20,8 @@ class ContentController extends Controller
     public function settings(Request $request)
     {
         $group = trim((string) $request->query('group', 'all'));
-        $cacheKey = 'settings:' . ($group !== '' ? $group : 'all');
+        $group = $group !== '' ? $group : 'all';
+        $cacheKey = 'settings:' . $group;
 
         $rows = PublicCache::rememberContent($cacheKey, 300, function () use ($group) {
             $q = DB::table('site_settings')
@@ -28,7 +29,7 @@ class ContentController extends Controller
                 ->orderBy('group')
                 ->orderBy('key');
 
-            if ($group !== '' && $group !== 'all') {
+            if ($group !== 'all') {
                 $q->where('group', $group);
             }
 
@@ -50,13 +51,13 @@ class ContentController extends Controller
     public function featureAccess(SystemAccessService $access)
     {
         $data = PublicCache::rememberContent('feature-access', 60, function () use ($access) {
-            return [
-                'public_access' => $access->get('public_access'),
-                'user_auth_access' => $access->get('user_auth_access'),
-                'catalog_access' => $access->get('catalog_access'),
-                'checkout_access' => $access->get('checkout_access'),
-                'topup_access' => $access->get('topup_access'),
-            ];
+            return $access->featurePayload([
+                'public_access',
+                'user_auth_access',
+                'catalog_access',
+                'checkout_access',
+                'topup_access',
+            ]);
         });
 
         return $this->ok($data);

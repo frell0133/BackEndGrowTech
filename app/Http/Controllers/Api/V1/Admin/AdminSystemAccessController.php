@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Setting;
+use App\Services\SystemAccessService;
 use App\Support\ApiResponse;
+use App\Support\PublicCache;
 use Illuminate\Http\Request;
 
 class AdminSystemAccessController extends Controller
@@ -54,6 +56,8 @@ class AdminSystemAccessController extends Controller
             ]
         );
 
+        $this->flushAccessCaches();
+
         return $this->ok($row);
     }
 
@@ -68,9 +72,19 @@ class AdminSystemAccessController extends Controller
             ->where('key', $data['key'])
             ->delete();
 
+        if ($deleted) {
+            $this->flushAccessCaches();
+        }
+
         return $this->ok([
             'deleted' => (bool) $deleted,
             'key' => $data['key'],
         ]);
+    }
+
+    private function flushAccessCaches(): void
+    {
+        SystemAccessService::bumpCacheVersion();
+        PublicCache::bumpContent();
     }
 }

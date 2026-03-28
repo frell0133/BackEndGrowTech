@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\License;
 use App\Models\Product;
 use App\Support\ApiResponse;
+use App\Support\PublicCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -80,6 +81,12 @@ class AdminLicenseController extends Controller
         if (!Storage::disk('local')->exists('stock_proofs')) {
             Storage::disk('local')->makeDirectory('stock_proofs');
         }
+    }
+
+    private function bumpCatalogCaches(): void
+    {
+        PublicCache::bumpCatalog();
+        PublicCache::bumpDashboard();
     }
 
     // =========================
@@ -167,6 +174,8 @@ class AdminLicenseController extends Controller
             return $this->fail('Data duplikat terdeteksi (sudah ada).', 409);
         }
 
+        $this->bumpCatalogCaches();
+
         return $this->ok($license);
     }
 
@@ -191,7 +200,7 @@ class AdminLicenseController extends Controller
             return $this->fail('Tidak ada baris valid. Pastikan 1 baris = 1 data.', 422);
         }
 
-        return DB::transaction(function () use ($product, $items, $mode) {
+        $response = DB::transaction(function () use ($product, $items, $mode) {
             $inserted = 0;
             $duplicates = 0;
             $duplicateLines = [];
@@ -225,6 +234,10 @@ class AdminLicenseController extends Controller
                 'duplicate_lines' => $duplicateLines,
             ]);
         });
+
+        $this->bumpCatalogCaches();
+
+        return $response;
     }
 
     // =========================
@@ -297,8 +310,7 @@ class AdminLicenseController extends Controller
 
         $this->ensureProofDir();
 
-        return DB::transaction(function () use ($product, $qty, $actorId, $format) {
-
+        $response = DB::transaction(function () use ($product, $qty, $actorId, $format) {
             // Lock biar aman dari double take
             $stocks = License::query()
                 ->where('product_id', $product->id)
@@ -354,17 +366,17 @@ class AdminLicenseController extends Controller
                 $contentLines[] = "PROOF ID: {$proofId}";
                 $contentLines[] = "PRODUCT ID: {$product->id}";
                 $contentLines[] = "PRODUCT NAME: {$product->name}";
-                $contentLines[] = "TAKEN AT: " . now()->toDateTimeString();
-                $contentLines[] = "TAKEN BY: " . ($actorId ?? 'system');
-                $contentLines[] = "QTY: " . $stocks->count();
-                $contentLines[] = "----------------------------------------";
+                $contentLines[] = 'TAKEN AT: ' . now()->toDateTimeString();
+                $contentLines[] = 'TAKEN BY: ' . ($actorId ?? 'system');
+                $contentLines[] = 'QTY: ' . $stocks->count();
+                $contentLines[] = '----------------------------------------';
                 foreach ($stocks as $s) {
                     $line = $s->license_key;
-                    if ($s->data_other) $line .= ":" . $s->data_other;
-                    if ($s->note) $line .= ":" . $s->note;
+                    if ($s->data_other) $line .= ':' . $s->data_other;
+                    if ($s->note) $line .= ':' . $s->note;
                     $contentLines[] = $line;
                 }
-                $contentLines[] = "----------------------------------------";
+                $contentLines[] = '----------------------------------------';
                 Storage::disk('local')->put($txtPath, implode("\n", $contentLines));
             }
 
@@ -387,6 +399,10 @@ class AdminLicenseController extends Controller
                 ])->values(),
             ]);
         });
+
+        $this->bumpCatalogCaches();
+
+        return $response;
     }
 
     // =========================

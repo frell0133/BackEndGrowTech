@@ -91,25 +91,37 @@ Route::prefix('v1')->group(function () {
     // 1) PUBLIC CATALOG (UMUM)
     // =========================
     Route::middleware(['public.access'])->group(function () {
-        Route::get('categories', [PublicCategoryController::class, 'index']);
-        Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories']);
+        Route::get('categories', [PublicCategoryController::class, 'index'])
+            ->middleware('throttle:public-catalog');
+        Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories'])
+            ->middleware('throttle:public-catalog');
 
-        Route::get('subcategories', [PublicSubcategoryController::class, 'index']);
-        Route::get('subcategories/{idOrSlug}', [PublicSubcategoryController::class, 'show']);
+        Route::get('subcategories', [PublicSubcategoryController::class, 'index'])
+            ->middleware('throttle:public-catalog');
+        Route::get('subcategories/{idOrSlug}', [PublicSubcategoryController::class, 'show'])
+            ->middleware('throttle:public-catalog');
 
-        Route::get('products', [ProductController::class, 'index']);
-        Route::get('products/{product}', [ProductController::class, 'show']);
+        Route::get('products', [ProductController::class, 'index'])
+            ->middleware('throttle:public-catalog');
+        Route::get('products/{product}', [ProductController::class, 'show'])
+            ->middleware('throttle:public-catalog');
 
         // alias public supaya FE existing /api/v1/catalog/* tetap jalan
         Route::prefix('catalog')->group(function () {
-            Route::get('categories', [PublicCategoryController::class, 'index']);
-            Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories']);
+            Route::get('categories', [PublicCategoryController::class, 'index'])
+            ->middleware('throttle:public-catalog');
+            Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories'])
+            ->middleware('throttle:public-catalog');
 
-            Route::get('subcategories', [PublicSubcategoryController::class, 'index']);
-            Route::get('subcategories/{idOrSlug}', [PublicSubcategoryController::class, 'show']);
+            Route::get('subcategories', [PublicSubcategoryController::class, 'index'])
+            ->middleware('throttle:public-catalog');
+            Route::get('subcategories/{idOrSlug}', [PublicSubcategoryController::class, 'show'])
+            ->middleware('throttle:public-catalog');
 
-            Route::get('products', [ProductController::class, 'index']);
-            Route::get('products/{product}', [ProductController::class, 'show']);
+            Route::get('products', [ProductController::class, 'index'])
+            ->middleware('throttle:public-catalog');
+            Route::get('products/{product}', [ProductController::class, 'show'])
+            ->middleware('throttle:public-catalog');
         });
 
         Route::get('products/{product}/availability', fn () => response()->json([
@@ -120,12 +132,18 @@ Route::prefix('v1')->group(function () {
         ]));
 
         Route::prefix('content')->group(function () {
-            Route::get('settings', [ContentController::class, 'settings']);
-            Route::get('feature-access', [ContentController::class, 'featureAccess']);
-            Route::get('banners', [ContentController::class, 'banners']);
-            Route::get('popup', [ContentController::class, 'popup']);
-            Route::get('pages/{slug}', [ContentController::class, 'page']);
-            Route::get('faqs', [ContentController::class, 'faqs']);
+            Route::get('settings', [ContentController::class, 'settings'])
+                ->middleware('throttle:public-content');
+            Route::get('feature-access', [ContentController::class, 'featureAccess'])
+                ->middleware('throttle:public-content');
+            Route::get('banners', [ContentController::class, 'banners'])
+                ->middleware('throttle:public-content');
+            Route::get('popup', [ContentController::class, 'popup'])
+                ->middleware('throttle:public-content');
+            Route::get('pages/{slug}', [ContentController::class, 'page'])
+                ->middleware('throttle:public-content');
+            Route::get('faqs', [ContentController::class, 'faqs'])
+                ->middleware('throttle:public-content');
         });
 
         Route::get('maintenance/public-check', fn () => response()->json([
@@ -144,15 +162,20 @@ Route::prefix('v1')->group(function () {
     // =========================
     Route::prefix('auth')->group(function () {
         // email/password
-        Route::post('register', [AuthController::class, 'register']);
-        Route::post('login', [AuthController::class, 'login']);
+        Route::post('register', [AuthController::class, 'register'])
+            ->middleware('throttle:auth-register');
+        Route::post('login', [AuthController::class, 'login'])
+            ->middleware('throttle:auth-login');
 
         // 2FA email
-        Route::post('2fa/verify', [TwoFactorController::class, 'verify']);
-        Route::post('2fa/resend', [TwoFactorController::class, 'resend']);
+        Route::post('2fa/verify', [TwoFactorController::class, 'verify'])
+            ->middleware('throttle:otp-verify');
+        Route::post('2fa/resend', [TwoFactorController::class, 'resend'])
+            ->middleware('throttle:otp-resend');
 
         // social login
-        Route::post('social/exchange', [SocialExchangeController::class, 'exchange']);
+        Route::post('social/exchange', [SocialExchangeController::class, 'exchange'])
+            ->middleware('throttle:auth-social');
 
         Route::get('{provider}/redirect', [SocialAuthController::class, 'redirect'])
             ->whereIn('provider', ['google', 'discord']);
@@ -161,8 +184,10 @@ Route::prefix('v1')->group(function () {
             ->whereIn('provider', ['google', 'discord']);
 
         // password reset (PUBLIC)
-        Route::post('password/forgot', [AuthPasswordController::class, 'forgot']);
-        Route::post('password/reset', [AuthPasswordController::class, 'reset']);
+        Route::post('password/forgot', [AuthPasswordController::class, 'forgot'])
+            ->middleware('throttle:auth-password');
+        Route::post('password/reset', [AuthPasswordController::class, 'reset'])
+            ->middleware('throttle:auth-password');
 
         // authenticated auth endpoints
         Route::middleware('auth:sanctum')->group(function () {
@@ -206,19 +231,19 @@ Route::prefix('v1')->group(function () {
          */
         Route::prefix('catalog')->group(function () {
             Route::get('categories', [PublicCategoryController::class, 'index'])
-                ->middleware('feature.access:catalog');
+                ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
             Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories'])
-                ->middleware('feature.access:catalog');
+                ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
 
             Route::get('subcategories', [PublicSubcategoryController::class, 'index'])
-                ->middleware('feature.access:catalog');
+                ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
             Route::get('subcategories/{idOrSlug}', [PublicSubcategoryController::class, 'show'])
-                ->middleware('feature.access:catalog');
+                ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
 
             Route::get('products', [ProductController::class, 'index'])
-                ->middleware('feature.access:catalog');
+                ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
             Route::get('products/{product}', [ProductController::class, 'show'])
-                ->middleware('feature.access:catalog');
+                ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
         });
 
         Route::get('user/maintenance-check', fn () => response()->json([
@@ -232,8 +257,10 @@ Route::prefix('v1')->group(function () {
         ]));
 
         Route::prefix('bootstrap')->group(function () {
-            Route::get('shell', \App\Http\Controllers\Api\V1\Bootstrap\ShellBootstrapController::class);
-            Route::get('customer-home', \App\Http\Controllers\Api\V1\Bootstrap\CustomerHomeBootstrapController::class);
+            Route::get('shell', \App\Http\Controllers\Api\V1\Bootstrap\ShellBootstrapController::class)
+                ->middleware('throttle:shell-bootstrap');
+            Route::get('customer-home', \App\Http\Controllers\Api\V1\Bootstrap\CustomerHomeBootstrapController::class)
+                ->middleware('throttle:shell-bootstrap');
         });
 
         // Cart
@@ -259,15 +286,17 @@ Route::prefix('v1')->group(function () {
 
         // Payments (User)
         Route::post('orders/{id}/payments', [UserOrderController::class, 'createPayment'])
-            ->middleware('feature.access:checkout');
+            ->middleware(['feature.access:checkout', 'throttle:payment-create']);
         Route::get('orders/{id}/payments', [UserOrderController::class, 'paymentStatus'])
-            ->middleware('feature.access:checkout');
+            ->middleware(['feature.access:checkout', 'throttle:payment-status']);
 
         // Delivery (User)
         Route::get('orders/{id}/delivery', [UserDeliveryController::class, 'info']);
         Route::post('orders/{id}/delivery/reveal', [UserDeliveryController::class, 'reveal']);
-        Route::post('orders/{id}/delivery/close', [UserDeliveryController::class, 'close']);
-        Route::post('orders/{id}/delivery/resend', [UserDeliveryController::class, 'resend']);
+        Route::post('orders/{id}/delivery/close', [UserDeliveryController::class, 'close'])
+            ->middleware('throttle:user-write-light');
+        Route::post('orders/{id}/delivery/resend', [UserDeliveryController::class, 'resend'])
+            ->middleware('throttle:user-write-light');
 
         // Wallet (User)
         Route::get('wallet/summary', [UserWalletController::class, 'summary']);
@@ -290,8 +319,10 @@ Route::prefix('v1')->group(function () {
         // Route::get('referrals/usage-stats', [AdminReferralController::class, 'usageStats']);
 
         Route::get('favorites', [UserFavoriteController::class, 'index']);
-        Route::post('favorites', [UserFavoriteController::class, 'store']);
-        Route::delete('favorites/{productId}', [UserFavoriteController::class, 'destroy']);
+        Route::post('favorites', [UserFavoriteController::class, 'store'])
+            ->middleware('throttle:user-write-light');
+        Route::delete('favorites/{productId}', [UserFavoriteController::class, 'destroy'])
+            ->middleware('throttle:user-write-light');
 
         // Withdraw (User)
         Route::get('withdraws-balance', [UserWithdrawController::class, 'balance']);
@@ -345,7 +376,8 @@ Route::prefix('v1')->group(function () {
 
         // ====== Dashboard ======
         Route::middleware('admin.can:view_dashboard')->group(function () {
-            Route::get('dashboard/summary', [AdminDashboardController::class, 'summary']);
+            Route::get('dashboard/summary', [AdminDashboardController::class, 'summary'])
+                ->middleware('throttle:admin-heavy');
         });
 
         // ====== Categories / Subcategories ======

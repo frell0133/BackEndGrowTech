@@ -8,6 +8,7 @@ use App\Models\Delivery;
 use App\Models\License;
 use App\Models\Order;
 use App\Models\Product;
+use App\Support\PublicCache;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -277,6 +278,11 @@ class OrderFulfillmentService
                 'shouldQueueProductEmail' => $mode === 'email_only' && $deliveriesCountAfter > 0,
             ];
         });
+
+        if (($result['ok'] ?? false) && (int) ($result['newlyAllocatedQty'] ?? 0) > 0) {
+            PublicCache::bumpCatalog();
+            PublicCache::bumpDashboard();
+        }
 
         if (($result['ok'] ?? false) && ($result['shouldQueueProductEmail'] ?? false)) {
             Log::info('FULFILL EMAIL_ONLY QUEUE_DISPATCH', [

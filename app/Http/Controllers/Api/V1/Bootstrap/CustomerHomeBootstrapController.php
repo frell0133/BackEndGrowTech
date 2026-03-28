@@ -18,10 +18,11 @@ class CustomerHomeBootstrapController extends Controller
 
     public function __invoke(SystemAccessService $access)
     {
-        $catalogEnabled = $access->enabled('catalog_access');
+        $catalogAccess = $access->get('catalog_access');
+        $catalogEnabled = (bool) ($catalogAccess['enabled'] ?? true);
         $catalogMaintenance = $catalogEnabled
             ? ''
-            : $access->message('catalog_access', 'Katalog sedang maintenance.');
+            : (string) ($catalogAccess['message'] ?? 'Katalog sedang maintenance.');
 
         $banners = $this->getBanners();
         $popup = $this->getPopup();

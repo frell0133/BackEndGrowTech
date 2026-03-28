@@ -8,12 +8,19 @@ use App\Models\ProductStock;
 use App\Models\ProductStockLog;
 use App\Services\StockParser;
 use App\Support\ApiResponse;
+use App\Support\PublicCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class AdminProductStockController extends Controller
 {
   use ApiResponse;
+
+  private function bumpCatalogCaches(): void
+  {
+    PublicCache::bumpCatalog();
+    PublicCache::bumpDashboard();
+  }
 
   /**
    * GET /api/v1/admin/products/{product}/stocks?status=available&per_page=50
@@ -51,8 +58,7 @@ class AdminProductStockController extends Controller
 
     $actorId = optional($request->user())->id;
 
-    return DB::transaction(function () use ($product, $items, $mode, $actorId) {
-
+    $response = DB::transaction(function () use ($product, $items, $mode, $actorId) {
       $inserted = 0;
       $duplicates = 0;
       $duplicateLines = [];
@@ -74,7 +80,6 @@ class AdminProductStockController extends Controller
           ]);
 
           $inserted++;
-
         } catch (\Throwable $e) {
           // duplicate unique(product_id,fingerprint) akan masuk sini
           $duplicates++;
@@ -93,6 +98,10 @@ class AdminProductStockController extends Controller
         'duplicate_lines' => $duplicateLines,
       ]);
     });
+
+    $this->bumpCatalogCaches();
+
+    return $response;
   }
 
   /**
@@ -109,8 +118,7 @@ class AdminProductStockController extends Controller
     $qty = (int) $data['qty'];
     $actorId = optional($request->user())->id;
 
-    return DB::transaction(function () use ($product, $qty, $actorId) {
-
+    $response = DB::transaction(function () use ($product, $qty, $actorId) {
       // lock rows available
       $stocks = ProductStock::where('product_id', $product->id)
         ->where('status', 'available')
@@ -148,6 +156,10 @@ class AdminProductStockController extends Controller
         ]),
       ]);
     });
+
+    $this->bumpCatalogCaches();
+
+    return $response;
   }
 
   /**
@@ -158,7 +170,7 @@ class AdminProductStockController extends Controller
   {
     $actorId = optional($request->user())->id;
 
-    return DB::transaction(function () use ($stock, $actorId) {
+    $response = DB::transaction(function () use ($stock, $actorId) {
       if (!in_array($stock->status, ['taken','reserved'])) {
         return $this->fail('Stock tidak bisa direlease dari status ini.', 422);
       }
@@ -179,6 +191,10 @@ class AdminProductStockController extends Controller
 
       return $this->ok($stock);
     });
+
+    $this->bumpCatalogCaches();
+
+    return $response;
   }
 
   /**
@@ -200,7 +216,8 @@ class AdminProductStockController extends Controller
       'meta' => null,
     ]);
 
+    $this->bumpCatalogCaches();
+
     return $this->ok($stock);
   }
 }
-

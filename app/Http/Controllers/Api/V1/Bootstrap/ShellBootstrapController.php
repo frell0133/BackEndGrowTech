@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api\V1\Bootstrap;
 
 use App\Http\Controllers\Controller;
-use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\Favorite;
 use App\Services\SupabaseStorageService;
@@ -26,17 +25,21 @@ class ShellBootstrapController extends Controller
             return $this->fail('Unauthenticated', 401);
         }
 
-        $cartId = Cart::query()
-            ->where('user_id', $user->id)
-            ->value('id');
-
-        $cartCount = $cartId
-            ? (int) CartItem::query()->where('cart_id', $cartId)->sum('qty')
-            : 0;
+        $cartCount = (int) CartItem::query()
+            ->whereHas('cart', function ($query) use ($user) {
+                $query->where('user_id', $user->id);
+            })
+            ->sum('qty');
 
         $favoriteCount = (int) Favorite::query()
             ->where('user_id', $user->id)
             ->count();
+
+        $features = $access->featurePayload([
+            'catalog_access',
+            'checkout_access',
+            'topup_access',
+        ]);
 
         return $this->ok([
             'auth' => [
@@ -48,27 +51,9 @@ class ShellBootstrapController extends Controller
                 'favorite_count' => $favoriteCount,
             ],
             'features' => [
-                'catalog' => [
-                    'enabled' => $access->enabled('catalog_access'),
-                    'message' => $access->message(
-                        'catalog_access',
-                        'Katalog sedang maintenance.'
-                    ),
-                ],
-                'checkout' => [
-                    'enabled' => $access->enabled('checkout_access'),
-                    'message' => $access->message(
-                        'checkout_access',
-                        'Checkout sedang maintenance.'
-                    ),
-                ],
-                'topup' => [
-                    'enabled' => $access->enabled('topup_access'),
-                    'message' => $access->message(
-                        'topup_access',
-                        'Top up sedang maintenance.'
-                    ),
-                ],
+                'catalog' => $features['catalog_access'],
+                'checkout' => $features['checkout_access'],
+                'topup' => $features['topup_access'],
             ],
         ]);
     }

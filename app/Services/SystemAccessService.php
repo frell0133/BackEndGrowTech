@@ -4,9 +4,14 @@ namespace App\Services;
 
 use App\Models\Setting;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 
 class SystemAccessService
 {
+    private const CACHE_VERSION_KEY = 'system_access:version';
+    private const CACHE_KEY_PREFIX = 'system_access:payload';
+    private const CACHE_TTL_SECONDS = 600;
+
     /**
      * Default toggle agar sistem tetap normal
      * walaupun setting belum pernah disimpan.
@@ -38,37 +43,60 @@ class SystemAccessService
         ],
     ];
 
+    private ?array $resolved = null;
+
+    public static function bumpCacheVersion(): void
+    {
+        if (!Cache::has(self::CACHE_VERSION_KEY)) {
+            Cache::forever(self::CACHE_VERSION_KEY, 1);
+        }
+
+        Cache::increment(self::CACHE_VERSION_KEY);
+    }
+
+    public function all(): array
+    {
+        if ($this->resolved !== null) {
+            return $this->resolved;
+        }
+
+        $version = $this->currentVersion();
+        $cacheKey = self::CACHE_KEY_PREFIX . ':v' . $version;
+
+        $this->resolved = Cache::remember(
+            $cacheKey,
+            now()->addSeconds(self::CACHE_TTL_SECONDS),
+            fn () => $this->loadResolvedSettings()
+        );
+
+        return $this->resolved;
+    }
+
+    public function getMany(array $keys): array
+    {
+        $all = $this->all();
+        $result = [];
+
+        foreach ($keys as $key) {
+            $default = $this->defaults[$key] ?? [
+                'enabled' => true,
+                'message' => 'Layanan sedang maintenance.',
+            ];
+
+            $result[$key] = $all[$key] ?? $default;
+        }
+
+        return $result;
+    }
+
+    public function featurePayload(array $keys): array
+    {
+        return $this->getMany($keys);
+    }
+
     public function get(string $key): array
     {
-        $default = $this->defaults[$key] ?? [
-            'enabled' => true,
-            'message' => 'Layanan sedang maintenance.',
-        ];
-
-        $row = Setting::query()
-            ->where('group', 'system')
-            ->where('key', $key)
-            ->first();
-
-        if (!$row) {
-            return $default;
-        }
-
-        $value = $row->value;
-
-        if (is_string($value)) {
-            $decoded = json_decode($value, true);
-            $value = is_array($decoded) ? $decoded : [];
-        }
-
-        if (!is_array($value)) {
-            $value = [];
-        }
-
-        return [
-            'enabled' => (bool) ($value['enabled'] ?? $default['enabled']),
-            'message' => (string) ($value['message'] ?? $default['message']),
-        ];
+        return $this->getMany([$key])[$key];
     }
 
     public function enabled(string $key): bool
@@ -111,5 +139,52 @@ class SystemAccessService
         }
 
         return $this->enabled($featureKey);
+    }
+
+    private function currentVersion(): int
+    {
+        $value = Cache::get(self::CACHE_VERSION_KEY);
+
+        if (!$value) {
+            Cache::forever(self::CACHE_VERSION_KEY, 1);
+            return 1;
+        }
+
+        return (int) $value;
+    }
+
+    private function loadResolvedSettings(): array
+    {
+        $resolved = $this->defaults;
+
+        $rows = Setting::query()
+            ->where('group', 'system')
+            ->get(['key', 'value']);
+
+        foreach ($rows as $row) {
+            $key = (string) $row->key;
+            $default = $this->defaults[$key] ?? [
+                'enabled' => true,
+                'message' => 'Layanan sedang maintenance.',
+            ];
+
+            $value = $row->value;
+
+            if (is_string($value)) {
+                $decoded = json_decode($value, true);
+                $value = is_array($decoded) ? $decoded : [];
+            }
+
+            if (!is_array($value)) {
+                $value = [];
+            }
+
+            $resolved[$key] = [
+                'enabled' => (bool) ($value['enabled'] ?? $default['enabled']),
+                'message' => (string) ($value['message'] ?? $default['message']),
+            ];
+        }
+
+        return $resolved;
     }
 }
