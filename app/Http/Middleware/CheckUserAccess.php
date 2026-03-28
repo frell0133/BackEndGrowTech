@@ -16,6 +16,18 @@ class CheckUserAccess
 
         $user = $request->user();
 
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'data' => null,
+                'meta' => (object) [],
+                'error' => [
+                    'message' => 'Unauthenticated',
+                    'details' => null,
+                ],
+            ], 401);
+        }
+
         if (!$access->canAccessUserArea($user)) {
             return response()->json([
                 'success' => false,
