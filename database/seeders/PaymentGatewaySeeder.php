@@ -28,7 +28,7 @@ class PaymentGatewaySeeder extends Seeder
                 'supports_topup' => true,
                 'sandbox_mode' => !((bool) env('MIDTRANS_IS_PRODUCTION', false)),
                 'fee_type' => 'percent',
-                'fee_value' => 2,
+                'fee_value' => 0.7,
                 'sort_order' => 10,
                 'config' => array_filter([
                     'snap_url' => env('MIDTRANS_SNAP_URL'),
