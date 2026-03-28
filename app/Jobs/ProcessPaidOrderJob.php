@@ -13,6 +13,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class ProcessPaidOrderJob implements ShouldQueue
@@ -34,6 +35,23 @@ class ProcessPaidOrderJob implements ShouldQueue
         LedgerService $ledger,
         ReferralCommissionService $referral
     ): void {
+        $lockKey = 'job:process_paid_order:' . $this->orderId;
+        $lockSeconds = max(180, (int) $this->timeout + 30);
+        $lock = Cache::lock($lockKey, $lockSeconds);
+
+        if (!$lock->get()) {
+            Log::warning('PROCESS PAID ORDER: lock busy, skip duplicate execution', [
+                'order_id' => $this->orderId,
+                'source' => $this->source,
+                'queue' => $this->queue,
+                'lock_key' => $lockKey,
+                'lock_ttl_seconds' => $lockSeconds,
+            ]);
+
+            return;
+        }
+
+        try {
         $order = Order::query()
             ->with(['items.product', 'product', 'payment', 'vouchers'])
             ->find($this->orderId);
@@ -139,5 +157,11 @@ class ProcessPaidOrderJob implements ShouldQueue
             'has_deliveries' => $hasDeliveries,
             'final_status' => (string) ($order->fresh()->status?->value ?? $order->fresh()->status),
         ]);
+        } finally {
+            try {
+                $lock->release();
+            } catch (\Throwable $ignored) {
+            }
+        }
     }
 }

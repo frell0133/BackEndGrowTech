@@ -407,7 +407,7 @@ class PaymentWebhookController extends Controller
         ?string $invoiceNumber = null
     ): bool {
         $lockKey = 'dispatch:process_paid_order:' . $orderId;
-        $lockSeconds = 45;
+        $lockSeconds = 180;
         $lock = Cache::lock($lockKey, $lockSeconds);
 
         if (!$lock->get()) {

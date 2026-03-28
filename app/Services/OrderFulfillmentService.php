@@ -9,11 +9,46 @@ use App\Models\License;
 use App\Models\Order;
 use App\Models\Product;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class OrderFulfillmentService
 {
+    private function dispatchProductEmailOnce(int $orderId): bool
+    {
+        $lockKey = 'dispatch:digital_items_email:order:' . $orderId;
+        $lockSeconds = 180;
+        $lock = Cache::lock($lockKey, $lockSeconds);
+
+        if (!$lock->get()) {
+            Log::warning('FULFILL EMAIL_ONLY DUPLICATE DISPATCH BLOCKED', [
+                'order_id' => $orderId,
+                'lock_key' => $lockKey,
+                'lock_ttl_seconds' => $lockSeconds,
+            ]);
+
+            return false;
+        }
+
+        try {
+            $job = SendDigitalItemsFallbackEmail::dispatch($orderId)->delay(now()->addSeconds(3));
+
+            if (method_exists($job, 'afterCommit')) {
+                $job->afterCommit();
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            try {
+                $lock->release();
+            } catch (\Throwable $ignored) {
+            }
+
+            throw $e;
+        }
+    }
+
     /**
      * Fulfill order ketika status payment sudah PAID.
      * Rules:
@@ -250,11 +285,7 @@ class OrderFulfillmentService
                 'newly_allocated_qty' => (int) ($result['newlyAllocatedQty'] ?? 0),
             ]);
 
-            $job = SendDigitalItemsFallbackEmail::dispatch((int) $order->id)->delay(now()->addSeconds(3));
-
-            if (method_exists($job, 'afterCommit')) {
-                $job->afterCommit();
-            }
+            $this->dispatchProductEmailOnce((int) $order->id);
         }
 
         if (($result['ok'] ?? false) && ((int) ($result['totalQty'] ?? 0) === 1)) {

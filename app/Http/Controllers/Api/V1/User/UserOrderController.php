@@ -144,6 +144,64 @@ class UserOrderController extends Controller
         }
     }
 
+    private function dispatchPaidOrderJobOnce(
+        int $orderId,
+        string $source,
+        ?string $invoiceNumber = null
+    ): bool {
+        $lockKey = 'dispatch:process_paid_order:' . $orderId;
+        $lockSeconds = 180;
+        $lock = Cache::lock($lockKey, $lockSeconds);
+
+        if (!$lock->get()) {
+            Log::warning('PROCESS PAID ORDER JOB DUPLICATE DISPATCH BLOCKED', [
+                'order_id' => $orderId,
+                'invoice_number' => $invoiceNumber,
+                'source' => $source,
+                'queue' => 'fulfillment',
+                'lock_key' => $lockKey,
+                'lock_ttl_seconds' => $lockSeconds,
+            ]);
+
+            return false;
+        }
+
+        try {
+            $job = ProcessPaidOrderJob::dispatch($orderId, $source)->delay(now()->addSecond());
+
+            if (method_exists($job, 'afterCommit')) {
+                $job->afterCommit();
+            }
+
+            Log::info('PROCESS PAID ORDER JOB DISPATCHED', [
+                'order_id' => $orderId,
+                'invoice_number' => $invoiceNumber,
+                'source' => $source,
+                'queue' => 'fulfillment',
+                'lock_key' => $lockKey,
+                'lock_ttl_seconds' => $lockSeconds,
+            ]);
+
+            return true;
+        } catch (\Throwable $e) {
+            try {
+                $lock->release();
+            } catch (\Throwable $ignored) {
+            }
+
+            Log::error('PROCESS PAID ORDER JOB DISPATCH FAILED', [
+                'order_id' => $orderId,
+                'invoice_number' => $invoiceNumber,
+                'source' => $source,
+                'queue' => 'fulfillment',
+                'lock_key' => $lockKey,
+                'error' => $e->getMessage(),
+            ]);
+
+            throw $e;
+        }
+    }
+
     private function normalizePaymentMethodCode(mixed $value): string
     {
         if (is_bool($value)) {
@@ -705,14 +763,11 @@ class UserOrderController extends Controller
                         return $result;
                     }
 
-                    $job = ProcessPaidOrderJob::dispatch(
+                    $queued = $this->dispatchPaidOrderJobOnce(
                         (int) $result['order_id'],
-                        'wallet_paid'
-                    )->delay(now()->addSeconds(1));
-
-                    if (method_exists($job, 'afterCommit')) {
-                        $job->afterCommit();
-                    }
+                        'wallet_paid',
+                        (string) ($order->invoice_number ?? '')
+                    );
 
                     $freshOrder = Order::query()
                         ->with(['items.product', 'product', 'payment', 'vouchers'])
@@ -722,7 +777,7 @@ class UserOrderController extends Controller
                         'method' => 'wallet',
                         'status' => 'paid',
                         'processing' => [
-                            'queued' => true,
+                            'queued' => $queued,
                             'next_step' => 'fulfillment_and_invoice',
                         ],
                         'order' => $freshOrder,
@@ -915,7 +970,10 @@ class UserOrderController extends Controller
         $user = $request->user();
 
         $order = Order::query()
-            ->with(['items.product', 'payment', 'product', 'vouchers'])
+            ->with([
+                'items.product:id,name,slug',
+                'payment',
+            ])
             ->where('id', (int) $id)
             ->where('user_id', (int) $user->id)
             ->first();

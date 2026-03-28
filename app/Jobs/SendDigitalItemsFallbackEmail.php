@@ -11,6 +11,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class SendDigitalItemsFallbackEmail implements ShouldQueue
@@ -29,6 +30,21 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
 
     public function handle(OrderFulfillmentService $fulfill, BrevoMailService $brevo): void
     {
+        $lockKey = 'job:digital_items_email:' . $this->orderId;
+        $lockSeconds = max(180, (int) $this->timeout + 30);
+        $lock = Cache::lock($lockKey, $lockSeconds);
+
+        if (!$lock->get()) {
+            Log::warning('SendDigitalItemsFallbackEmail: lock busy, skip duplicate execution', [
+                'order_id' => $this->orderId,
+                'lock_key' => $lockKey,
+                'lock_ttl_seconds' => $lockSeconds,
+            ]);
+
+            return;
+        }
+
+        try {
         Log::info('SendDigitalItemsFallbackEmail: start', [
             'order_id' => $this->orderId,
         ]);
@@ -112,5 +128,11 @@ class SendDigitalItemsFallbackEmail implements ShouldQueue
             'to' => $to,
             'deliveries_count' => count($itemsEmail),
         ]);
+        } finally {
+            try {
+                $lock->release();
+            } catch (\Throwable $ignored) {
+            }
+        }
     }
 }
