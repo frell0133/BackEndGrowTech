@@ -59,6 +59,8 @@ use App\Http\Controllers\Api\V1\Admin\AdminSystemAccessController;
 // boostrap
 use App\Http\Controllers\Api\V1\Bootstrap\CustomerHomeBootstrapController;
 use App\Http\Controllers\Api\V1\Bootstrap\ShellBootstrapController;
+use App\Http\Controllers\Api\V1\Bootstrap\CheckoutBootstrapController;
+use App\Http\Controllers\Api\V1\Bootstrap\OrderSuccessBootstrapController;
 
 // Controllers (Public Catalog)
 use App\Http\Controllers\Api\V1\Public\CategoryController as PublicCategoryController;
@@ -265,6 +267,11 @@ Route::prefix('v1')->group(function () {
         Route::prefix('bootstrap')->group(function () {
             Route::get('shell', \App\Http\Controllers\Api\V1\Bootstrap\ShellBootstrapController::class)
                 ->middleware('throttle:shell-bootstrap');
+
+            Route::get('checkout', \App\Http\Controllers\Api\V1\Bootstrap\CheckoutBootstrapController::class)
+                ->middleware('feature.access:checkout');
+
+            Route::get('orders/{id}/success', \App\Http\Controllers\Api\V1\Bootstrap\OrderSuccessBootstrapController::class);
         });
 
         // Cart
