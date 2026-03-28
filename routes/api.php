@@ -1,3 +1,4 @@
+
 <?php
 
 use Illuminate\Support\Facades\Route;
@@ -155,6 +156,11 @@ Route::prefix('v1')->group(function () {
             'meta' => (object)[],
             'error' => null,
         ]));
+
+        Route::prefix('bootstrap')->group(function () {
+            Route::get('customer-home', \App\Http\Controllers\Api\V1\Bootstrap\CustomerHomeBootstrapController::class)
+                ->middleware('throttle:shell-bootstrap');
+        });
     });
 
     // =========================
@@ -258,8 +264,6 @@ Route::prefix('v1')->group(function () {
 
         Route::prefix('bootstrap')->group(function () {
             Route::get('shell', \App\Http\Controllers\Api\V1\Bootstrap\ShellBootstrapController::class)
-                ->middleware('throttle:shell-bootstrap');
-            Route::get('customer-home', \App\Http\Controllers\Api\V1\Bootstrap\CustomerHomeBootstrapController::class)
                 ->middleware('throttle:shell-bootstrap');
         });
 
