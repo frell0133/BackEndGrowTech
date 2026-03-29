@@ -85,7 +85,7 @@ class AdminLicenseController extends Controller
 
     private function bumpCatalogCaches(): void
     {
-        PublicCache::bumpCatalog();
+        PublicCache::bumpCatalogProducts();
         PublicCache::bumpDashboard();
     }
 

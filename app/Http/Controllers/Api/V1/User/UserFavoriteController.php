@@ -72,7 +72,7 @@ class UserFavoriteController extends Controller
             $this->refreshProductRatingAggregate($product->id, (int) ($product->purchases_count ?? 0));
         });
 
-        PublicCache::bumpCatalog();
+        PublicCache::bumpCatalogProducts();
 
         return $this->ok(['message' => 'Favorite saved']);
     }
@@ -100,7 +100,7 @@ class UserFavoriteController extends Controller
             }
         });
 
-        PublicCache::bumpCatalog();
+        PublicCache::bumpCatalogProducts();
 
         return $this->ok(['message' => 'Removed from favorites']);
     }

@@ -280,7 +280,7 @@ class OrderFulfillmentService
         });
 
         if (($result['ok'] ?? false) && (int) ($result['newlyAllocatedQty'] ?? 0) > 0) {
-            PublicCache::bumpCatalog();
+            PublicCache::bumpCatalogProducts();
             PublicCache::bumpDashboard();
         }
 

@@ -4,19 +4,18 @@ namespace App\Http\Controllers\Api\V1\Bootstrap;
 
 use App\Http\Controllers\Controller;
 use App\Models\Banner;
-use App\Models\License;
 use App\Models\Product;
 use App\Models\Popup;
+use App\Services\ProductAvailabilityService;
 use App\Services\SystemAccessService;
 use App\Support\ApiResponse;
 use App\Support\PublicCache;
-use Illuminate\Support\Facades\DB;
 
 class CustomerHomeBootstrapController extends Controller
 {
     use ApiResponse;
 
-    public function __invoke(SystemAccessService $access)
+    public function __invoke(SystemAccessService $access, ProductAvailabilityService $availability)
     {
         $catalogAccess = $access->get('catalog_access');
         $catalogEnabled = (bool) ($catalogAccess['enabled'] ?? true);
@@ -26,7 +25,7 @@ class CustomerHomeBootstrapController extends Controller
 
         $banners = $this->getBanners();
         $popup = $this->getPopup();
-        $products = $catalogEnabled ? $this->getPopularProducts() : [];
+        $products = $catalogEnabled ? $this->getPopularProducts($availability) : [];
 
         return $this->ok([
             'popup' => $popup,
@@ -72,15 +71,10 @@ class CustomerHomeBootstrapController extends Controller
         });
     }
 
-    private function getPopularProducts(): array
+    private function getPopularProducts(ProductAvailabilityService $availability): array
     {
-        return PublicCache::rememberCatalog('bootstrap:customer-home:popular-products', 300, function () {
-            $availableStockSub = License::query()
-                ->selectRaw('product_id, COUNT(*) as available_stock')
-                ->where('status', License::STATUS_AVAILABLE)
-                ->groupBy('product_id');
-
-            return Product::query()
+        return PublicCache::rememberCatalogProducts('bootstrap:customer-home:popular-products', 300, function () use ($availability) {
+            $products = Product::query()
                 ->select([
                     'products.id',
                     'products.category_id',
@@ -99,11 +93,7 @@ class CustomerHomeBootstrapController extends Controller
                     'products.purchases_count',
                     'products.popularity_score',
                     'products.created_at',
-                    DB::raw('COALESCE(stock_counts.available_stock, 0) as available_stock'),
                 ])
-                ->leftJoinSub($availableStockSub, 'stock_counts', function ($join) {
-                    $join->on('stock_counts.product_id', '=', 'products.id');
-                })
                 ->with([
                     'category:id,name,slug',
                     'subcategory:id,category_id,name,description,slug,provider,image_url,image_path',
@@ -114,7 +104,11 @@ class CustomerHomeBootstrapController extends Controller
                 ->orderByDesc('products.purchases_count')
                 ->orderByDesc('products.id')
                 ->limit(4)
-                ->get()
+                ->get();
+
+            return $availability
+                ->attachToCollection($products)
+                ->values()
                 ->toArray();
         });
     }

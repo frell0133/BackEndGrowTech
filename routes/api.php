@@ -269,9 +269,10 @@ Route::prefix('v1')->group(function () {
                 ->middleware('throttle:shell-bootstrap');
 
             Route::get('checkout', \App\Http\Controllers\Api\V1\Bootstrap\CheckoutBootstrapController::class)
-                ->middleware('feature.access:checkout');
+                ->middleware(['feature.access:checkout', 'throttle:shell-bootstrap']);
 
-            Route::get('orders/{id}/success', \App\Http\Controllers\Api\V1\Bootstrap\OrderSuccessBootstrapController::class);
+            Route::get('orders/{id}/success', \App\Http\Controllers\Api\V1\Bootstrap\OrderSuccessBootstrapController::class)
+                ->middleware(['feature.access:checkout', 'throttle:shell-bootstrap']);
         });
 
         // Cart

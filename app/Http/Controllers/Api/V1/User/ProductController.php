@@ -4,8 +4,8 @@ namespace App\Http\Controllers\Api\V1\User;
 
 use App\Http\Controllers\Controller;
 use App\Models\Favorite;
-use App\Models\License;
 use App\Models\Product;
+use App\Services\ProductAvailabilityService;
 use App\Support\ApiResponse;
 use App\Support\PublicCache;
 use Illuminate\Http\Request;
@@ -54,7 +54,7 @@ class ProductController extends Controller
         return 'products:index:' . md5(http_build_query($params));
     }
 
-    public function index(Request $request)
+    public function index(Request $request, ProductAvailabilityService $availability)
     {
         $search = trim((string) $request->query('q', ''));
         $perPage = max(1, min((int) $request->query('per_page', 20), self::INDEX_MAX_PER_PAGE));
@@ -75,19 +75,15 @@ class ProductController extends Controller
             $dir
         );
 
-        $data = PublicCache::rememberCatalog($cacheKey, self::INDEX_CACHE_TTL, function () use (
+        $data = PublicCache::rememberCatalogProducts($cacheKey, self::INDEX_CACHE_TTL, function () use (
             $search,
             $perPage,
             $categoryId,
             $subcategoryId,
             $sort,
-            $dir
+            $dir,
+            $availability
         ) {
-            $availableStockSub = License::query()
-                ->selectRaw('product_id, COUNT(*) as available_stock')
-                ->where('status', License::STATUS_AVAILABLE)
-                ->groupBy('product_id');
-
             $favoriteCountSub = Favorite::query()
                 ->selectRaw('product_id, COUNT(*) as favorites_count')
                 ->groupBy('product_id');
@@ -105,11 +101,10 @@ class ProductController extends Controller
                     'products.price',
                     'products.rating',
                     'products.rating_count',
-                    DB::raw('COALESCE(stock_counts.available_stock, 0) as available_stock'),
+                    'products.purchases_count',
+                    'products.popularity_score',
+                    'products.created_at',
                 ])
-                ->leftJoinSub($availableStockSub, 'stock_counts', function ($join) {
-                    $join->on('stock_counts.product_id', '=', 'products.id');
-                })
                 ->with([
                     'category:id,name,slug',
                     'subcategory:id,category_id,name,description,slug,provider,image_url',
@@ -162,19 +157,23 @@ class ProductController extends Controller
                     break;
             }
 
-            return $query->paginate($perPage)->toArray();
+            $paginator = $query->paginate($perPage);
+            $products = $availability->attachToCollection($paginator->getCollection());
+            $paginator->setCollection($products);
+
+            return $paginator->toArray();
         });
 
         return $this->ok($data);
     }
 
-    public function show(Product $product)
+    public function show(Product $product, ProductAvailabilityService $availability)
     {
         if (!$product->is_active || !$product->is_published) {
             return $this->fail('Product not found', 404);
         }
 
-        $data = PublicCache::rememberCatalog('products:show:' . $product->id, self::SHOW_CACHE_TTL, function () use ($product) {
+        $data = PublicCache::rememberCatalogProducts('products:show:' . $product->id, self::SHOW_CACHE_TTL, function () use ($product, $availability) {
             $fresh = Product::query()
                 ->select([
                     'id',
@@ -201,9 +200,6 @@ class ProductController extends Controller
                     'subcategory:id,category_id,name,description,slug,provider,image_url,image_path',
                 ])
                 ->withCount([
-                    'licenses as available_stock' => function ($q) {
-                        $q->where('status', License::STATUS_AVAILABLE);
-                    },
                     'favorites',
                 ])
                 ->whereKey($product->id)
@@ -211,7 +207,13 @@ class ProductController extends Controller
                 ->where('is_published', true)
                 ->first();
 
-            return $fresh?->toArray();
+            if (!$fresh) {
+                return null;
+            }
+
+            $fresh->setAttribute('available_stock', $availability->forProductId((int) $fresh->id));
+
+            return $fresh->toArray();
         });
 
         if (!$data) {

@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Jobs\SendOtpEmailJob;
 use App\Models\AuthChallenge;
 use App\Models\User;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -55,16 +57,14 @@ class TwoFactorService
             'meta' => $meta,
         ]);
 
-        $mail = $this->sendOtpEmail($email, $purpose, $otp);
-
-        if (!$mail['ok']) {
+        if (!$this->queueOtpEmail($challenge, $email, $purpose, $otp)) {
             $challenge->delete();
 
             return [
                 'ok' => false,
                 'status' => 500,
-                'message' => 'Gagal mengirim OTP ke email.',
-                'details' => $mail['body'] ?? null,
+                'message' => 'Gagal mengantrikan OTP ke email.',
+                'details' => ['message' => 'Failed to dispatch OTP email job'],
             ];
         }
 
@@ -129,16 +129,6 @@ class TwoFactorService
         }
 
         $otp = $this->generateOtp();
-        $mail = $this->sendOtpEmail((string) $challenge->email, (string) $challenge->purpose, $otp);
-
-        if (!$mail['ok']) {
-            return [
-                'ok' => false,
-                'status' => 500,
-                'message' => 'Gagal mengirim ulang OTP.',
-                'details' => $mail['body'] ?? null,
-            ];
-        }
 
         $challenge->update([
             'otp_hash' => Hash::make($otp),
@@ -147,6 +137,15 @@ class TwoFactorService
             'attempt_count' => 0,
             'resend_count' => (int) $challenge->resend_count + 1,
         ]);
+
+        if (!$this->queueOtpEmail($challenge->fresh(), (string) $challenge->email, (string) $challenge->purpose, $otp)) {
+            return [
+                'ok' => false,
+                'status' => 500,
+                'message' => 'Gagal mengantrikan ulang OTP.',
+                'details' => ['message' => 'Failed to dispatch OTP email job'],
+            ];
+        }
 
         return [
             'ok' => true,
@@ -231,6 +230,39 @@ class TwoFactorService
             'status' => 200,
             'challenge' => $challenge->fresh(['user']),
         ];
+    }
+
+    public function deliverOtpEmail(string $toEmail, string $purpose, string $otp): array
+    {
+        return $this->sendOtpEmail($toEmail, $purpose, $otp);
+    }
+
+    private function queueOtpEmail(AuthChallenge $challenge, string $email, string $purpose, string $otp): bool
+    {
+        try {
+            $job = SendOtpEmailJob::dispatch(
+                (int) $challenge->id,
+                $email,
+                $purpose,
+                Crypt::encryptString($otp),
+            );
+
+            if (method_exists($job, 'afterCommit')) {
+                $job->afterCommit();
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            Log::error('2FA OTP queue dispatch failed', [
+                'challenge_db_id' => $challenge->id,
+                'challenge_id' => $challenge->challenge_id,
+                'email' => $email,
+                'purpose' => $purpose,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     private function generateOtp(): string
@@ -358,12 +390,14 @@ class TwoFactorService
     {
         [$name, $domain] = explode('@', $email, 2);
 
-        $visible = Str::length($name) <= 2
-            ? Str::substr($name, 0, 1)
-            : Str::substr($name, 0, 2);
+        if ($name === '') {
+            return '***@' . $domain;
+        }
 
-        $masked = $visible . str_repeat('*', max(2, Str::length($name) - Str::length($visible)));
+        $visiblePrefix = mb_substr($name, 0, 1);
+        $visibleSuffix = mb_strlen($name) > 2 ? mb_substr($name, -1) : '';
+        $maskedMiddle = str_repeat('*', max(2, mb_strlen($name) - mb_strlen($visiblePrefix) - mb_strlen($visibleSuffix)));
 
-        return $masked . '@' . $domain;
+        return $visiblePrefix . $maskedMiddle . $visibleSuffix . '@' . $domain;
     }
 }

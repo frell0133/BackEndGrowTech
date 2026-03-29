@@ -15,7 +15,7 @@ class CategoryController extends Controller
 
     public function index()
     {
-        $data = PublicCache::rememberCatalog('categories:index', 300, function () {
+        $data = PublicCache::rememberCatalogTaxonomy('categories:index', 900, function () {
             $productCounts = Product::query()
                 ->selectRaw('category_id, COUNT(*) as products_count')
                 ->where('is_active', true)
@@ -44,7 +44,7 @@ class CategoryController extends Controller
 
     public function subcategories(string $idOrSlug)
     {
-        $data = PublicCache::rememberCatalog('categories:' . $idOrSlug . ':subcategories', 300, function () use ($idOrSlug) {
+        $data = PublicCache::rememberCatalogTaxonomy('categories:' . $idOrSlug . ':subcategories', 900, function () use ($idOrSlug) {
             $category = Category::query()
                 ->select('id', 'name', 'slug')
                 ->where(function ($query) use ($idOrSlug) {

@@ -32,6 +32,7 @@ use Illuminate\Http\JsonResponse;
 
 // ✅ NEW: service untuk komisi referral saat PAID (wallet/midtrans)
 use App\Services\ReferralCommissionService;
+use App\Services\ProductAvailabilityService;
 
 class UserOrderController extends Controller
 {
@@ -555,10 +556,7 @@ class UserOrderController extends Controller
 
     private function availableLicenseStock(int $productId): int
     {
-        return License::query()
-            ->where('product_id', $productId)
-            ->where('status', License::STATUS_AVAILABLE)
-            ->count();
+        return app(ProductAvailabilityService::class)->forProductId($productId);
     }
 
     private function stockErrorResponseForOrder(Order $order): ?JsonResponse
@@ -968,31 +966,67 @@ class UserOrderController extends Controller
     public function paymentStatus(Request $request, string $id)
     {
         $user = $request->user();
+        $orderId = (int) $id;
 
-        $order = Order::query()
-            ->with([
-                'items.product:id,name,slug',
-                'payment',
-            ])
-            ->where('id', (int) $id)
-            ->where('user_id', (int) $user->id)
-            ->first();
+        $cacheKey = sprintf('order:%d:user:%d:payment-status', $orderId, (int) $user->id);
 
-        if (!$order) return $this->fail('Order tidak ditemukan', 404);
+        $payload = Cache::remember($cacheKey, now()->addSeconds(5), function () use ($orderId, $user) {
+            $order = Order::query()
+                ->select([
+                    'id',
+                    'user_id',
+                    'invoice_number',
+                    'status',
+                    'amount',
+                    'gateway_fee_percent',
+                    'gateway_fee_amount',
+                ])
+                ->with([
+                    'items' => function ($query) {
+                        $query->select(['id', 'order_id', 'product_id', 'qty', 'unit_price', 'line_subtotal', 'product_name', 'product_slug'])
+                            ->with(['product:id,name,slug']);
+                    },
+                    'payment' => function ($query) {
+                        $query->select([
+                            'id',
+                            'order_id',
+                            'gateway_code',
+                            'external_id',
+                            'amount',
+                            'status',
+                            'created_at',
+                            'updated_at',
+                        ]);
+                    },
+                ])
+                ->where('id', $orderId)
+                ->where('user_id', (int) $user->id)
+                ->first();
 
-        $status = (string) ($order->status?->value ?? $order->status);
+            if (!$order) {
+                return null;
+            }
 
-        return $this->ok([
-            'order_id' => (int) $order->id,
-            'invoice_number' => (string) $order->invoice_number,
-            'order_status' => $status,
-            'amount' => (string) $order->amount,
-            'gateway_fee_percent' => (float) ($order->gateway_fee_percent ?? 0),
-            'gateway_fee_amount' => (string) ($order->gateway_fee_amount ?? '0.00'),
-            'total_payable_gateway' => (string) ((float) $order->amount + (float) ($order->gateway_fee_amount ?? 0)),
-            'payment' => $order->payment,
-            'items' => $order->items,
-        ]);
+            $status = (string) ($order->status?->value ?? $order->status);
+
+            return [
+                'order_id' => (int) $order->id,
+                'invoice_number' => (string) $order->invoice_number,
+                'order_status' => $status,
+                'amount' => (string) $order->amount,
+                'gateway_fee_percent' => (float) ($order->gateway_fee_percent ?? 0),
+                'gateway_fee_amount' => (string) ($order->gateway_fee_amount ?? '0.00'),
+                'total_payable_gateway' => (string) ((float) $order->amount + (float) ($order->gateway_fee_amount ?? 0)),
+                'payment' => $order->payment,
+                'items' => $order->items,
+            ];
+        });
+
+        if (!$payload) {
+            return $this->fail('Order tidak ditemukan', 404);
+        }
+
+        return $this->ok($payload);
     }
 
     public function index(Request $request)

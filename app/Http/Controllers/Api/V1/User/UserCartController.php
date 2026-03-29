@@ -22,6 +22,7 @@ use App\Services\DiscountCampaignService;
 use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
 use App\Models\Referral;
+use App\Services\ProductAvailabilityService;
 
 class UserCartController extends Controller
 {
@@ -257,10 +258,7 @@ class UserCartController extends Controller
 
         if (!$product) return $this->fail('Product not available', 404);
 
-        $stock = License::query()
-            ->where('product_id', $product->id)
-            ->where('status', License::STATUS_AVAILABLE)
-            ->count();
+        $stock = app(ProductAvailabilityService::class)->forProductId((int) $product->id);
 
         $item = CartItem::query()
             ->where('cart_id', $cart->id)
@@ -309,10 +307,7 @@ class UserCartController extends Controller
 
         $requestedQty = (int) $v['qty'];
 
-        $stock = License::query()
-            ->where('product_id', (int) $item->product_id)
-            ->where('status', License::STATUS_AVAILABLE)
-            ->count();
+        $stock = app(ProductAvailabilityService::class)->forProductId((int) $item->product_id);
 
         if ($stock < $requestedQty) {
             return $this->fail('Stock tidak cukup', 422, [
@@ -799,17 +794,6 @@ class UserCartController extends Controller
 
     private function getAvailableStockMap(array $productIds): array
     {
-        if (empty($productIds)) {
-            return [];
-        }
-
-        return License::query()
-            ->select('product_id', DB::raw('COUNT(*) as total'))
-            ->whereIn('product_id', $productIds)
-            ->where('status', License::STATUS_AVAILABLE)
-            ->groupBy('product_id')
-            ->pluck('total', 'product_id')
-            ->map(fn ($total) => (int) $total)
-            ->toArray();
+        return app(ProductAvailabilityService::class)->forProductIds($productIds);
     }
 }

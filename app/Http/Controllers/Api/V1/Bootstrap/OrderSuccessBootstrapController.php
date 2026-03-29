@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class OrderSuccessBootstrapController extends Controller
 {
@@ -19,36 +20,51 @@ class OrderSuccessBootstrapController extends Controller
         UserDeliveryController $deliveryController,
         UserOrderController $orderController,
     ): JsonResponse {
-        $deliveryResponse = $deliveryController->info($request, $id);
-        if (!$this->isSuccess($deliveryResponse)) {
-            return $deliveryResponse;
+        $user = $request->user();
+        $orderId = (int) $id;
+
+        $cacheKey = sprintf('bootstrap:order-success:%d:user:%d', $orderId, (int) $user->id);
+
+        $payload = Cache::remember($cacheKey, now()->addSeconds(5), function () use ($request, $id, $deliveryController, $orderController) {
+            $deliveryResponse = $deliveryController->info($request, $id);
+            if (!$this->isSuccess($deliveryResponse)) {
+                return ['response' => $deliveryResponse];
+            }
+
+            $orderResponse = $orderController->show($request, $id);
+            if (!$this->isSuccess($orderResponse)) {
+                return ['response' => $orderResponse];
+            }
+
+            $paymentResponse = $orderController->paymentStatus($request, $id);
+            if (!$this->isSuccess($paymentResponse)) {
+                return ['response' => $paymentResponse];
+            }
+
+            $deliveryPayload = $deliveryResponse->getData(true);
+            $orderPayload = $orderResponse->getData(true);
+            $paymentPayload = $paymentResponse->getData(true);
+
+            return [
+                'data' => [
+                    'delivery' => $deliveryPayload['data'] ?? null,
+                    'order' => $orderPayload['data'] ?? null,
+                    'payment' => $paymentPayload['data'] ?? null,
+                ],
+            ];
+        });
+
+        if (isset($payload['response']) && $payload['response'] instanceof JsonResponse) {
+            return $payload['response'];
         }
 
-        $orderResponse = $orderController->show($request, $id);
-        $paymentResponse = $orderController->paymentStatus($request, $id);
-
-        if (!$this->isSuccess($orderResponse)) {
-            return $orderResponse;
-        }
-
-        if (!$this->isSuccess($paymentResponse)) {
-            return $paymentResponse;
-        }
-
-        $deliveryPayload = $deliveryResponse->getData(true);
-        $orderPayload = $orderResponse->getData(true);
-        $paymentPayload = $paymentResponse->getData(true);
-
-        return $this->ok([
-            'delivery' => $deliveryPayload['data'] ?? null,
-            'order' => $orderPayload['data'] ?? null,
-            'payment' => $paymentPayload['data'] ?? null,
-        ]);
+        return $this->ok($payload['data'] ?? null);
     }
 
     private function isSuccess(JsonResponse $response): bool
     {
         $payload = $response->getData(true);
+
         return (bool) ($payload['success'] ?? false);
     }
 }
