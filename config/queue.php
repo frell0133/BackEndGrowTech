@@ -9,7 +9,8 @@ return [
     |
     | Laravel's queue supports a variety of backends via a single, unified
     | API, giving you convenient access to each backend using identical
-    | syntax for each. The default queue connection is defined below.
+    | syntax for each of the supported backends. The default connection
+    | for your application is defined below.
     |
     */
 
@@ -20,9 +21,9 @@ return [
     | Queue Connections
     |--------------------------------------------------------------------------
     |
-    | Here you may configure the connection options for every queue backend
-    | used by your application. An example configuration is provided for
-    | each backend supported by Laravel. You're also free to add more.
+    | Here you may configure the connection information for each server that
+    | is used by your application. A default configuration has been added
+    | for each back-end shipped with Laravel. You are free to add more.
     |
     | Drivers: "sync", "database", "beanstalkd", "sqs", "redis",
     |          "deferred", "background", "failover", "null"
@@ -40,7 +41,11 @@ return [
             'connection' => env('DB_QUEUE_CONNECTION'),
             'table' => env('DB_QUEUE_TABLE', 'jobs'),
             'queue' => env('DB_QUEUE', 'default'),
-            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 90),
+            // BLOK E hardening:
+            // Keep retry_after comfortably above the longest production job timeout
+            // so database queue workers do not re-reserve long-running fulfillment jobs
+            // too early. ProcessPaidOrderJob currently uses timeout=300.
+            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 420),
             'after_commit' => true,
         ],
 
@@ -126,4 +131,4 @@ return [
         'table' => 'failed_jobs',
     ],
 
-];  
+];
