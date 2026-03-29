@@ -78,4 +78,10 @@ class PublicCache
     {
         self::bumpVersion(self::DASHBOARD_VERSION_KEY);
     }
+
+    public static function rememberCatalogTaxonomy(string $suffix, int $seconds, Closure $callback): mixed
+    {
+        return self::rememberCatalog("taxonomy:{$suffix}", $seconds, $callback);
+    }
+    
 }
