@@ -79,9 +79,18 @@ class PublicCache
         self::bumpVersion(self::DASHBOARD_VERSION_KEY);
     }
 
+    private static function rememberCatalogSection(string $section, string $suffix, int $seconds, Closure $callback): mixed
+    {
+        return self::rememberCatalog("{$section}:{$suffix}", $seconds, $callback);
+    }
+
     public static function rememberCatalogTaxonomy(string $suffix, int $seconds, Closure $callback): mixed
     {
-        return self::rememberCatalog("taxonomy:{$suffix}", $seconds, $callback);
+        return self::rememberCatalogSection('taxonomy', $suffix, $seconds, $callback);
     }
-    
+
+    public static function rememberCatalogProducts(string $suffix, int $seconds, Closure $callback): mixed
+    {
+        return self::rememberCatalogSection('products', $suffix, $seconds, $callback);
+    }
 }
