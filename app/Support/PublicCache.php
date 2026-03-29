@@ -8,7 +8,8 @@ use Illuminate\Support\Facades\Cache;
 class PublicCache
 {
     private const CONTENT_VERSION_KEY = 'cache_version:public_content';
-    private const CATALOG_VERSION_KEY = 'cache_version:public_catalog';
+    private const CATALOG_PRODUCTS_VERSION_KEY = 'cache_version:public_catalog_products';
+    private const CATALOG_TAXONOMY_VERSION_KEY = 'cache_version:public_catalog_taxonomy';
     private const DASHBOARD_VERSION_KEY = 'cache_version:admin_dashboard';
 
     private static function currentVersion(string $versionKey): int
@@ -48,8 +49,22 @@ class PublicCache
 
     public static function rememberCatalog(string $suffix, int $seconds, Closure $callback): mixed
     {
+        return self::rememberCatalogProducts($suffix, $seconds, $callback);
+    }
+
+    public static function rememberCatalogProducts(string $suffix, int $seconds, Closure $callback): mixed
+    {
         return Cache::remember(
-            self::buildKey('public-catalog', $suffix, self::CATALOG_VERSION_KEY),
+            self::buildKey('public-catalog-products', $suffix, self::CATALOG_PRODUCTS_VERSION_KEY),
+            now()->addSeconds($seconds),
+            $callback
+        );
+    }
+
+    public static function rememberCatalogTaxonomy(string $suffix, int $seconds, Closure $callback): mixed
+    {
+        return Cache::remember(
+            self::buildKey('public-catalog-taxonomy', $suffix, self::CATALOG_TAXONOMY_VERSION_KEY),
             now()->addSeconds($seconds),
             $callback
         );
@@ -71,26 +86,22 @@ class PublicCache
 
     public static function bumpCatalog(): void
     {
-        self::bumpVersion(self::CATALOG_VERSION_KEY);
+        self::bumpCatalogProducts();
+        self::bumpCatalogTaxonomy();
+    }
+
+    public static function bumpCatalogProducts(): void
+    {
+        self::bumpVersion(self::CATALOG_PRODUCTS_VERSION_KEY);
+    }
+
+    public static function bumpCatalogTaxonomy(): void
+    {
+        self::bumpVersion(self::CATALOG_TAXONOMY_VERSION_KEY);
     }
 
     public static function bumpDashboard(): void
     {
         self::bumpVersion(self::DASHBOARD_VERSION_KEY);
-    }
-
-    private static function rememberCatalogSection(string $section, string $suffix, int $seconds, Closure $callback): mixed
-    {
-        return self::rememberCatalog("{$section}:{$suffix}", $seconds, $callback);
-    }
-
-    public static function rememberCatalogTaxonomy(string $suffix, int $seconds, Closure $callback): mixed
-    {
-        return self::rememberCatalogSection('taxonomy', $suffix, $seconds, $callback);
-    }
-
-    public static function rememberCatalogProducts(string $suffix, int $seconds, Closure $callback): mixed
-    {
-        return self::rememberCatalogSection('products', $suffix, $seconds, $callback);
     }
 }
