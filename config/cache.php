@@ -53,6 +53,12 @@ return [
             'lock_path' => storage_path('framework/cache/data'),
         ],
 
+        'hot_file' => [
+            'driver' => 'file',
+            'path' => storage_path('framework/cache/runtime-hot'),
+            'lock_path' => storage_path('framework/cache/runtime-hot'),
+        ],
+
         'memcached' => [
             'driver' => 'memcached',
             'persistent_id' => env('MEMCACHED_PERSISTENT_ID'),
@@ -99,6 +105,14 @@ return [
             ],
         ],
 
+        'hot_failover' => [
+            'driver' => 'failover',
+            'stores' => [
+                'hot_file',
+                'array',
+            ],
+        ],
+
     ],
 
     /*
@@ -113,5 +127,22 @@ return [
     */
 
     'prefix' => env('CACHE_PREFIX', Str::slug((string) env('APP_NAME', 'laravel')).'-cache-'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Dedicated Runtime Hot Cache / Rate Limiter Store
+    |--------------------------------------------------------------------------
+    |
+    | Keep the global default cache store untouched for compatibility, but move
+    | ultra-hot runtime paths (public content, bootstrap payloads, payment
+    | status snapshots, system access payloads, and API rate limiting) away
+    | from the database store by default. This reduces DB contention on Railway
+    | without requiring Redis.
+    |
+    */
+
+    'hot_store' => env('CACHE_HOT_STORE', 'hot_failover'),
+
+    'limiter' => env('CACHE_LIMITER', 'hot_file'),
 
 ];
