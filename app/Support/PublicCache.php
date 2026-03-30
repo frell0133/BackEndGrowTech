@@ -16,8 +16,9 @@ class PublicCache
     {
         $value = Cache::get($versionKey);
 
-        if (!$value) {
+        if (! $value) {
             Cache::forever($versionKey, 1);
+
             return 1;
         }
 
@@ -26,7 +27,7 @@ class PublicCache
 
     private static function bumpVersion(string $versionKey): void
     {
-        if (!Cache::has($versionKey)) {
+        if (! Cache::has($versionKey)) {
             Cache::forever($versionKey, 1);
         }
 
@@ -40,7 +41,7 @@ class PublicCache
 
     public static function rememberContent(string $suffix, int $seconds, Closure $callback): mixed
     {
-        return Cache::remember(
+        return ResponseCache::remember(
             self::buildKey('public-content', $suffix, self::CONTENT_VERSION_KEY),
             now()->addSeconds($seconds),
             $callback
@@ -54,7 +55,7 @@ class PublicCache
 
     public static function rememberCatalogProducts(string $suffix, int $seconds, Closure $callback): mixed
     {
-        return Cache::remember(
+        return ResponseCache::remember(
             self::buildKey('public-catalog-products', $suffix, self::CATALOG_PRODUCTS_VERSION_KEY),
             now()->addSeconds($seconds),
             $callback
@@ -63,7 +64,7 @@ class PublicCache
 
     public static function rememberCatalogTaxonomy(string $suffix, int $seconds, Closure $callback): mixed
     {
-        return Cache::remember(
+        return ResponseCache::remember(
             self::buildKey('public-catalog-taxonomy', $suffix, self::CATALOG_TAXONOMY_VERSION_KEY),
             now()->addSeconds($seconds),
             $callback
@@ -72,7 +73,7 @@ class PublicCache
 
     public static function rememberDashboard(string $suffix, int $seconds, Closure $callback): mixed
     {
-        return Cache::remember(
+        return ResponseCache::remember(
             self::buildKey('admin-dashboard', $suffix, self::DASHBOARD_VERSION_KEY),
             now()->addSeconds($seconds),
             $callback
