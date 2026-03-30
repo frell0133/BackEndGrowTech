@@ -8,8 +8,8 @@ use App\Models\Favorite;
 use App\Services\SupabaseStorageService;
 use App\Services\SystemAccessService;
 use App\Support\ApiResponse;
+use App\Support\RuntimeCache;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 
 class ShellBootstrapController extends Controller
 {
@@ -28,7 +28,7 @@ class ShellBootstrapController extends Controller
 
         $cacheKey = sprintf('bootstrap:shell:user:%s', (string) $user->id);
 
-        $payload = Cache::remember($cacheKey, now()->addSeconds(10), function () use ($user, $supabase, $access) {
+        $payload = RuntimeCache::remember($cacheKey, 10, function () use ($user, $supabase, $access) {
             $cartCount = (int) CartItem::query()
                 ->whereHas('cart', function ($query) use ($user) {
                     $query->where('user_id', $user->id);

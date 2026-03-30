@@ -6,9 +6,9 @@ use App\Http\Controllers\Api\V1\User\UserDeliveryController;
 use App\Http\Controllers\Api\V1\User\UserOrderController;
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use App\Support\RuntimeCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 
 class OrderSuccessBootstrapController extends Controller
 {
@@ -25,7 +25,7 @@ class OrderSuccessBootstrapController extends Controller
 
         $cacheKey = sprintf('bootstrap:order-success:%d:user:%d', $orderId, (int) $user->id);
 
-        $payload = Cache::remember($cacheKey, now()->addSeconds(5), function () use ($request, $id, $deliveryController, $orderController) {
+        $payload = RuntimeCache::remember($cacheKey, 5, function () use ($request, $id, $deliveryController, $orderController) {
             $deliveryResponse = $deliveryController->info($request, $id);
             if (!$this->isSuccess($deliveryResponse)) {
                 return ['response' => $deliveryResponse];

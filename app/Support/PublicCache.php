@@ -3,7 +3,6 @@
 namespace App\Support;
 
 use Closure;
-use Illuminate\Support\Facades\Cache;
 
 class PublicCache
 {
@@ -14,11 +13,10 @@ class PublicCache
 
     private static function currentVersion(string $versionKey): int
     {
-        $value = Cache::get($versionKey);
+        $value = RuntimeCache::get($versionKey);
 
-        if (! $value) {
-            Cache::forever($versionKey, 1);
-
+        if (!$value) {
+            RuntimeCache::forever($versionKey, 1);
             return 1;
         }
 
@@ -27,11 +25,11 @@ class PublicCache
 
     private static function bumpVersion(string $versionKey): void
     {
-        if (! Cache::has($versionKey)) {
-            Cache::forever($versionKey, 1);
+        if (!RuntimeCache::has($versionKey)) {
+            RuntimeCache::forever($versionKey, 1);
         }
 
-        Cache::increment($versionKey);
+        RuntimeCache::increment($versionKey);
     }
 
     private static function buildKey(string $prefix, string $suffix, string $versionKey): string
@@ -41,9 +39,9 @@ class PublicCache
 
     public static function rememberContent(string $suffix, int $seconds, Closure $callback): mixed
     {
-        return ResponseCache::remember(
+        return RuntimeCache::remember(
             self::buildKey('public-content', $suffix, self::CONTENT_VERSION_KEY),
-            now()->addSeconds($seconds),
+            $seconds,
             $callback
         );
     }
@@ -55,27 +53,27 @@ class PublicCache
 
     public static function rememberCatalogProducts(string $suffix, int $seconds, Closure $callback): mixed
     {
-        return ResponseCache::remember(
+        return RuntimeCache::remember(
             self::buildKey('public-catalog-products', $suffix, self::CATALOG_PRODUCTS_VERSION_KEY),
-            now()->addSeconds($seconds),
+            $seconds,
             $callback
         );
     }
 
     public static function rememberCatalogTaxonomy(string $suffix, int $seconds, Closure $callback): mixed
     {
-        return ResponseCache::remember(
+        return RuntimeCache::remember(
             self::buildKey('public-catalog-taxonomy', $suffix, self::CATALOG_TAXONOMY_VERSION_KEY),
-            now()->addSeconds($seconds),
+            $seconds,
             $callback
         );
     }
 
     public static function rememberDashboard(string $suffix, int $seconds, Closure $callback): mixed
     {
-        return ResponseCache::remember(
+        return RuntimeCache::remember(
             self::buildKey('admin-dashboard', $suffix, self::DASHBOARD_VERSION_KEY),
-            now()->addSeconds($seconds),
+            $seconds,
             $callback
         );
     }

@@ -4,7 +4,7 @@ namespace App\Services;
 
 use App\Models\Setting;
 use App\Models\User;
-use Illuminate\Support\Facades\Cache;
+use App\Support\RuntimeCache;
 
 class SystemAccessService
 {
@@ -47,11 +47,11 @@ class SystemAccessService
 
     public static function bumpCacheVersion(): void
     {
-        if (!Cache::has(self::CACHE_VERSION_KEY)) {
-            Cache::forever(self::CACHE_VERSION_KEY, 1);
+        if (!RuntimeCache::has(self::CACHE_VERSION_KEY)) {
+            RuntimeCache::forever(self::CACHE_VERSION_KEY, 1);
         }
 
-        Cache::increment(self::CACHE_VERSION_KEY);
+        RuntimeCache::increment(self::CACHE_VERSION_KEY);
     }
 
     public function all(): array
@@ -63,9 +63,9 @@ class SystemAccessService
         $version = $this->currentVersion();
         $cacheKey = self::CACHE_KEY_PREFIX . ':v' . $version;
 
-        $this->resolved = Cache::remember(
+        $this->resolved = RuntimeCache::remember(
             $cacheKey,
-            now()->addSeconds(self::CACHE_TTL_SECONDS),
+            self::CACHE_TTL_SECONDS,
             fn () => $this->loadResolvedSettings()
         );
 
@@ -143,10 +143,10 @@ class SystemAccessService
 
     private function currentVersion(): int
     {
-        $value = Cache::get(self::CACHE_VERSION_KEY);
+        $value = RuntimeCache::get(self::CACHE_VERSION_KEY);
 
         if (!$value) {
-            Cache::forever(self::CACHE_VERSION_KEY, 1);
+            RuntimeCache::forever(self::CACHE_VERSION_KEY, 1);
             return 1;
         }
 

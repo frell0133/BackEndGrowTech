@@ -21,6 +21,7 @@ use App\Services\MidtransService;
 use App\Services\OrderFulfillmentService;
 use App\Services\DiscountCampaignService;
 use App\Support\ApiResponse;
+use App\Support\RuntimeCache;
 use App\Http\Controllers\Controller;
 use App\Support\DispatchesInvoiceEmail;
 use App\Models\ReferralSetting;
@@ -970,7 +971,7 @@ class UserOrderController extends Controller
 
         $cacheKey = sprintf('order:%d:user:%d:payment-status', $orderId, (int) $user->id);
 
-        $payload = Cache::remember($cacheKey, now()->addSeconds(5), function () use ($orderId, $user) {
+        $payload = RuntimeCache::remember($cacheKey, 5, function () use ($orderId, $user) {
             $order = Order::query()
                 ->select([
                     'id',
