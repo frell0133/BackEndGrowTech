@@ -17,22 +17,26 @@ class CustomerHomeBootstrapController extends Controller
 
     public function __invoke(SystemAccessService $access, ProductAvailabilityService $availability)
     {
-        $catalogAccess = $access->get('catalog_access');
-        $catalogEnabled = (bool) ($catalogAccess['enabled'] ?? true);
-        $catalogMaintenance = $catalogEnabled
-            ? ''
-            : (string) ($catalogAccess['message'] ?? 'Katalog sedang maintenance.');
+        $payload = PublicCache::rememberContent('bootstrap:customer-home:payload', 60, function () use ($access, $availability) {
+            $catalogAccess = $access->get('catalog_access');
+            $catalogEnabled = (bool) ($catalogAccess['enabled'] ?? true);
+            $catalogMaintenance = $catalogEnabled
+                ? ''
+                : (string) ($catalogAccess['message'] ?? 'Katalog sedang maintenance.');
 
-        $banners = $this->getBanners();
-        $popup = $this->getPopup();
-        $products = $catalogEnabled ? $this->getPopularProducts($availability) : [];
+            $banners = $this->getBanners();
+            $popup = $this->getPopup();
+            $products = $catalogEnabled ? $this->getPopularProducts($availability) : [];
 
-        return $this->ok([
-            'popup' => $popup,
-            'banners' => $banners,
-            'products' => $products,
-            'catalog_maintenance' => $catalogMaintenance,
-        ]);
+            return [
+                'popup' => $popup,
+                'banners' => $banners,
+                'products' => $products,
+                'catalog_maintenance' => $catalogMaintenance,
+            ];
+        });
+
+        return $this->ok($payload);
     }
 
     private function getBanners(): array

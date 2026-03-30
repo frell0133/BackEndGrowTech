@@ -9,6 +9,7 @@ use App\Services\SupabaseStorageService;
 use App\Services\SystemAccessService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class ShellBootstrapController extends Controller
 {
@@ -25,37 +26,43 @@ class ShellBootstrapController extends Controller
             return $this->fail('Unauthenticated', 401);
         }
 
-        $cartCount = (int) CartItem::query()
-            ->whereHas('cart', function ($query) use ($user) {
-                $query->where('user_id', $user->id);
-            })
-            ->sum('qty');
+        $cacheKey = sprintf('bootstrap:shell:user:%s', (string) $user->id);
 
-        $favoriteCount = (int) Favorite::query()
-            ->where('user_id', $user->id)
-            ->count();
+        $payload = Cache::remember($cacheKey, now()->addSeconds(10), function () use ($user, $supabase, $access) {
+            $cartCount = (int) CartItem::query()
+                ->whereHas('cart', function ($query) use ($user) {
+                    $query->where('user_id', $user->id);
+                })
+                ->sum('qty');
 
-        $features = $access->featurePayload([
-            'catalog_access',
-            'checkout_access',
-            'topup_access',
-        ]);
+            $favoriteCount = (int) Favorite::query()
+                ->where('user_id', $user->id)
+                ->count();
 
-        return $this->ok([
-            'auth' => [
-                'is_logged_in' => true,
-                'user' => $this->serializeUser($user, $supabase),
-            ],
-            'nav' => [
-                'cart_count' => $cartCount,
-                'favorite_count' => $favoriteCount,
-            ],
-            'features' => [
-                'catalog' => $features['catalog_access'],
-                'checkout' => $features['checkout_access'],
-                'topup' => $features['topup_access'],
-            ],
-        ]);
+            $features = $access->featurePayload([
+                'catalog_access',
+                'checkout_access',
+                'topup_access',
+            ]);
+
+            return [
+                'auth' => [
+                    'is_logged_in' => true,
+                    'user' => $this->serializeUser($user, $supabase),
+                ],
+                'nav' => [
+                    'cart_count' => $cartCount,
+                    'favorite_count' => $favoriteCount,
+                ],
+                'features' => [
+                    'catalog' => $features['catalog_access'],
+                    'checkout' => $features['checkout_access'],
+                    'topup' => $features['topup_access'],
+                ],
+            ];
+        });
+
+        return $this->ok($payload);
     }
 
     private function serializeUser($user, SupabaseStorageService $supabase): array
