@@ -1,4 +1,3 @@
-
 <?php
 
 use Illuminate\Support\Facades\Route;
@@ -424,6 +423,7 @@ Route::prefix('v1')->group(function () {
         // Products
         Route::middleware('admin.can:manage_products')->group(function () {
             Route::get('products', [AdminProductController::class, 'index']);
+            Route::get('products/{id}', [AdminProductController::class, 'show']);
             Route::post('products', [AdminProductController::class, 'store']);
             Route::patch('products/{id}', [AdminProductController::class, 'update']);
             Route::delete('products/{id}', [AdminProductController::class, 'destroy']);

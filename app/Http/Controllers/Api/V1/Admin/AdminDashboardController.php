@@ -26,11 +26,6 @@ class AdminDashboardController extends Controller
         $data = PublicCache::rememberDashboard('summary:' . $queryHash, 60, function () use ($request) {
             [$start, $end] = $this->resolveRange($request);
 
-            $status = $request->query('status');
-            $productId = $request->query('product_id');
-            $userTier = $request->query('user_tier');
-            $q = trim((string) $request->query('q', ''));
-
             $hasTier = Schema::hasColumn('users', 'tier');
             $hasFullName = Schema::hasColumn('users', 'full_name');
 
@@ -61,36 +56,19 @@ class AdminDashboardController extends Controller
                 ->whereIn('status', $revenueStatuses)
                 ->sum('amount'));
 
-            $commissionSub = DB::table('referral_transactions')
-                ->selectRaw('order_id, COALESCE(SUM(commission_amount), 0) as total_commission')
-                ->whereNotNull('order_id')
-                ->where('status', 'valid')
-                ->groupBy('order_id');
+            $profitToday = $this->sumProfit(
+                Carbon::now()->startOfDay(),
+                Carbon::now()->endOfDay(),
+                $revenueStatuses
+            );
 
-            $profitExpression = 'GREATEST(orders.amount - COALESCE(orders.tax_amount, 0) - COALESCE(rc.total_commission, 0), 0)';
+            $profitMonth = $this->sumProfit(
+                Carbon::now()->startOfMonth(),
+                Carbon::now()->endOfMonth(),
+                $revenueStatuses
+            );
 
-            $profitToday = (int) floor((float) Order::query()
-                ->leftJoinSub($commissionSub, 'rc', function ($join) {
-                    $join->on('rc.order_id', '=', 'orders.id');
-                })
-                ->whereIn('orders.status', $revenueStatuses)
-                ->whereBetween('orders.created_at', [Carbon::now()->startOfDay(), Carbon::now()->endOfDay()])
-                ->sum(DB::raw($profitExpression)));
-
-            $profitMonth = (int) floor((float) Order::query()
-                ->leftJoinSub($commissionSub, 'rc', function ($join) {
-                    $join->on('rc.order_id', '=', 'orders.id');
-                })
-                ->whereIn('orders.status', $revenueStatuses)
-                ->whereBetween('orders.created_at', [Carbon::now()->startOfMonth(), Carbon::now()->endOfMonth()])
-                ->sum(DB::raw($profitExpression)));
-
-            $profitTotal = (int) floor((float) Order::query()
-                ->leftJoinSub($commissionSub, 'rc', function ($join) {
-                    $join->on('rc.order_id', '=', 'orders.id');
-                })
-                ->whereIn('orders.status', $revenueStatuses)
-                ->sum(DB::raw($profitExpression)));
+            $profitTotal = $this->sumProfit(null, null, $revenueStatuses);
 
             $totalCategories = (int) Category::query()->count();
             $totalSubCategories = class_exists(SubCategory::class)
@@ -119,65 +97,17 @@ class AdminDashboardController extends Controller
                 ];
             }
 
-            $ordersQ = Order::query()
-                ->from('orders')
-                ->whereBetween('orders.created_at', [$start, $end]);
+            $revenueQ = $this->buildFilteredOrdersQuery($request, $start, $end, $hasTier, $hasFullName)
+                ->whereIn('orders.status', $revenueStatuses);
 
-            $needJoinUsers = ($userTier && $hasTier) || ($q !== '');
-            if ($needJoinUsers) {
-                $ordersQ->join('users', 'users.id', '=', 'orders.user_id')
-                    ->select('orders.*');
-            }
-
-            if ($status) {
-                $ordersQ->where('orders.status', $status);
-            }
-
-            if ($userTier && $hasTier) {
-                $ordersQ->where('users.tier', $userTier);
-            }
-
-            if ($productId) {
-                $ordersQ->whereExists(function ($sub) use ($productId) {
-                    $sub->select(DB::raw(1))
-                        ->from('order_items')
-                        ->whereColumn('order_items.order_id', 'orders.id')
-                        ->where('order_items.product_id', (int) $productId);
-                });
-            }
-
-            if ($q !== '') {
-                $ordersQ->where(function ($qq) use ($q, $needJoinUsers, $hasFullName) {
-                    $qq->where('orders.invoice_number', 'like', "%{$q}%");
-
-                    if ($needJoinUsers) {
-                        $qq->orWhere('users.email', 'like', "%{$q}%")
-                            ->orWhere('users.name', 'like', "%{$q}%");
-
-                        if ($hasFullName) {
-                            $qq->orWhere('users.full_name', 'like', "%{$q}%");
-                        }
-                    }
-                });
-            }
-
-            $revenueDaily = (clone $ordersQ)
-                ->whereIn('orders.status', $revenueStatuses)
-                ->selectRaw('DATE(orders.created_at) as d, SUM(orders.amount) as total')
+            $rawDailyRevenue = (clone $revenueQ)
+                ->selectRaw("DATE(orders.created_at) as d, SUM(orders.amount) as total")
                 ->groupBy('d')
                 ->orderBy('d')
                 ->get()
                 ->keyBy('d');
 
-            $profitDaily = (clone $ordersQ)
-                ->leftJoinSub($commissionSub, 'rc', function ($join) {
-                    $join->on('rc.order_id', '=', 'orders.id');
-                })
-                ->whereIn('orders.status', $revenueStatuses)
-                ->selectRaw('DATE(orders.created_at) as d, SUM(' . $profitExpression . ') as total')
-                ->groupBy('d')
-                ->orderBy('d')
-                ->get()
+            $rawDailyProfit = $this->dailyProfitSeries($request, $start, $end, $revenueStatuses, $hasTier, $hasFullName)
                 ->keyBy('d');
 
             $labels = [];
@@ -189,8 +119,8 @@ class AdminDashboardController extends Controller
             while ($cursor->lte($endDay)) {
                 $key = $cursor->toDateString();
                 $labels[] = $key;
-                $revenueSeries[] = (int) floor((float) ($revenueDaily[$key]->total ?? 0));
-                $profitSeries[] = (int) floor((float) ($profitDaily[$key]->total ?? 0));
+                $revenueSeries[] = (int) floor((float) ($rawDailyRevenue[$key]->total ?? 0));
+                $profitSeries[] = (int) floor((float) ($rawDailyProfit[$key]->total ?? 0));
                 $cursor->addDay();
             }
 
@@ -215,8 +145,7 @@ class AdminDashboardController extends Controller
                     'today' => $profitToday,
                     'month' => $profitMonth,
                     'total' => $profitTotal,
-                    'formula' => 'amount - tax_amount - referral_commission_valid',
-                    'note' => 'Profit estimasi dihitung dari amount order setelah diskon yang berhasil dibayar, lalu dikurangi tax_amount dan komisi referral valid. Project saat ini belum memiliki field modal/HPP produk.',
+                    'source' => 'product_tier_profit',
                 ],
                 'products' => [
                     'categories' => $totalCategories,
@@ -235,9 +164,9 @@ class AdminDashboardController extends Controller
                 ],
                 'filter_options' => [
                     'products' => Product::query()->select('id', 'name')->orderBy('name')->limit(300)->get(),
-                    'status' => ['created', 'pending', 'paid', 'fulfilled', 'failed', 'expired', 'refunded'],
-                    'user_tier' => ['member', 'reseller', 'vip'],
-                    'range_presets' => ['today', '7d', '30d'],
+                    'status' => ['created','pending','paid','fulfilled','failed','expired','refunded'],
+                    'user_tier' => ['member','reseller','vip'],
+                    'range_presets' => ['today','7d','30d'],
                 ],
             ];
         });
@@ -258,5 +187,132 @@ class AdminDashboardController extends Controller
         if ($range === 'today') return [Carbon::now()->startOfDay(), Carbon::now()->endOfDay()];
         if ($range === '30d') return [Carbon::now()->subDays(29)->startOfDay(), Carbon::now()->endOfDay()];
         return [Carbon::now()->subDays(6)->startOfDay(), Carbon::now()->endOfDay()];
+    }
+
+    private function buildFilteredOrdersQuery(Request $request, Carbon $start, Carbon $end, bool $hasTier, bool $hasFullName)
+    {
+        $status = $request->query('status');
+        $productId = $request->query('product_id');
+        $userTier = $request->query('user_tier');
+        $q = trim((string) $request->query('q', ''));
+
+        $ordersQ = Order::query()->whereBetween('orders.created_at', [$start, $end]);
+
+        $needJoinUsers = ($userTier && $hasTier) || ($q !== '');
+        if ($needJoinUsers) {
+            $ordersQ->join('users', 'users.id', '=', 'orders.user_id')
+                ->select('orders.*');
+        }
+
+        if ($status) {
+            $ordersQ->where('orders.status', $status);
+        }
+
+        if ($userTier && $hasTier) {
+            $ordersQ->where('users.tier', $userTier);
+        }
+
+        if ($productId) {
+            $ordersQ->whereExists(function ($sub) use ($productId) {
+                $sub->select(DB::raw(1))
+                    ->from('order_items')
+                    ->whereColumn('order_items.order_id', 'orders.id')
+                    ->where('order_items.product_id', (int) $productId);
+            });
+        }
+
+        if ($q !== '') {
+            $ordersQ->where(function ($qq) use ($q, $needJoinUsers, $hasFullName) {
+                $qq->where('orders.invoice_number', 'like', "%{$q}%");
+
+                if ($needJoinUsers) {
+                    $qq->orWhere('users.email', 'like', "%{$q}%")
+                        ->orWhere('users.name', 'like', "%{$q}%");
+
+                    if ($hasFullName) {
+                        $qq->orWhere('users.full_name', 'like', "%{$q}%");
+                    }
+                }
+            });
+        }
+
+        return $ordersQ;
+    }
+
+    private function dailyProfitSeries(Request $request, Carbon $start, Carbon $end, array $statuses, bool $hasTier, bool $hasFullName)
+    {
+        $status = $request->query('status');
+        $productId = $request->query('product_id');
+        $userTier = $request->query('user_tier');
+        $q = trim((string) $request->query('q', ''));
+
+        $query = DB::table('orders')
+            ->join('order_items', 'order_items.order_id', '=', 'orders.id')
+            ->leftJoin('users', 'users.id', '=', 'orders.user_id')
+            ->leftJoin('products', 'products.id', '=', 'order_items.product_id')
+            ->whereBetween('orders.created_at', [$start, $end])
+            ->whereIn('orders.status', $statuses);
+
+        if ($status) {
+            $query->where('orders.status', $status);
+        }
+
+        if ($productId) {
+            $query->where('order_items.product_id', (int) $productId);
+        }
+
+        if ($userTier && $hasTier) {
+            $query->where('users.tier', $userTier);
+        }
+
+        if ($q !== '') {
+            $query->where(function ($qq) use ($q, $hasFullName) {
+                $qq->where('orders.invoice_number', 'like', "%{$q}%")
+                    ->orWhere('users.email', 'like', "%{$q}%")
+                    ->orWhere('users.name', 'like', "%{$q}%");
+
+                if ($hasFullName) {
+                    $qq->orWhere('users.full_name', 'like', "%{$q}%");
+                }
+            });
+        }
+
+        $profitExpression = $this->profitExpression();
+
+        return $query
+            ->selectRaw("DATE(orders.created_at) as d, SUM({$profitExpression}) as total")
+            ->groupBy('d')
+            ->orderBy('d')
+            ->get();
+    }
+
+    private function sumProfit(?Carbon $start, ?Carbon $end, array $statuses): int
+    {
+        $query = DB::table('orders')
+            ->join('order_items', 'order_items.order_id', '=', 'orders.id')
+            ->leftJoin('users', 'users.id', '=', 'orders.user_id')
+            ->leftJoin('products', 'products.id', '=', 'order_items.product_id')
+            ->whereIn('orders.status', $statuses);
+
+        if ($start && $end) {
+            $query->whereBetween('orders.created_at', [$start, $end]);
+        }
+
+        return (int) floor((float) $query->sum(DB::raw($this->profitExpression())));
+    }
+
+    private function profitExpression(): string
+    {
+        $fallback = '0';
+
+        if (Schema::hasColumn('products', 'tier_profit') && Schema::hasColumn('users', 'tier')) {
+            $fallback = "(COALESCE(CASE\n                WHEN COALESCE(users.tier, 'member') = 'vip' THEN NULLIF(products.tier_profit->>'vip', '')::numeric\n                WHEN COALESCE(users.tier, 'member') = 'reseller' THEN NULLIF(products.tier_profit->>'reseller', '')::numeric\n                ELSE NULLIF(products.tier_profit->>'member', '')::numeric\n            END, 0) * COALESCE(order_items.qty, 1))";
+        }
+
+        if (Schema::hasColumn('order_items', 'line_profit')) {
+            return "COALESCE(order_items.line_profit, {$fallback})";
+        }
+
+        return $fallback;
     }
 }

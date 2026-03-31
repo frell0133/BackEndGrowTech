@@ -34,7 +34,6 @@ use Illuminate\Http\JsonResponse;
 // ✅ NEW: service untuk komisi referral saat PAID (wallet/midtrans)
 use App\Services\ReferralCommissionService;
 use App\Services\ProductAvailabilityService;
-use App\Support\UserTierEligibility;
 
 class UserOrderController extends Controller
 {
@@ -99,6 +98,47 @@ class UserOrderController extends Controller
             'percent' => 0.0,
             'amount' => 0.0,
         ];
+    }
+
+
+    private function resolveUnitPrice(Product $product, string $tierKey): int
+    {
+        $tier = (array) ($product->tier_pricing ?? []);
+        $unitPrice = 0;
+
+        if (!empty($tier)) {
+            $unitPrice = (int) ($tier[$tierKey] ?? 0);
+            if ($unitPrice <= 0) $unitPrice = (int) ($tier['member'] ?? 0);
+
+            if ($unitPrice <= 0) {
+                $vals = array_values($tier);
+                $unitPrice = (int) ($vals[0] ?? 0);
+            }
+        }
+
+        if ($unitPrice <= 0) {
+            $unitPrice = (int) ($product->price ?? 0);
+        }
+
+        return (int) $unitPrice;
+    }
+
+    private function resolveUnitProfit(Product $product, string $tierKey): float
+    {
+        $tierProfit = (array) ($product->tier_profit ?? []);
+        $unitProfit = 0.0;
+
+        if (!empty($tierProfit)) {
+            $unitProfit = (float) ($tierProfit[$tierKey] ?? 0);
+            if ($unitProfit <= 0) $unitProfit = (float) ($tierProfit['member'] ?? 0);
+
+            if ($unitProfit <= 0) {
+                $vals = array_values($tierProfit);
+                $unitProfit = (float) ($vals[0] ?? 0);
+            }
+        }
+
+        return max(0.0, round($unitProfit, 2));
     }
 
     private function runOrderFulfillment(\App\Services\OrderFulfillmentService $fulfillment, \App\Models\Order $order): array
@@ -324,28 +364,20 @@ class UserOrderController extends Controller
             ]);
         }
 
-        // ✅ tier pricing
+        // ✅ tier pricing + profit per tier
         $tierKey = (string) ($user->tier ?? 'member');
-        $tier = (array) ($product->tier_pricing ?? []);
-        $unitPrice = 0;
-
-        if (!empty($tier)) {
-            $unitPrice = (int) ($tier[$tierKey] ?? 0);
-            if ($unitPrice <= 0) $unitPrice = (int) ($tier['member'] ?? 0);
-            if ($unitPrice <= 0) {
-                $vals = array_values($tier);
-                $unitPrice = (int) ($vals[0] ?? 0);
-            }
-        }
-        if ($unitPrice <= 0) $unitPrice = (int) ($product->price ?? 0);
+        $unitPrice = $this->resolveUnitPrice($product, $tierKey);
+        $unitProfit = $this->resolveUnitProfit($product, $tierKey);
 
         if ($unitPrice <= 0) {
             return $this->fail('Harga product belum diset (tier_pricing/price kosong)', 422);
         }
 
+        $unitBasePrice = (float) max(0, $unitPrice - $unitProfit);
         $subtotal = (float) ($unitPrice * $qty);
+        $lineProfit = (float) ($unitProfit * $qty);
 
-        return DB::transaction(function () use ($user, $product, $qty, $unitPrice, $subtotal, $v) {
+        return DB::transaction(function () use ($user, $product, $qty, $unitBasePrice, $unitPrice, $unitProfit, $subtotal, $lineProfit, $v) {
 
             $discountTotal = 0.0;
 
@@ -357,8 +389,11 @@ class UserOrderController extends Controller
                 'category_id' => isset($product->category_id) ? (int) $product->category_id : null,
                 'subcategory_id' => isset($product->subcategory_id) ? (int) $product->subcategory_id : null,
                 'qty' => (int) $qty,
+                'unit_base_price' => (float) $unitBasePrice,
+                'unit_profit' => (float) $unitProfit,
                 'unit_price' => (float) $unitPrice,
                 'line_subtotal' => (float) $subtotal,
+                'line_profit' => (float) $lineProfit,
                 'product_name' => (string) ($product->name ?? null),
                 'product_slug' => (string) ($product->slug ?? null),
             ]];
@@ -394,12 +429,6 @@ class UserOrderController extends Controller
                 if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
                     return $this->fail('Voucher sudah kedaluwarsa', 422);
                 }
-                if (!UserTierEligibility::voucherAllowed($voucher, $user->tier ?? 'member')) {
-                    return $this->fail(UserTierEligibility::voucherMessage($voucher, $user->tier ?? 'member'), 422, [
-                        'tier' => UserTierEligibility::normalizeTier($user->tier ?? 'member'),
-                        'rules' => UserTierEligibility::tierSummaryFromRules($voucher->rules ?? []),
-                    ]);
-                }
                 if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
                     return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
                 }
@@ -430,37 +459,39 @@ class UserOrderController extends Controller
             $referralDiscount = 0.0;
             $referrerId = null;
 
-            if (UserTierEligibility::isReferralTierAllowed($user->tier ?? 'member')) {
-                $settings = ReferralSetting::current();
-                if ($settings && $settings->isActiveNow()) {
-                    $relation = Referral::query()
-                        ->where('user_id', (int) $user->id)
-                        ->first();
+            $settings = ReferralSetting::current();
+            if ($settings && $settings->isActiveNow()) {
 
-                    if ($relation && $relation->locked_at) {
-                        if ((int) $settings->min_order_amount <= 0 || (float) $subtotal >= (float) $settings->min_order_amount) {
-                            $usedByUser = ReferralTransaction::query()
-                                ->where('user_id', (int) $user->id)
-                                ->whereIn('status', ['pending', 'valid'])
-                                ->count();
+                $relation = Referral::query()
+                    ->where('user_id', (int) $user->id)
+                    ->first();
 
-                            if ((int) $settings->max_uses_per_user <= 0 || $usedByUser < (int) $settings->max_uses_per_user) {
-                                if ($settings->discount_type === 'fixed') {
-                                    $referralDiscount = (float) ((int) $settings->discount_value);
-                                } else {
-                                    $referralDiscount = (float) floor((float) $subtotal * ((int) $settings->discount_value) / 100);
-                                }
+                if ($relation && $relation->locked_at) {
 
-                                if ((int) $settings->discount_max_amount > 0) {
-                                    $referralDiscount = min($referralDiscount, (float) ((int) $settings->discount_max_amount));
-                                }
+                    if ((int)$settings->min_order_amount <= 0 || (float)$subtotal >= (float)$settings->min_order_amount) {
 
-                                $referralDiscount = min($referralDiscount, (float) $subtotal);
+                        $usedByUser = ReferralTransaction::query()
+                            ->where('user_id', (int) $user->id)
+                            ->whereIn('status', ['pending', 'valid'])
+                            ->count();
 
-                                if ($referralDiscount > 0) {
-                                    $discountTotal += $referralDiscount;
-                                    $referrerId = (int) $relation->referred_by;
-                                }
+                        if ((int)$settings->max_uses_per_user <= 0 || $usedByUser < (int)$settings->max_uses_per_user) {
+
+                            if ($settings->discount_type === 'fixed') {
+                                $referralDiscount = (float) ((int)$settings->discount_value);
+                            } else {
+                                $referralDiscount = (float) floor((float)$subtotal * ((int)$settings->discount_value) / 100);
+                            }
+
+                            if ((int)$settings->discount_max_amount > 0) {
+                                $referralDiscount = min($referralDiscount, (float)((int)$settings->discount_max_amount));
+                            }
+
+                            $referralDiscount = min($referralDiscount, (float)$subtotal);
+
+                            if ($referralDiscount > 0) {
+                                $discountTotal += $referralDiscount;
+                                $referrerId = (int) $relation->referred_by;
                             }
                         }
                     }
@@ -522,8 +553,11 @@ class UserOrderController extends Controller
                 'order_id' => (int) $order->id,
                 'product_id' => (int) $product->id,
                 'qty' => (int) $qty,
+                'unit_base_price' => (float) $unitBasePrice,
+                'unit_profit' => (float) $unitProfit,
                 'unit_price' => (float) $unitPrice,
                 'line_subtotal' => (float) $subtotal,
+                'line_profit' => (float) $lineProfit,
                 'product_name' => (string) ($product->name ?? null),
                 'product_slug' => (string) ($product->slug ?? null),
             ]);
@@ -989,7 +1023,7 @@ class UserOrderController extends Controller
                 ])
                 ->with([
                     'items' => function ($query) {
-                        $query->select(['id', 'order_id', 'product_id', 'qty', 'unit_price', 'line_subtotal', 'product_name', 'product_slug'])
+                        $query->select(['id', 'order_id', 'product_id', 'qty', 'unit_price', 'line_subtotal', 'unit_profit', 'line_profit', 'product_name', 'product_slug'])
                             ->with(['product:id,name,slug']);
                     },
                     'payment' => function ($query) {
@@ -1039,97 +1073,11 @@ class UserOrderController extends Controller
     {
         $user = $request->user();
 
-        $status = trim((string) $request->query('status', ''));
-        $dateFrom = $request->query('date_from');
-        $dateTo = $request->query('date_to');
-        $invoice = trim((string) ($request->query('invoice') ?: $request->query('invoice_number') ?: ''));
-        $product = trim((string) $request->query('product', ''));
-        $category = trim((string) $request->query('category', ''));
-
-        $query = Order::query()
+        $data = Order::query()
             ->where('user_id', (int) $user->id)
-            ->with([
-                'items.product.category',
-                'items.product.subcategory',
-                'product.category',
-                'payment',
-                'vouchers',
-            ]);
-
-        if ($status !== '') {
-            $query->where('status', $status);
-        }
-
-        if ($invoice !== '') {
-            $query->where('invoice_number', 'ilike', "%{$invoice}%");
-        }
-
-        if ($dateFrom) {
-            $query->whereDate('created_at', '>=', $dateFrom);
-        }
-
-        if ($dateTo) {
-            $query->whereDate('created_at', '<=', $dateTo);
-        }
-
-        if ($product !== '') {
-            $query->where(function ($q) use ($product) {
-                $q->whereHas('items', function ($item) use ($product) {
-                    $item->where('product_name', 'ilike', "%{$product}%")
-                        ->orWhereHas('product', function ($prod) use ($product) {
-                            $prod->where('name', 'ilike', "%{$product}%")
-                                ->orWhere('slug', 'ilike', "%{$product}%");
-                        });
-                })->orWhereHas('product', function ($prod) use ($product) {
-                    $prod->where('name', 'ilike', "%{$product}%")
-                        ->orWhere('slug', 'ilike', "%{$product}%");
-                });
-            });
-        }
-
-        if ($category !== '') {
-            $query->where(function ($q) use ($category) {
-                $q->whereHas('items.product.category', function ($cat) use ($category) {
-                    $cat->where('name', 'ilike', "%{$category}%")
-                        ->orWhere('slug', 'ilike', "%{$category}%");
-                })->orWhereHas('product.category', function ($cat) use ($category) {
-                    $cat->where('name', 'ilike', "%{$category}%")
-                        ->orWhere('slug', 'ilike', "%{$category}%");
-                });
-            });
-        }
-
-        $data = $query
+            ->with(['items.product', 'product', 'payment', 'vouchers'])
             ->latest('id')
             ->paginate((int) $request->query('per_page', 10));
-
-        $data->getCollection()->transform(function (Order $order) {
-            $itemLines = collect($order->items ?? [])->map(function ($item) {
-                $product = $item->product;
-                return [
-                    'product_id' => $product?->id ? (int) $product->id : ($item->product_id ? (int) $item->product_id : null),
-                    'product' => $item->product_name ?: $product?->name,
-                    'category' => $product?->category?->name,
-                    'subcategory' => $product?->subcategory?->name,
-                    'qty' => (int) ($item->qty ?? 0),
-                    'unit_price' => (float) ($item->unit_price ?? 0),
-                    'line_subtotal' => (float) ($item->line_subtotal ?? 0),
-                ];
-            })->values();
-
-            $order->setAttribute('history_summary', [
-                'invoice' => $order->invoice_number,
-                'payment_reference' => $order->payment?->external_id,
-                'products' => $itemLines->pluck('product')->filter()->values(),
-                'categories' => $itemLines->pluck('category')->filter()->unique()->values(),
-                'items' => $itemLines,
-                'total_item_qty' => (int) $itemLines->sum('qty'),
-                'harga' => (float) ($order->amount ?? 0),
-                'waktu' => $order->created_at?->format('Y-m-d H:i:s'),
-            ]);
-
-            return $order;
-        });
 
         return $this->ok($data);
     }
@@ -1141,41 +1089,10 @@ class UserOrderController extends Controller
         $order = Order::query()
             ->where('id', (int) $id)
             ->where('user_id', (int) $user->id)
-            ->with([
-                'items.product.category',
-                'items.product.subcategory',
-                'product.category',
-                'payment',
-                'vouchers',
-                'deliveries.license',
-            ])
+            ->with(['items.product', 'product', 'payment', 'vouchers', 'deliveries.license'])
             ->first();
 
         if (!$order) return $this->fail('Order tidak ditemukan', 404);
-
-        $itemLines = collect($order->items ?? [])->map(function ($item) {
-            $product = $item->product;
-            return [
-                'product_id' => $product?->id ? (int) $product->id : ($item->product_id ? (int) $item->product_id : null),
-                'product' => $item->product_name ?: $product?->name,
-                'category' => $product?->category?->name,
-                'subcategory' => $product?->subcategory?->name,
-                'qty' => (int) ($item->qty ?? 0),
-                'unit_price' => (float) ($item->unit_price ?? 0),
-                'line_subtotal' => (float) ($item->line_subtotal ?? 0),
-            ];
-        })->values();
-
-        $order->setAttribute('history_summary', [
-            'invoice' => $order->invoice_number,
-            'payment_reference' => $order->payment?->external_id,
-            'products' => $itemLines->pluck('product')->filter()->values(),
-            'categories' => $itemLines->pluck('category')->filter()->unique()->values(),
-            'items' => $itemLines,
-            'total_item_qty' => (int) $itemLines->sum('qty'),
-            'harga' => (float) ($order->amount ?? 0),
-            'waktu' => $order->created_at?->format('Y-m-d H:i:s'),
-        ]);
 
         return $this->ok($order);
     }

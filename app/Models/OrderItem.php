@@ -13,6 +13,8 @@ class OrderItem extends Model
         'qty',
         'unit_price',
         'line_subtotal',
+        'unit_profit',
+        'line_profit',
         'product_name',
         'product_slug',
     ];
@@ -20,6 +22,8 @@ class OrderItem extends Model
     protected $casts = [
         'unit_price' => 'decimal:2',
         'line_subtotal' => 'decimal:2',
+        'unit_profit' => 'decimal:2',
+        'line_profit' => 'decimal:2',
     ];
 
     public function order(): BelongsTo

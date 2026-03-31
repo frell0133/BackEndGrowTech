@@ -23,7 +23,6 @@ use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
 use App\Models\Referral;
 use App\Services\ProductAvailabilityService;
-use App\Support\UserTierEligibility;
 
 class UserCartController extends Controller
 {
@@ -91,7 +90,7 @@ class UserCartController extends Controller
     /**
      * Ambil harga unit berdasarkan tier user (member/reseller/vip).
      */
-    private function resolveUnitPrice(Product $product, string $tierKey): int
+    private function resolveTierBasePrice(Product $product, string $tierKey): int
     {
         $tier = (array) ($product->tier_pricing ?? []);
         $unitPrice = 0;
@@ -110,25 +109,49 @@ class UserCartController extends Controller
             $unitPrice = (int) ($product->price ?? 0);
         }
 
-        return (int) $unitPrice;
+        return max(0, (int) $unitPrice);
+    }
+
+    private function resolveTierProfit(Product $product, string $tierKey): int
+    {
+        $tierProfit = (array) ($product->tier_profit ?? []);
+        $profit = (int) ($tierProfit[$tierKey] ?? 0);
+
+        if ($profit <= 0) {
+            $profit = (int) ($tierProfit['member'] ?? 0);
+        }
+
+        return max(0, $profit);
+    }
+
+    private function resolveUnitPrice(Product $product, string $tierKey): int
+    {
+        return $this->resolveTierBasePrice($product, $tierKey) + $this->resolveTierProfit($product, $tierKey);
+    }
+
+    private function resolveUnitProfit(Product $product, string $tierKey): float
+    {
+        $tierProfit = (array) ($product->tier_profit ?? []);
+        $unitProfit = 0.0;
+
+        if (!empty($tierProfit)) {
+            $unitProfit = (float) ($tierProfit[$tierKey] ?? 0);
+            if ($unitProfit <= 0) $unitProfit = (float) ($tierProfit['member'] ?? 0);
+
+            if ($unitProfit <= 0) {
+                $vals = array_values($tierProfit);
+                $unitProfit = (float) ($vals[0] ?? 0);
+            }
+        }
+
+        return max(0.0, round($unitProfit, 2));
     }
 
     private function computeReferralDiscountForUser(int $userId, float $subtotal): array
     {
-        $user = \App\Models\User::query()->select('id', 'tier')->find($userId);
-
-        if (!$user || !UserTierEligibility::isReferralTierAllowed($user->tier ?? 'member')) {
-            return [
-                'discount' => 0.0,
-                'referrer_id' => null,
-                'eligible' => false,
-                'reason' => UserTierEligibility::referralTierMessage($user?->tier ?? 'member'),
-            ];
-        }
-
         $settings = ReferralSetting::current();
         if (!$settings || !$settings->isActiveNow()) {
-            return ['discount' => 0.0, 'referrer_id' => null, 'eligible' => false, 'reason' => 'Referral campaign tidak aktif / sudah expired'];
+            return ['discount' => 0.0, 'referrer_id' => null];
         }
 
         $relation = Referral::query()
@@ -136,11 +159,11 @@ class UserCartController extends Controller
             ->first();
 
         if (!$relation || !$relation->locked_at) {
-            return ['discount' => 0.0, 'referrer_id' => null, 'eligible' => false, 'reason' => 'User belum attach referral code'];
+            return ['discount' => 0.0, 'referrer_id' => null];
         }
 
-        if ((int) $settings->min_order_amount > 0 && (float) $subtotal < (float) $settings->min_order_amount) {
-            return ['discount' => 0.0, 'referrer_id' => null, 'eligible' => false, 'reason' => 'Minimal order belum terpenuhi'];
+        if ((int)$settings->min_order_amount > 0 && (float)$subtotal < (float)$settings->min_order_amount) {
+            return ['discount' => 0.0, 'referrer_id' => null];
         }
 
         $usedByUser = ReferralTransaction::query()
@@ -148,32 +171,30 @@ class UserCartController extends Controller
             ->whereIn('status', ['pending', 'valid'])
             ->count();
 
-        if ((int) $settings->max_uses_per_user > 0 && $usedByUser >= (int) $settings->max_uses_per_user) {
-            return ['discount' => 0.0, 'referrer_id' => null, 'eligible' => false, 'reason' => 'Limit penggunaan referral untuk user sudah habis'];
+        if ((int)$settings->max_uses_per_user > 0 && $usedByUser >= (int)$settings->max_uses_per_user) {
+            return ['discount' => 0.0, 'referrer_id' => null];
         }
 
         $referralDiscount = 0.0;
         if (($settings->discount_type ?? 'percent') === 'fixed') {
-            $referralDiscount = (float) ((int) $settings->discount_value);
+            $referralDiscount = (float) ((int)$settings->discount_value);
         } else {
-            $referralDiscount = (float) floor((float) $subtotal * ((int) $settings->discount_value) / 100);
+            $referralDiscount = (float) floor((float)$subtotal * ((int)$settings->discount_value) / 100);
         }
 
-        if ((int) $settings->discount_max_amount > 0) {
-            $referralDiscount = min($referralDiscount, (float) ((int) $settings->discount_max_amount));
+        if ((int)$settings->discount_max_amount > 0) {
+            $referralDiscount = min($referralDiscount, (float)((int)$settings->discount_max_amount));
         }
 
-        $referralDiscount = min($referralDiscount, (float) $subtotal);
+        $referralDiscount = min($referralDiscount, (float)$subtotal);
 
         if ($referralDiscount <= 0) {
-            return ['discount' => 0.0, 'referrer_id' => null, 'eligible' => false, 'reason' => 'Referral tidak menghasilkan diskon'];
+            return ['discount' => 0.0, 'referrer_id' => null];
         }
 
         return [
             'discount' => (float) $referralDiscount,
             'referrer_id' => (int) $relation->referred_by,
-            'eligible' => true,
-            'reason' => null,
         ];
     }
 
@@ -192,7 +213,7 @@ class UserCartController extends Controller
         $cartItems = CartItem::query()
             ->where('cart_id', $cart->id)
             ->with([
-                'product:id,category_id,subcategory_id,name,slug,type,description,tier_pricing,duration_days,price,is_active,is_published,rating,rating_count,purchases_count,popularity_score',
+                'product:id,category_id,subcategory_id,name,slug,type,description,tier_pricing,tier_profit,duration_days,price,is_active,is_published,rating,rating_count,purchases_count,popularity_score',
                 'product.category:id,name,slug',
                 'product.subcategory:id,category_id,name,description,slug,provider,image_url,image_path',
             ])
@@ -207,14 +228,19 @@ class UserCartController extends Controller
             $stock = (int) ($stockMap[(int) $item->product_id] ?? 0);
             $qty = (int) ($item->qty ?? 1);
 
-            $unitPrice = $product ? $this->resolveUnitPrice($product, $tierKey) : 0;
+            $unitBasePrice = $product ? $this->resolveTierBasePrice($product, $tierKey) : 0;
+            $unitProfit = $product ? $this->resolveUnitProfit($product, $tierKey) : 0.0;
+            $unitPrice = $unitBasePrice + $unitProfit;
             $canBuy = (bool) ($product?->is_active && $product?->is_published && $stock > 0);
 
             return [
                 'id' => $item->id,
                 'qty' => $qty,
+                'unit_base_price' => (int) $unitBasePrice,
+                'unit_profit' => (float) $unitProfit,
                 'unit_price' => (int) $unitPrice,
                 'line_subtotal' => (int) $unitPrice * $qty,
+                'line_profit' => (float) ($unitProfit * $qty),
                 'product' => $product,
                 'stock_available' => $stock,
                 'can_buy' => $canBuy,
@@ -416,8 +442,10 @@ class UserCartController extends Controller
                 $p = $ci->product;
                 $qty = (int) ($ci->qty ?? 1);
                 $unitPrice = $this->resolveUnitPrice($p, $tierKey);
+                $unitProfit = $this->resolveUnitProfit($p, $tierKey);
 
                 $line = (float) ($unitPrice * $qty);
+                $lineProfit = (float) ($unitProfit * $qty);
                 $subtotal += $line;
 
                 $computedItems[] = [
@@ -427,6 +455,8 @@ class UserCartController extends Controller
                     'qty' => $qty,
                     'unit_price' => (float) $unitPrice,
                     'line_subtotal' => (float) $line,
+                    'unit_profit' => (float) $unitProfit,
+                    'line_profit' => (float) $lineProfit,
                     'product_name' => (string) ($p->name ?? null),
                     'product_slug' => (string) ($p->slug ?? null),
                 ];
@@ -463,12 +493,6 @@ class UserCartController extends Controller
                 if (!$voucher->is_active) return $this->fail('Voucher tidak aktif', 422);
                 if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
                     return $this->fail('Voucher sudah kedaluwarsa', 422);
-                }
-                if (!UserTierEligibility::voucherAllowed($voucher, $user->tier ?? 'member')) {
-                    return $this->fail(UserTierEligibility::voucherMessage($voucher, $user->tier ?? 'member'), 422, [
-                        'tier' => UserTierEligibility::normalizeTier($user->tier ?? 'member'),
-                        'rules' => UserTierEligibility::tierSummaryFromRules($voucher->rules ?? []),
-                    ]);
                 }
                 if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
                     return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
@@ -561,6 +585,8 @@ class UserCartController extends Controller
                     'qty' => (int) $it['qty'],
                     'unit_price' => (float) $it['unit_price'],
                     'line_subtotal' => (float) $it['line_subtotal'],
+                    'unit_profit' => (float) ($it['unit_profit'] ?? 0),
+                    'line_profit' => (float) ($it['line_profit'] ?? 0),
                     'product_name' => $it['product_name'],
                     'product_slug' => $it['product_slug'],
                 ]);
@@ -690,8 +716,10 @@ class UserCartController extends Controller
             $p = $ci->product;
             $qty = (int) ($ci->qty ?? 1);
             $unitPrice = $this->resolveUnitPrice($p, $tierKey);
+            $unitProfit = $this->resolveUnitProfit($p, $tierKey);
 
             $line = (float) ($unitPrice * $qty);
+            $lineProfit = (float) ($unitProfit * $qty);
             $subtotal += $line;
 
             $items[] = [
@@ -699,6 +727,8 @@ class UserCartController extends Controller
                 'qty' => $qty,
                 'unit_price' => (float) $unitPrice,
                 'line_subtotal' => (float) $line,
+                'unit_profit' => (float) $unitProfit,
+                'line_profit' => (float) $lineProfit,
                 'product' => $p,
                 'tier' => $tierKey,
             ];
@@ -710,6 +740,8 @@ class UserCartController extends Controller
                 'qty' => $qty,
                 'unit_price' => (float) $unitPrice,
                 'line_subtotal' => (float) $line,
+                'unit_profit' => (float) $unitProfit,
+                'line_profit' => (float) $lineProfit,
             ];
         }
 
@@ -737,12 +769,6 @@ class UserCartController extends Controller
             if (!$voucher->is_active) return $this->fail('Voucher tidak aktif', 422);
             if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
                 return $this->fail('Voucher sudah kedaluwarsa', 422);
-            }
-            if (!UserTierEligibility::voucherAllowed($voucher, $user->tier ?? 'member')) {
-                return $this->fail(UserTierEligibility::voucherMessage($voucher, $user->tier ?? 'member'), 422, [
-                    'tier' => UserTierEligibility::normalizeTier($user->tier ?? 'member'),
-                    'rules' => UserTierEligibility::tierSummaryFromRules($voucher->rules ?? []),
-                ]);
             }
             if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
                 return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
@@ -803,10 +829,6 @@ class UserCartController extends Controller
                 'referral_discount_total' => (float) $referralDiscount,
                 'discount_total' => (float) $discountTotal,
                 'applied_campaigns' => $campaignResult['applied'] ?? [],
-                'referral_eligibility' => [
-                    'eligible' => (bool) ($ref['eligible'] ?? false),
-                    'reason' => $ref['reason'] ?? null,
-                ],
             ],
             'summary' => [
                 'subtotal' => $subtotal,

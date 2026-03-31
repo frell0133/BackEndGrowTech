@@ -16,6 +16,7 @@ class Product extends Model
         'type',
         'description',
         'tier_pricing',
+        'tier_profit',
         'duration_days',
         'is_active',
         'is_published',
@@ -30,6 +31,7 @@ class Product extends Model
 
     protected $casts = [
         'tier_pricing' => 'array',
+        'tier_profit' => 'array',
         'is_active' => 'boolean',
         'is_published' => 'boolean',
         'duration_days' => 'integer',
