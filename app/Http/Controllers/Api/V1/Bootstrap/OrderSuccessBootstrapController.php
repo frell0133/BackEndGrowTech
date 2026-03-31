@@ -14,6 +14,8 @@ class OrderSuccessBootstrapController extends Controller
 {
     use ApiResponse;
 
+    private const BOOTSTRAP_TTL = 10;
+
     public function __invoke(
         Request $request,
         string $id,
@@ -25,7 +27,7 @@ class OrderSuccessBootstrapController extends Controller
 
         $cacheKey = sprintf('bootstrap:order-success:%d:user:%d', $orderId, (int) $user->id);
 
-        $payload = RuntimeCache::remember($cacheKey, 5, function () use ($request, $id, $deliveryController, $orderController) {
+        $payload = RuntimeCache::remember($cacheKey, self::BOOTSTRAP_TTL, function () use ($request, $id, $deliveryController, $orderController) {
             $deliveryResponse = $deliveryController->info($request, $id);
             if (!$this->isSuccess($deliveryResponse)) {
                 return ['response' => $deliveryResponse];

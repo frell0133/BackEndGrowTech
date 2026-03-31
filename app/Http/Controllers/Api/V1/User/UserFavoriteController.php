@@ -9,6 +9,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Support\ApiResponse;
 use App\Support\PublicCache;
+use App\Support\RuntimeCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -17,27 +18,42 @@ class UserFavoriteController extends Controller
     use ApiResponse;
 
     private const INDEX_MAX_PER_PAGE = 50;
+    private const INDEX_TTL = 10;
+    private const INDEX_VERSION_PREFIX = 'favorites:index:version:user:';
 
     public function index(Request $request)
     {
         $user = $request->user();
         $perPage = max(1, min((int) $request->query('per_page', 20), self::INDEX_MAX_PER_PAGE));
+        $page = max(1, (int) $request->query('page', 1));
+        $version = $this->currentIndexVersion((int) $user->id);
 
-        $data = Favorite::query()
-            ->select([
-                'id',
-                'user_id',
-                'product_id',
-                'rating',
-                'created_at',
-            ])
-            ->where('user_id', $user->id)
-            ->with([
-                'product:id,category_id,subcategory_id,name,slug,rating,rating_count',
-                'product.subcategory:id,category_id,name,slug,image_url',
-            ])
-            ->orderByDesc('created_at')
-            ->paginate($perPage);
+        $cacheKey = sprintf(
+            'favorites:index:user:%d:v:%d:page:%d:per_page:%d',
+            (int) $user->id,
+            $version,
+            $page,
+            $perPage
+        );
+
+        $data = RuntimeCache::remember($cacheKey, self::INDEX_TTL, function () use ($user, $perPage) {
+            return Favorite::query()
+                ->select([
+                    'id',
+                    'user_id',
+                    'product_id',
+                    'rating',
+                    'created_at',
+                ])
+                ->where('user_id', $user->id)
+                ->with([
+                    'product:id,category_id,subcategory_id,name,slug,rating,rating_count,available_stock',
+                    'product.subcategory:id,category_id,name,slug,image_url',
+                ])
+                ->orderByDesc('created_at')
+                ->paginate($perPage)
+                ->toArray();
+        });
 
         return $this->ok($data);
     }
@@ -72,6 +88,7 @@ class UserFavoriteController extends Controller
             $this->refreshProductRatingAggregate($product->id, (int) ($product->purchases_count ?? 0));
         });
 
+        $this->bumpIndexVersion((int) $user->id);
         PublicCache::bumpCatalogProducts();
 
         return $this->ok(['message' => 'Favorite saved']);
@@ -100,6 +117,7 @@ class UserFavoriteController extends Controller
             }
         });
 
+        $this->bumpIndexVersion((int) $user->id);
         PublicCache::bumpCatalogProducts();
 
         return $this->ok(['message' => 'Removed from favorites']);
@@ -138,5 +156,29 @@ class UserFavoriteController extends Controller
                     });
             })
             ->exists();
+    }
+
+    private function currentIndexVersion(int $userId): int
+    {
+        $key = self::INDEX_VERSION_PREFIX . $userId;
+        $value = RuntimeCache::get($key);
+
+        if (!$value) {
+            RuntimeCache::forever($key, 1);
+            return 1;
+        }
+
+        return (int) $value;
+    }
+
+    private function bumpIndexVersion(int $userId): void
+    {
+        $key = self::INDEX_VERSION_PREFIX . $userId;
+
+        if (!RuntimeCache::has($key)) {
+            RuntimeCache::forever($key, 1);
+        }
+
+        RuntimeCache::increment($key);
     }
 }

@@ -13,6 +13,7 @@
         "laravel/sanctum": "^4.2",
         "laravel/socialite": "^5.24",
         "laravel/tinker": "^2.10.1",
+        "predis/predis": "^2.2",
         "socialiteproviders/discord": "^4.2",
         "symfony/clock": "^7.0",
         "symfony/css-selector": "^7.0",
