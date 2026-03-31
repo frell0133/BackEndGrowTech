@@ -2,10 +2,8 @@
 
 namespace App\Services;
 
-use App\Jobs\SendOtpEmailJob;
 use App\Models\AuthChallenge;
 use App\Models\User;
-use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -57,14 +55,20 @@ class TwoFactorService
             'meta' => $meta,
         ]);
 
-        if (!$this->queueOtpEmail($challenge, $email, $purpose, $otp)) {
+        $delivery = $this->sendOtpEmail($email, $purpose, $otp);
+
+        if (!$delivery['ok']) {
             $challenge->delete();
 
             return [
                 'ok' => false,
                 'status' => 500,
-                'message' => 'Gagal mengantrikan OTP ke email.',
-                'details' => ['message' => 'Failed to dispatch OTP email job'],
+                'message' => 'Gagal mengirim OTP ke email.',
+                'details' => [
+                    'message' => 'Failed to send OTP email synchronously',
+                    'delivery_status' => $delivery['status'] ?? 0,
+                    'delivery_body' => $delivery['body'] ?? null,
+                ],
             ];
         }
 
@@ -129,6 +133,13 @@ class TwoFactorService
         }
 
         $otp = $this->generateOtp();
+        $previousState = [
+            'otp_hash' => (string) $challenge->otp_hash,
+            'expires_at' => $challenge->expires_at,
+            'resend_available_at' => $challenge->resend_available_at,
+            'attempt_count' => (int) $challenge->attempt_count,
+            'resend_count' => (int) $challenge->resend_count,
+        ];
 
         $challenge->update([
             'otp_hash' => Hash::make($otp),
@@ -138,12 +149,20 @@ class TwoFactorService
             'resend_count' => (int) $challenge->resend_count + 1,
         ]);
 
-        if (!$this->queueOtpEmail($challenge->fresh(), (string) $challenge->email, (string) $challenge->purpose, $otp)) {
+        $delivery = $this->sendOtpEmail((string) $challenge->email, (string) $challenge->purpose, $otp);
+
+        if (!$delivery['ok']) {
+            $challenge->forceFill($previousState)->save();
+
             return [
                 'ok' => false,
                 'status' => 500,
-                'message' => 'Gagal mengantrikan ulang OTP.',
-                'details' => ['message' => 'Failed to dispatch OTP email job'],
+                'message' => 'Gagal mengirim ulang OTP.',
+                'details' => [
+                    'message' => 'Failed to resend OTP email synchronously',
+                    'delivery_status' => $delivery['status'] ?? 0,
+                    'delivery_body' => $delivery['body'] ?? null,
+                ],
             ];
         }
 
@@ -237,34 +256,6 @@ class TwoFactorService
         return $this->sendOtpEmail($toEmail, $purpose, $otp);
     }
 
-    private function queueOtpEmail(AuthChallenge $challenge, string $email, string $purpose, string $otp): bool
-    {
-        try {
-            $job = SendOtpEmailJob::dispatch(
-                (int) $challenge->id,
-                $email,
-                $purpose,
-                Crypt::encryptString($otp),
-            );
-
-            if (method_exists($job, 'afterCommit')) {
-                $job->afterCommit();
-            }
-
-            return true;
-        } catch (\Throwable $e) {
-            Log::error('2FA OTP queue dispatch failed', [
-                'challenge_db_id' => $challenge->id,
-                'challenge_id' => $challenge->challenge_id,
-                'email' => $email,
-                'purpose' => $purpose,
-                'error' => $e->getMessage(),
-            ]);
-
-            return false;
-        }
-    }
-
     private function generateOtp(): string
     {
         return (string) random_int(100000, 999999);
@@ -341,6 +332,7 @@ class TwoFactorService
             Log::error('2FA OTP send failed', [
                 'to' => $toEmail,
                 'status' => $response->status(),
+                'purpose' => $purpose,
                 'body' => $response->body(),
             ]);
 
@@ -355,6 +347,7 @@ class TwoFactorService
             'to' => $toEmail,
             'status' => $response->status(),
             'purpose' => $purpose,
+            'body' => $response->json(),
         ]);
 
         return [
