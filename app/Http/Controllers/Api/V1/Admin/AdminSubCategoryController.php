@@ -18,9 +18,11 @@ class AdminSubCategoryController extends Controller
     {
         $q = trim((string) $request->query('q', ''));
         $status = strtolower(trim((string) $request->query('status', 'all')));
+        $categoryId = $request->query('category_id');
 
         $data = SubCategory::query()
             ->with('category')
+            ->when($categoryId, fn ($qq) => $qq->where('subcategories.category_id', $categoryId))
             ->when($q !== '', function ($qq) use ($q) {
                 $qq->where(function ($w) use ($q) {
                     $w->where('subcategories.name', 'ilike', "%{$q}%")
@@ -35,6 +37,7 @@ class AdminSubCategoryController extends Controller
             ->when($status === 'active', fn ($qq) => $qq->where('subcategories.is_active', true))
             ->when($status === 'inactive', fn ($qq) => $qq->where('subcategories.is_active', false))
             ->orderBy('sort_order')
+            ->orderBy('name')
             ->orderByDesc('id')
             ->get();
 

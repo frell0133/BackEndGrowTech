@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Product;
+use App\Models\SubCategory;
 use App\Support\ApiResponse;
 use App\Support\PublicCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class AdminProductController extends Controller
 {
@@ -101,6 +103,8 @@ class AdminProductController extends Controller
             'rating_count' => ['nullable', 'integer', 'min:0'],
         ]);
 
+        $this->ensureCategorySubcategoryMatch((int) $v['category_id'], (int) $v['subcategory_id']);
+
         $v['slug'] = $v['slug'] ?? Str::slug($v['name']);
         $v['is_active'] = $v['is_active'] ?? true;
         $v['is_published'] = $v['is_published'] ?? false;
@@ -145,6 +149,10 @@ class AdminProductController extends Controller
             'rating' => ['sometimes', 'numeric', 'min:0', 'max:5'],
             'rating_count' => ['sometimes', 'integer', 'min:0'],
         ]);
+
+        $effectiveCategoryId = (int) ($v['category_id'] ?? $p->category_id);
+        $effectiveSubcategoryId = (int) ($v['subcategory_id'] ?? $p->subcategory_id);
+        $this->ensureCategorySubcategoryMatch($effectiveCategoryId, $effectiveSubcategoryId);
 
         if (array_key_exists('name', $v) && !array_key_exists('slug', $v)) {
             $v['slug'] = Str::slug($v['name']);
@@ -213,5 +221,19 @@ class AdminProductController extends Controller
         }
 
         return $clean;
+    }
+
+    private function ensureCategorySubcategoryMatch(int $categoryId, int $subcategoryId): void
+    {
+        $matched = SubCategory::query()
+            ->where('id', $subcategoryId)
+            ->where('category_id', $categoryId)
+            ->exists();
+
+        if (!$matched) {
+            throw ValidationException::withMessages([
+                'subcategory_id' => ['Sub kategori tidak sesuai dengan kategori yang dipilih.'],
+            ]);
+        }
     }
 }
