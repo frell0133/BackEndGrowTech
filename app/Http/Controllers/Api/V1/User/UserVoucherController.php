@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\User;
 use App\Http\Controllers\Controller;
 use App\Models\Voucher;
 use App\Support\ApiResponse;
+use App\Support\UserTierEligibility;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
@@ -12,12 +13,13 @@ class UserVoucherController extends Controller
 {
     use ApiResponse;
 
-    /**
-     * POST /api/v1/vouchers/validate
-     * Body: { "code": "NATAL2026", "subtotal": 150000 }
-     */
     public function validateCode(Request $request)
     {
+        $user = $request->user();
+        if (!$user) {
+            return $this->fail('Unauthenticated', 401);
+        }
+
         $v = $request->validate([
             'code' => ['required', 'string', 'max:50'],
             'subtotal' => ['required', 'numeric', 'min:0'],
@@ -25,6 +27,7 @@ class UserVoucherController extends Controller
 
         $code = strtoupper(trim($v['code']));
         $subtotal = (float) $v['subtotal'];
+        $tierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
 
         $voucher = Voucher::query()->where('code', $code)->first();
         if (!$voucher) {
@@ -39,13 +42,19 @@ class UserVoucherController extends Controller
             return $this->fail('Voucher sudah kedaluwarsa', 422);
         }
 
+        if (!UserTierEligibility::voucherAllowed($voucher, $tierKey)) {
+            return $this->fail(UserTierEligibility::voucherMessage($voucher, $tierKey), 422, [
+                'tier' => $tierKey,
+                'rules' => UserTierEligibility::tierSummaryFromRules($voucher->rules ?? []),
+            ]);
+        }
+
         if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
             return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422, [
                 'min_purchase' => (float) $voucher->min_purchase,
             ]);
         }
 
-        // quota optional: hitung dari pivot order_vouchers
         if ($voucher->quota !== null) {
             $used = $voucher->orders()->count();
             if ($used >= (int) $voucher->quota) {
@@ -56,20 +65,21 @@ class UserVoucherController extends Controller
             }
         }
 
-        // preview diskon
         $discount = 0.0;
         if ($voucher->type === 'percent') {
             $discount = floor($subtotal * ((float) $voucher->value / 100));
-        } else { // fixed
+        } else {
             $discount = (float) $voucher->value;
         }
 
-        if ($discount > $subtotal) $discount = $subtotal;
+        if ($discount > $subtotal) {
+            $discount = $subtotal;
+        }
 
         return $this->ok([
             'valid' => true,
             'code' => $voucher->code,
-            'type' => $voucher->type, // fixed|percent
+            'type' => $voucher->type,
             'value' => (float) $voucher->value,
             'discount_amount' => (float) $discount,
             'subtotal' => (float) $subtotal,
@@ -77,6 +87,7 @@ class UserVoucherController extends Controller
             'min_purchase' => $voucher->min_purchase ? (float) $voucher->min_purchase : null,
             'expires_at' => $voucher->expires_at,
             'quota' => $voucher->quota ? (int) $voucher->quota : null,
+            'tier_rules' => UserTierEligibility::tierSummaryFromRules($voucher->rules ?? []),
         ]);
     }
 }

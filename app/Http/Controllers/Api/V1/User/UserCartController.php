@@ -23,6 +23,7 @@ use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
 use App\Models\Referral;
 use App\Services\ProductAvailabilityService;
+use App\Support\UserTierEligibility;
 
 class UserCartController extends Controller
 {
@@ -114,9 +115,20 @@ class UserCartController extends Controller
 
     private function computeReferralDiscountForUser(int $userId, float $subtotal): array
     {
+        $user = \App\Models\User::query()->select('id', 'tier')->find($userId);
+
+        if (!$user || !UserTierEligibility::isReferralTierAllowed($user->tier ?? 'member')) {
+            return [
+                'discount' => 0.0,
+                'referrer_id' => null,
+                'eligible' => false,
+                'reason' => UserTierEligibility::referralTierMessage($user?->tier ?? 'member'),
+            ];
+        }
+
         $settings = ReferralSetting::current();
         if (!$settings || !$settings->isActiveNow()) {
-            return ['discount' => 0.0, 'referrer_id' => null];
+            return ['discount' => 0.0, 'referrer_id' => null, 'eligible' => false, 'reason' => 'Referral campaign tidak aktif / sudah expired'];
         }
 
         $relation = Referral::query()
@@ -124,11 +136,11 @@ class UserCartController extends Controller
             ->first();
 
         if (!$relation || !$relation->locked_at) {
-            return ['discount' => 0.0, 'referrer_id' => null];
+            return ['discount' => 0.0, 'referrer_id' => null, 'eligible' => false, 'reason' => 'User belum attach referral code'];
         }
 
-        if ((int)$settings->min_order_amount > 0 && (float)$subtotal < (float)$settings->min_order_amount) {
-            return ['discount' => 0.0, 'referrer_id' => null];
+        if ((int) $settings->min_order_amount > 0 && (float) $subtotal < (float) $settings->min_order_amount) {
+            return ['discount' => 0.0, 'referrer_id' => null, 'eligible' => false, 'reason' => 'Minimal order belum terpenuhi'];
         }
 
         $usedByUser = ReferralTransaction::query()
@@ -136,30 +148,32 @@ class UserCartController extends Controller
             ->whereIn('status', ['pending', 'valid'])
             ->count();
 
-        if ((int)$settings->max_uses_per_user > 0 && $usedByUser >= (int)$settings->max_uses_per_user) {
-            return ['discount' => 0.0, 'referrer_id' => null];
+        if ((int) $settings->max_uses_per_user > 0 && $usedByUser >= (int) $settings->max_uses_per_user) {
+            return ['discount' => 0.0, 'referrer_id' => null, 'eligible' => false, 'reason' => 'Limit penggunaan referral untuk user sudah habis'];
         }
 
         $referralDiscount = 0.0;
         if (($settings->discount_type ?? 'percent') === 'fixed') {
-            $referralDiscount = (float) ((int)$settings->discount_value);
+            $referralDiscount = (float) ((int) $settings->discount_value);
         } else {
-            $referralDiscount = (float) floor((float)$subtotal * ((int)$settings->discount_value) / 100);
+            $referralDiscount = (float) floor((float) $subtotal * ((int) $settings->discount_value) / 100);
         }
 
-        if ((int)$settings->discount_max_amount > 0) {
-            $referralDiscount = min($referralDiscount, (float)((int)$settings->discount_max_amount));
+        if ((int) $settings->discount_max_amount > 0) {
+            $referralDiscount = min($referralDiscount, (float) ((int) $settings->discount_max_amount));
         }
 
-        $referralDiscount = min($referralDiscount, (float)$subtotal);
+        $referralDiscount = min($referralDiscount, (float) $subtotal);
 
         if ($referralDiscount <= 0) {
-            return ['discount' => 0.0, 'referrer_id' => null];
+            return ['discount' => 0.0, 'referrer_id' => null, 'eligible' => false, 'reason' => 'Referral tidak menghasilkan diskon'];
         }
 
         return [
             'discount' => (float) $referralDiscount,
             'referrer_id' => (int) $relation->referred_by,
+            'eligible' => true,
+            'reason' => null,
         ];
     }
 
@@ -450,6 +464,12 @@ class UserCartController extends Controller
                 if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
                     return $this->fail('Voucher sudah kedaluwarsa', 422);
                 }
+                if (!UserTierEligibility::voucherAllowed($voucher, $user->tier ?? 'member')) {
+                    return $this->fail(UserTierEligibility::voucherMessage($voucher, $user->tier ?? 'member'), 422, [
+                        'tier' => UserTierEligibility::normalizeTier($user->tier ?? 'member'),
+                        'rules' => UserTierEligibility::tierSummaryFromRules($voucher->rules ?? []),
+                    ]);
+                }
                 if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
                     return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
                 }
@@ -718,6 +738,12 @@ class UserCartController extends Controller
             if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
                 return $this->fail('Voucher sudah kedaluwarsa', 422);
             }
+            if (!UserTierEligibility::voucherAllowed($voucher, $user->tier ?? 'member')) {
+                return $this->fail(UserTierEligibility::voucherMessage($voucher, $user->tier ?? 'member'), 422, [
+                    'tier' => UserTierEligibility::normalizeTier($user->tier ?? 'member'),
+                    'rules' => UserTierEligibility::tierSummaryFromRules($voucher->rules ?? []),
+                ]);
+            }
             if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
                 return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
             }
@@ -777,6 +803,10 @@ class UserCartController extends Controller
                 'referral_discount_total' => (float) $referralDiscount,
                 'discount_total' => (float) $discountTotal,
                 'applied_campaigns' => $campaignResult['applied'] ?? [],
+                'referral_eligibility' => [
+                    'eligible' => (bool) ($ref['eligible'] ?? false),
+                    'reason' => $ref['reason'] ?? null,
+                ],
             ],
             'summary' => [
                 'subtotal' => $subtotal,

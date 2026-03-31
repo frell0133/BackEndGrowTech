@@ -3,20 +3,17 @@
 namespace App\Http\Controllers\Api\V1\User;
 
 use App\Http\Controllers\Controller;
-use App\Models\Referral;
-use App\Models\User;
-use App\Support\ApiResponse;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-
-use App\Models\ReferralSetting;
-use App\Models\ReferralTransaction;
-
 use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\Product;
-
-use Illuminate\Support\Facades\Schema;
+use App\Models\Referral;
+use App\Models\ReferralSetting;
+use App\Models\ReferralTransaction;
+use App\Models\User;
+use App\Support\ApiResponse;
+use App\Support\UserTierEligibility;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class UserReferralController extends Controller
 {
@@ -35,6 +32,10 @@ class UserReferralController extends Controller
         return $this->ok([
             'my_referral_code' => $user->referral_code,
             'relation' => $ref,
+            'tier_eligible' => UserTierEligibility::isReferralTierAllowed($user->tier ?? 'member'),
+            'tier_message' => UserTierEligibility::isReferralTierAllowed($user->tier ?? 'member')
+                ? null
+                : UserTierEligibility::referralTierMessage($user->tier ?? 'member'),
         ]);
     }
 
@@ -42,6 +43,12 @@ class UserReferralController extends Controller
     {
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
+
+        if (!UserTierEligibility::isReferralTierAllowed($user->tier ?? 'member')) {
+            return $this->fail(UserTierEligibility::referralTierMessage($user->tier ?? 'member'), 422, [
+                'tier' => UserTierEligibility::normalizeTier($user->tier ?? 'member'),
+            ]);
+        }
 
         $data = $request->validate([
             'code' => ['required', 'string', 'max:50'],
@@ -70,7 +77,7 @@ class UserReferralController extends Controller
                 ['user_id' => $user->id],
                 [
                     'referred_by' => $referrer->id,
-                    'locked_at'   => now(),
+                    'locked_at' => now(),
                 ]
             );
 
@@ -81,10 +88,6 @@ class UserReferralController extends Controller
             ]);
         });
     }
-
-    // =========================================================
-    // ✅ Opsi A helpers: hitung subtotal dari cart server-side
-    // =========================================================
 
     private function cartForUser(int $userId): Cart
     {
@@ -128,8 +131,6 @@ class UserReferralController extends Controller
         foreach ($items as $item) {
             $p = $item->product;
             if (!$p) continue;
-
-            // ikut rule product publish/active
             if (!$p->is_active || !$p->is_published) continue;
 
             $qty = (int) ($item->qty ?? 1);
@@ -141,25 +142,30 @@ class UserReferralController extends Controller
         return (int) max(0, $subtotal);
     }
 
-    /**
-     * =========================================================
-     * PREVIEW DISCOUNT (yang kamu punya) - aku rapihin safe check settings
-     * =========================================================
-     * GET /api/v1/referral/preview-discount
-     * Body optional: { amount: int } kalau kosong -> ambil subtotal cart
-     */
     public function previewDiscount(Request $request)
     {
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
 
-        // ✅ amount OPTIONAL: kalau kosong -> ambil subtotal cart
+        $tierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
+        if (!UserTierEligibility::isReferralTierAllowed($tierKey)) {
+            $amount = (int) ($request->input('amount') ?? $this->computeCartSubtotal($user));
+            return $this->ok([
+                'eligible' => false,
+                'reason' => UserTierEligibility::referralTierMessage($tierKey),
+                'amount' => $amount,
+                'amount_source' => $request->has('amount') ? 'request' : 'cart',
+                'discount_amount' => 0,
+                'final_amount' => $amount,
+                'settings' => ReferralSetting::current(),
+            ]);
+        }
+
         $data = $request->validate([
             'amount' => ['nullable', 'integer', 'min:0'],
         ]);
 
         $amount = array_key_exists('amount', $data) ? (int) $data['amount'] : null;
-
         $amountSource = 'request';
         if ($amount === null) {
             $amount = $this->computeCartSubtotal($user);
@@ -195,7 +201,6 @@ class UserReferralController extends Controller
             ]);
         }
 
-        // cart kosong => tidak eligible
         if ($amount <= 0) {
             return $this->ok([
                 'eligible' => false,
@@ -220,7 +225,6 @@ class UserReferralController extends Controller
             ]);
         }
 
-        // limit penggunaan per user (pending/valid)
         $usedByUser = ReferralTransaction::query()
             ->where('user_id', $user->id)
             ->whereIn('status', ['pending', 'valid'])
@@ -239,7 +243,6 @@ class UserReferralController extends Controller
         }
 
         $discount = 0;
-
         if (($settings->discount_type ?? 'percent') === 'percent') {
             $discount = (int) floor($amount * ((int) $settings->discount_value) / 100);
         } else {
@@ -264,19 +267,6 @@ class UserReferralController extends Controller
         ]);
     }
 
-    /**
-     * =========================================================
-     * ✅ USER: HISTORY referral digunakan (orang lain pakai kode saya)
-     * =========================================================
-     * GET /api/v1/referral/history
-     *
-     * Query:
-     * - status=pending|valid|invalid
-     * - q=search buyer name/email
-     * - date_from=YYYY-MM-DD
-     * - date_to=YYYY-MM-DD
-     * - per_page=20
-     */
     public function history(Request $request)
     {
         $user = $request->user();
@@ -296,21 +286,18 @@ class UserReferralController extends Controller
             ]);
 
         if ($status) $tx->where('status', $status);
-
         if ($dateFrom) $tx->whereDate('created_at', '>=', $dateFrom);
         if ($dateTo) $tx->whereDate('created_at', '<=', $dateTo);
 
         if ($q !== '') {
             $tx->whereHas('user', function ($u) use ($q) {
                 $u->where('name', 'ilike', "%{$q}%")
-                  ->orWhere('email', 'ilike', "%{$q}%")
-                  ->orWhere('referral_code', 'ilike', "%{$q}%");
+                    ->orWhere('email', 'ilike', "%{$q}%")
+                    ->orWhere('referral_code', 'ilike', "%{$q}%");
             });
         }
 
         $items = $tx->latest('id')->paginate($perPage);
-
-        // Map agar FE rapih
         $itemsArr = $items->toArray();
         $itemsArr['data'] = collect($items->items())->map(function ($row) {
             $tanggal = optional($row->occurred_at ?: $row->created_at)->toDateString();
@@ -342,12 +329,6 @@ class UserReferralController extends Controller
         ]);
     }
 
-    /**
-     * =========================================================
-     * ✅ USER: USAGE stats (berapa orang pakai kode saya)
-     * =========================================================
-     * GET /api/v1/referral/usage
-     */
     public function usage(Request $request)
     {
         $user = $request->user();

@@ -25,6 +25,7 @@ class DiscountCampaign extends Model
         'stack_policy',
         'usage_limit_total',
         'usage_limit_per_user',
+        'tier_rules',
     ];
 
     protected $casts = [
@@ -37,6 +38,7 @@ class DiscountCampaign extends Model
         'priority' => 'integer',
         'usage_limit_total' => 'integer',
         'usage_limit_per_user' => 'integer',
+        'tier_rules' => 'array',
     ];
 
     public function targets(): HasMany
@@ -58,7 +60,7 @@ class DiscountCampaign extends Model
             }
         });
     }
-    
+
     public function orders(): BelongsToMany
     {
         return $this->belongsToMany(

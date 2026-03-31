@@ -6,111 +6,169 @@ use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Schema;
 
 class AdminOrderController extends Controller
 {
     use ApiResponse;
 
-    private function hasRelation(string $relation): bool
-    {
-        return method_exists(new Order(), $relation);
-    }
-
-    private function cols(string $table, array $wanted): array
-    {
-        $out = [];
-        foreach ($wanted as $c) {
-            if (Schema::hasColumn($table, $c)) $out[] = $c;
-        }
-        return $out;
-    }
-
     public function index(Request $request)
     {
-        $perPage = (int) $request->query('per_page', 20);
+        $perPage = max(1, min((int) $request->query('per_page', 20), 100));
 
-        $q = Order::query()->orderByDesc('id');
+        $status = trim((string) $request->query('status', ''));
+        $userId = $request->query('user_id');
+        $invoice = trim((string) ($request->query('invoice_number') ?: $request->query('invoice') ?: ''));
+        $paymentReference = trim((string) $request->query('payment_reference', ''));
+        $dateFrom = $request->query('date_from');
+        $dateTo = $request->query('date_to');
+        $product = trim((string) $request->query('product', ''));
+        $category = trim((string) $request->query('category', ''));
 
-        // user
-        if ($this->hasRelation('user')) {
-            $q->with(['user:id,name,email']);
+        $query = Order::query()
+            ->with([
+                'user:id,name,full_name,email',
+                'payment:id,order_id,gateway_code,external_id,amount,status,created_at',
+                'items' => function ($q) {
+                    $q->select([
+                        'id',
+                        'order_id',
+                        'product_id',
+                        'qty',
+                        'unit_price',
+                        'line_subtotal',
+                        'product_name',
+                        'product_slug',
+                    ])->with([
+                        'product:id,category_id,subcategory_id,name,slug',
+                        'product.category:id,name,slug',
+                        'product.subcategory:id,category_id,name,slug',
+                    ]);
+                },
+                'deliveries:id,order_id,license_id,delivery_mode,emailed_at,revealed_at,created_at',
+                'deliveries.license:id,product_id,license_key,data_other,note,status,delivered_at,sold_at,updated_at',
+            ])
+            ->orderByDesc('id');
+
+        if ($status !== '') {
+            $query->where('status', $status);
         }
 
-        // items
-        if ($this->hasRelation('items')) {
-            $itemCols = array_merge(
-                ['id', 'order_id', 'product_id', 'qty'],
-                $this->cols('order_items', ['unit_price', 'line_subtotal', 'product_name', 'product_slug', 'price', 'subtotal'])
-            );
-
-            $q->with(['items' => function ($qq) use ($itemCols) {
-                $qq->select(array_values(array_unique($itemCols)));
-            }]);
+        if ($userId) {
+            $query->where('user_id', (int) $userId);
         }
 
-        // payment
-        if ($this->hasRelation('payment')) {
-            $payCols = array_merge(
-                ['id', 'order_id'],
-                $this->cols('payments', ['gateway_code', 'external_id', 'amount', 'status', 'created_at'])
-            );
-
-            $q->with(['payment' => function ($qq) use ($payCols) {
-                $qq->select(array_values(array_unique($payCols)));
-            }]);
+        if ($invoice !== '') {
+            $query->where('invoice_number', 'ilike', "%{$invoice}%");
         }
 
-        // deliveries
-        if ($this->hasRelation('deliveries')) {
-            $delCols = array_merge(
-                ['id', 'order_id'],
-                $this->cols('deliveries', ['type', 'delivery_type', 'status', 'emailed', 'created_at'])
-            );
-
-            $q->with(['deliveries' => function ($qq) use ($delCols) {
-                $qq->select(array_values(array_unique($delCols)));
-            }]);
+        if ($paymentReference !== '') {
+            $query->whereHas('payment', function ($q) use ($paymentReference) {
+                $q->where('external_id', 'ilike', "%{$paymentReference}%");
+            });
         }
 
-        // filters
-        if ($status = $request->query('status')) {
-            if (Schema::hasColumn('orders', 'status')) $q->where('status', $status);
+        if ($dateFrom) {
+            $query->whereDate('created_at', '>=', $dateFrom);
         }
 
-        if ($userId = $request->query('user_id')) {
-            if (Schema::hasColumn('orders', 'user_id')) $q->where('user_id', (int) $userId);
+        if ($dateTo) {
+            $query->whereDate('created_at', '<=', $dateTo);
         }
 
-        if ($invoice = $request->query('invoice_number')) {
-            if (Schema::hasColumn('orders', 'invoice_number')) {
-                $q->where('invoice_number', 'like', "%{$invoice}%");
-            }
+        if ($product !== '') {
+            $query->where(function ($q) use ($product) {
+                $q->whereHas('items', function ($item) use ($product) {
+                    $item->where('product_name', 'ilike', "%{$product}%")
+                        ->orWhereHas('product', function ($prod) use ($product) {
+                            $prod->where('name', 'ilike', "%{$product}%")
+                                ->orWhere('slug', 'ilike', "%{$product}%");
+                        });
+                })->orWhereHas('product', function ($prod) use ($product) {
+                    $prod->where('name', 'ilike', "%{$product}%")
+                        ->orWhere('slug', 'ilike', "%{$product}%");
+                });
+            });
         }
 
-        if ($request->query('date_from')) {
-            $q->whereDate('created_at', '>=', $request->query('date_from'));
-        }
-        if ($request->query('date_to')) {
-            $q->whereDate('created_at', '<=', $request->query('date_to'));
+        if ($category !== '') {
+            $query->where(function ($q) use ($category) {
+                $q->whereHas('items.product.category', function ($cat) use ($category) {
+                    $cat->where('name', 'ilike', "%{$category}%")
+                        ->orWhere('slug', 'ilike', "%{$category}%");
+                })->orWhereHas('product.category', function ($cat) use ($category) {
+                    $cat->where('name', 'ilike', "%{$category}%")
+                        ->orWhere('slug', 'ilike', "%{$category}%");
+                });
+            });
         }
 
-        // ✅ ringan, minim timeout
-        return $this->ok($q->simplePaginate($perPage));
+        $paginator = $query->paginate($perPage);
+
+        $paginator->getCollection()->transform(function (Order $order) {
+            $items = collect($order->items ?? []);
+            $deliveries = collect($order->deliveries ?? []);
+
+            $itemDetails = $items->map(function ($item) {
+                $product = $item->product;
+                $category = $product?->category;
+                $subcategory = $product?->subcategory;
+
+                return [
+                    'order_item_id' => (int) $item->id,
+                    'product_id' => $product?->id ? (int) $product->id : null,
+                    'product' => $item->product_name ?: $product?->name,
+                    'product_slug' => $item->product_slug ?: $product?->slug,
+                    'category' => $category?->name,
+                    'subcategory' => $subcategory?->name,
+                    'qty' => (int) ($item->qty ?? 0),
+                    'unit_price' => (float) ($item->unit_price ?? 0),
+                    'line_subtotal' => (float) ($item->line_subtotal ?? 0),
+                ];
+            })->values();
+
+            $licenseDetails = $deliveries->map(function ($delivery) {
+                $license = $delivery->license;
+
+                return [
+                    'delivery_id' => (int) $delivery->id,
+                    'delivery_mode' => $delivery->delivery_mode,
+                    'emailed_at' => $delivery->emailed_at,
+                    'revealed_at' => $delivery->revealed_at,
+                    'license_id' => $license?->id ? (int) $license->id : null,
+                    'license_key' => $license?->license_key,
+                    'data_other' => $license?->data_other,
+                    'note' => $license?->note,
+                    'status' => $license?->status,
+                    'delivered_at' => $license?->delivered_at,
+                    'sold_at' => $license?->sold_at,
+                ];
+            })->values();
+
+            $order->setAttribute('payment_reference', $order->payment?->external_id);
+            $order->setAttribute('transaction_datetime', $order->created_at?->format('Y-m-d H:i:s'));
+            $order->setAttribute('payment_datetime', $order->payment?->created_at?->format('Y-m-d H:i:s'));
+            $order->setAttribute('total_item_qty', (int) $items->sum(fn ($row) => (int) ($row->qty ?? 0)));
+            $order->setAttribute('item_details', $itemDetails);
+            $order->setAttribute('license_details', $licenseDetails);
+
+            return $order;
+        });
+
+        return $this->ok($paginator);
     }
 
     public function show(string $id)
     {
-        $q = Order::query();
+        $order = Order::query()
+            ->with([
+                'user:id,name,full_name,email',
+                'payment',
+                'items.product.category',
+                'items.product.subcategory',
+                'deliveries.license',
+            ])
+            ->findOrFail($id);
 
-        if ($this->hasRelation('user')) $q->with(['user:id,name,email']);
-        if ($this->hasRelation('items')) $q->with(['items']);
-        if ($this->hasRelation('payment')) $q->with(['payment']);
-        if ($this->hasRelation('deliveries')) $q->with(['deliveries']);
-
-        return $this->ok($q->findOrFail($id));
+        return $this->ok($order);
     }
-
-    // NOTE: routes kamu ada markFailed & refund.
-    // Kalau kamu mau, aku bisa tambahin methodnya juga biar endpoint itu tidak error.
 }

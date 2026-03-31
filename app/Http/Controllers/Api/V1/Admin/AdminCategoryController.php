@@ -15,14 +15,22 @@ class AdminCategoryController extends Controller
 
     public function index(Request $request)
     {
-        $q = $request->query('q');
+        $q = trim((string) $request->query('q', ''));
+        $status = strtolower(trim((string) $request->query('status', 'all')));
 
         $data = Category::query()
-            ->when($q, fn ($qq) => $qq
-                ->where('name', 'ilike', "%{$q}%")
-                ->orWhere('slug', 'ilike', "%{$q}%"))
+            ->when($q !== '', function ($qq) use ($q) {
+                $qq->where(function ($w) use ($q) {
+                    $w->where('name', 'ilike', "%{$q}%")
+                        ->orWhere('slug', 'ilike', "%{$q}%")
+                        ->orWhere('redirect_link', 'ilike', "%{$q}%");
+                });
+            })
+            ->when($status === 'active', fn ($qq) => $qq->where('is_active', true))
+            ->when($status === 'inactive', fn ($qq) => $qq->where('is_active', false))
             ->orderBy('sort_order')
-            ->orderBy('id', 'desc')
+            ->orderBy('name')
+            ->orderByDesc('id')
             ->get();
 
         return $this->ok($data);

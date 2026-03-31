@@ -54,6 +54,18 @@ class ProductController extends Controller
         return 'products:index:' . md5(http_build_query($params));
     }
 
+    private function applyVisibleCatalogGuard($query)
+    {
+        return $query
+            ->where('products.is_active', true)
+            ->where('products.is_published', true)
+            ->whereHas('category', fn ($q) => $q->where('is_active', true))
+            ->where(function ($q) {
+                $q->whereNull('products.subcategory_id')
+                    ->orWhereHas('subcategory', fn ($sq) => $sq->where('is_active', true));
+            });
+    }
+
     public function index(Request $request, ProductAvailabilityService $availability)
     {
         $search = trim((string) $request->query('q', ''));
@@ -106,8 +118,8 @@ class ProductController extends Controller
                     'products.created_at',
                 ])
                 ->with([
-                    'category:id,name,slug',
-                    'subcategory:id,category_id,name,description,slug,provider,image_url',
+                    'category:id,name,slug,is_active',
+                    'subcategory:id,category_id,name,description,slug,provider,image_url,is_active',
                 ])
                 ->when($sort === 'favorite', function ($query) use ($favoriteCountSub) {
                     $query->leftJoinSub($favoriteCountSub, 'favorite_counts', function ($join) {
@@ -121,9 +133,9 @@ class ProductController extends Controller
                         $w->where('products.name', 'ilike', "%{$search}%")
                             ->orWhere('products.slug', 'ilike', "%{$search}%");
                     });
-                })
-                ->where('products.is_active', true)
-                ->where('products.is_published', true);
+                });
+
+            $query = $this->applyVisibleCatalogGuard($query);
 
             switch ($sort) {
                 case 'bestseller':
@@ -173,6 +185,10 @@ class ProductController extends Controller
             return $this->fail('Product not found', 404);
         }
 
+        if (($product->category && !$product->category->is_active) || ($product->subcategory && !$product->subcategory->is_active)) {
+            return $this->fail('Product not found', 404);
+        }
+
         $data = PublicCache::rememberCatalogProducts('products:show:' . $product->id, self::SHOW_CACHE_TTL, function () use ($product, $availability) {
             $fresh = Product::query()
                 ->select([
@@ -196,8 +212,8 @@ class ProductController extends Controller
                     'updated_at',
                 ])
                 ->with([
-                    'category:id,name,slug',
-                    'subcategory:id,category_id,name,description,slug,provider,image_url,image_path',
+                    'category:id,name,slug,is_active',
+                    'subcategory:id,category_id,name,description,slug,provider,image_url,image_path,is_active',
                 ])
                 ->withCount([
                     'favorites',
@@ -205,6 +221,11 @@ class ProductController extends Controller
                 ->whereKey($product->id)
                 ->where('is_active', true)
                 ->where('is_published', true)
+                ->whereHas('category', fn ($q) => $q->where('is_active', true))
+                ->where(function ($q) {
+                    $q->whereNull('subcategory_id')
+                        ->orWhereHas('subcategory', fn ($sq) => $sq->where('is_active', true));
+                })
                 ->first();
 
             if (!$fresh) {
