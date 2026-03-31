@@ -9,11 +9,28 @@ use App\Support\ApiResponse;
 use App\Support\PublicCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
-use Illuminate\Validation\ValidationException;
 
 class AdminProductController extends Controller
 {
     use ApiResponse;
+
+    private function ensureValidSubCategory(?int $categoryId, ?int $subCategoryId): ?\Illuminate\Http\JsonResponse
+    {
+        if (!$categoryId || !$subCategoryId) {
+            return null;
+        }
+
+        $matched = SubCategory::query()
+            ->where('id', $subCategoryId)
+            ->where('category_id', $categoryId)
+            ->exists();
+
+        if (!$matched) {
+            return $this->fail('Subkategori tidak cocok dengan kategori yang dipilih', 422);
+        }
+
+        return null;
+    }
 
     public function index(Request $request)
     {
@@ -32,7 +49,6 @@ class AdminProductController extends Controller
                 'type',
                 'duration_days',
                 'tier_pricing',
-                'tier_profit',
                 'is_active',
                 'is_published',
                 'rating',
@@ -94,7 +110,6 @@ class AdminProductController extends Controller
             'duration_days' => ['nullable', 'integer', 'min:1'],
             'description' => ['nullable', 'string'],
             'tier_pricing' => ['required', 'array'],
-            'tier_profit' => ['nullable', 'array'],
             'is_active' => ['nullable', 'boolean'],
             'is_published' => ['nullable', 'boolean'],
             'track_stock' => ['nullable', 'boolean'],
@@ -103,8 +118,6 @@ class AdminProductController extends Controller
             'rating_count' => ['nullable', 'integer', 'min:0'],
         ]);
 
-        $this->ensureCategorySubcategoryMatch((int) $v['category_id'], (int) $v['subcategory_id']);
-
         $v['slug'] = $v['slug'] ?? Str::slug($v['name']);
         $v['is_active'] = $v['is_active'] ?? true;
         $v['is_published'] = $v['is_published'] ?? false;
@@ -112,7 +125,10 @@ class AdminProductController extends Controller
         $v['stock_min_alert'] = $v['stock_min_alert'] ?? 0;
         $v['rating'] = $v['rating'] ?? 0;
         $v['rating_count'] = $v['rating_count'] ?? 0;
-        $v['tier_profit'] = $this->sanitizeTierProfit($v['tier_profit'] ?? []);
+
+        if ($error = $this->ensureValidSubCategory((int) $v['category_id'], (int) $v['subcategory_id'])) {
+            return $error;
+        }
 
         $p = Product::create($v);
 
@@ -141,7 +157,6 @@ class AdminProductController extends Controller
             'duration_days' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'description' => ['sometimes', 'nullable', 'string'],
             'tier_pricing' => ['sometimes', 'array'],
-            'tier_profit' => ['sometimes', 'nullable', 'array'],
             'is_active' => ['sometimes', 'boolean'],
             'is_published' => ['sometimes', 'boolean'],
             'track_stock' => ['sometimes', 'boolean'],
@@ -150,16 +165,15 @@ class AdminProductController extends Controller
             'rating_count' => ['sometimes', 'integer', 'min:0'],
         ]);
 
-        $effectiveCategoryId = (int) ($v['category_id'] ?? $p->category_id);
-        $effectiveSubcategoryId = (int) ($v['subcategory_id'] ?? $p->subcategory_id);
-        $this->ensureCategorySubcategoryMatch($effectiveCategoryId, $effectiveSubcategoryId);
-
         if (array_key_exists('name', $v) && !array_key_exists('slug', $v)) {
             $v['slug'] = Str::slug($v['name']);
         }
 
-        if (array_key_exists('tier_profit', $v)) {
-            $v['tier_profit'] = $this->sanitizeTierProfit($v['tier_profit'] ?? []);
+        $nextCategoryId = array_key_exists('category_id', $v) ? (int) $v['category_id'] : (int) $p->category_id;
+        $nextSubCategoryId = array_key_exists('subcategory_id', $v) ? (int) $v['subcategory_id'] : (int) $p->subcategory_id;
+
+        if ($error = $this->ensureValidSubCategory($nextCategoryId, $nextSubCategoryId)) {
+            return $error;
         }
 
         $p->fill($v)->save();
@@ -210,30 +224,5 @@ class AdminProductController extends Controller
         PublicCache::bumpDashboard();
 
         return $this->ok(['deleted' => false, 'deactivated' => true]);
-    }
-
-    private function sanitizeTierProfit(array $tierProfit): array
-    {
-        $clean = [];
-
-        foreach (['member', 'reseller', 'vip'] as $tier) {
-            $clean[$tier] = max(0, (int) ($tierProfit[$tier] ?? 0));
-        }
-
-        return $clean;
-    }
-
-    private function ensureCategorySubcategoryMatch(int $categoryId, int $subcategoryId): void
-    {
-        $matched = SubCategory::query()
-            ->where('id', $subcategoryId)
-            ->where('category_id', $categoryId)
-            ->exists();
-
-        if (!$matched) {
-            throw ValidationException::withMessages([
-                'subcategory_id' => ['Sub kategori tidak sesuai dengan kategori yang dipilih.'],
-            ]);
-        }
     }
 }

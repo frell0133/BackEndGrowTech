@@ -16,29 +16,12 @@ class AdminSubCategoryController extends Controller
 
     public function index(Request $request)
     {
-        $q = trim((string) $request->query('q', ''));
-        $status = strtolower(trim((string) $request->query('status', 'all')));
         $categoryId = $request->query('category_id');
 
-        $data = SubCategory::query()
-            ->with('category')
-            ->when($categoryId, fn ($qq) => $qq->where('subcategories.category_id', $categoryId))
-            ->when($q !== '', function ($qq) use ($q) {
-                $qq->where(function ($w) use ($q) {
-                    $w->where('subcategories.name', 'ilike', "%{$q}%")
-                        ->orWhere('subcategories.slug', 'ilike', "%{$q}%")
-                        ->orWhere('subcategories.provider', 'ilike', "%{$q}%")
-                        ->orWhere('subcategories.description', 'ilike', "%{$q}%")
-                        ->orWhereHas('category', function ($cat) use ($q) {
-                            $cat->where('name', 'ilike', "%{$q}%");
-                        });
-                });
-            })
-            ->when($status === 'active', fn ($qq) => $qq->where('subcategories.is_active', true))
-            ->when($status === 'inactive', fn ($qq) => $qq->where('subcategories.is_active', false))
+        $data = SubCategory::with('category')
+            ->when($categoryId, fn ($q) => $q->where('category_id', (int) $categoryId))
             ->orderBy('sort_order')
-            ->orderBy('name')
-            ->orderByDesc('id')
+            ->latest('id')
             ->get();
 
         return $this->ok($data);
@@ -48,8 +31,8 @@ class AdminSubCategoryController extends Controller
     {
         $validated = $request->validate([
             'category_id' => ['required', 'integer', 'exists:categories,id'],
-            'name' => ['required', 'string', 'max:255'],
-            'slug' => [
+            'name'        => ['required', 'string', 'max:255'],
+            'slug'        => [
                 'required',
                 'string',
                 'max:255',
@@ -57,11 +40,11 @@ class AdminSubCategoryController extends Controller
                     fn ($q) => $q->where('category_id', $request->category_id)
                 ),
             ],
-            'provider' => ['nullable', 'string', 'max:255'],
-            'image_url' => ['nullable', 'string', 'max:2000'],
-            'image_path' => ['nullable', 'string', 'max:2000'],
-            'is_active' => ['boolean'],
-            'sort_order' => ['required', 'integer', 'min:1'],
+            'provider'    => ['nullable', 'string', 'max:255'],
+            'image_url'   => ['nullable', 'string', 'max:2000'],
+            'image_path'  => ['nullable', 'string', 'max:2000'],
+            'is_active'   => ['boolean'],
+            'sort_order'  => ['required', 'integer', 'min:1'],
             'description' => ['nullable', 'string'],
         ]);
 
@@ -79,8 +62,8 @@ class AdminSubCategoryController extends Controller
 
         $validated = $request->validate([
             'category_id' => ['sometimes', 'integer', 'exists:categories,id'],
-            'name' => ['sometimes', 'string', 'max:255'],
-            'slug' => [
+            'name'        => ['sometimes', 'string', 'max:255'],
+            'slug'        => [
                 'sometimes',
                 'string',
                 'max:255',
@@ -91,11 +74,11 @@ class AdminSubCategoryController extends Controller
                         return $q->where('category_id', $catId);
                     }),
             ],
-            'provider' => ['nullable', 'string', 'max:255'],
-            'image_url' => ['nullable', 'string', 'max:2000'],
-            'image_path' => ['nullable', 'string', 'max:2000'],
-            'is_active' => ['boolean'],
-            'sort_order' => ['sometimes', 'integer', 'min:1'],
+            'provider'    => ['nullable', 'string', 'max:255'],
+            'image_url'   => ['nullable', 'string', 'max:2000'],
+            'image_path'  => ['nullable', 'string', 'max:2000'],
+            'is_active'   => ['boolean'],
+            'sort_order'  => ['sometimes', 'integer', 'min:1'],
             'description' => ['nullable', 'string'],
         ]);
 
@@ -124,14 +107,14 @@ class AdminSubCategoryController extends Controller
             'mime' => ['required', 'string', 'starts_with:image/'],
         ]);
 
-        $bucket = (string) config('services.supabase.bucket_subcategories', 'subcategories');
+        $bucket  = (string) config('services.supabase.bucket_subcategories', 'subcategories');
         $expires = (int) config('services.supabase.sign_expires', 60);
 
-        $path = $supabase->buildSubCategoryLogoPath($data['mime']);
+        $path   = $supabase->buildSubCategoryLogoPath($data['mime']);
         $signed = $supabase->createSignedUploadUrl($bucket, $path, $expires);
 
         return $this->ok([
-            'path' => $signed['path'],
+            'path'      => $signed['path'],
             'signedUrl' => $signed['signedUrl'],
             'publicUrl' => $supabase->publicObjectUrl($bucket, $signed['path']),
         ]);

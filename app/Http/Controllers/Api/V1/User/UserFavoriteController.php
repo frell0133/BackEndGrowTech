@@ -12,6 +12,7 @@ use App\Support\PublicCache;
 use App\Support\RuntimeCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use App\Services\ProductAvailabilityService;
 
 class UserFavoriteController extends Controller
 {
@@ -47,13 +48,29 @@ class UserFavoriteController extends Controller
                 ])
                 ->where('user_id', $user->id)
                 ->with([
-                    'product:id,category_id,subcategory_id,name,slug,rating,rating_count,available_stock',
+                    'product:id,category_id,subcategory_id,name,slug,rating,rating_count,is_active,is_published',
                     'product.subcategory:id,category_id,name,slug,image_url',
                 ])
                 ->orderByDesc('created_at')
                 ->paginate($perPage)
                 ->toArray();
         });
+
+        $availability = app(ProductAvailabilityService::class);
+
+        if (!empty($data['data']) && is_array($data['data'])) {
+            foreach ($data['data'] as &$favorite) {
+                $product = $favorite['product'] ?? null;
+
+                if (!$product || empty($product['id'])) {
+                    continue;
+                }
+
+                $product['available_stock'] = (int) $availability->forProductId((int) $product['id']);
+                $favorite['product'] = $product;
+            }
+            unset($favorite);
+        }
 
         return $this->ok($data);
     }

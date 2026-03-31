@@ -90,7 +90,7 @@ class UserCartController extends Controller
     /**
      * Ambil harga unit berdasarkan tier user (member/reseller/vip).
      */
-    private function resolveTierBasePrice(Product $product, string $tierKey): int
+    private function resolveUnitPrice(Product $product, string $tierKey): int
     {
         $tier = (array) ($product->tier_pricing ?? []);
         $unitPrice = 0;
@@ -109,42 +109,37 @@ class UserCartController extends Controller
             $unitPrice = (int) ($product->price ?? 0);
         }
 
-        return max(0, (int) $unitPrice);
+        return (int) $unitPrice;
     }
 
-    private function resolveTierProfit(Product $product, string $tierKey): int
+    private function buildCheckoutSuccessPayload(Order $order, float $campaignDiscountTotal, float $voucherDiscount, float $referralDiscount, float $discountTotal, array $appliedCampaigns, float $feePercent, float $gatewayFeeAmount)
     {
-        $tierProfit = (array) ($product->tier_profit ?? []);
-        $profit = (int) ($tierProfit[$tierKey] ?? 0);
-
-        if ($profit <= 0) {
-            $profit = (int) ($tierProfit['member'] ?? 0);
-        }
-
-        return max(0, $profit);
-    }
-
-    private function resolveUnitPrice(Product $product, string $tierKey): int
-    {
-        return $this->resolveTierBasePrice($product, $tierKey) + $this->resolveTierProfit($product, $tierKey);
-    }
-
-    private function resolveUnitProfit(Product $product, string $tierKey): float
-    {
-        $tierProfit = (array) ($product->tier_profit ?? []);
-        $unitProfit = 0.0;
-
-        if (!empty($tierProfit)) {
-            $unitProfit = (float) ($tierProfit[$tierKey] ?? 0);
-            if ($unitProfit <= 0) $unitProfit = (float) ($tierProfit['member'] ?? 0);
-
-            if ($unitProfit <= 0) {
-                $vals = array_values($tierProfit);
-                $unitProfit = (float) ($vals[0] ?? 0);
-            }
-        }
-
-        return max(0.0, round($unitProfit, 2));
+        return $this->ok([
+            'order' => $order->fresh()->load(['items.product', 'vouchers', 'discountCampaigns']),
+            'discount_breakdown' => [
+                'campaign_discount_total' => (float) $campaignDiscountTotal,
+                'voucher_discount_total' => (float) $voucherDiscount,
+                'referral_discount_total' => (float) $referralDiscount,
+                'discount_total' => (float) $discountTotal,
+                'applied_campaigns' => $appliedCampaigns,
+            ],
+            'payment_gateway_summary' => [
+                'fee_percent' => (float) $feePercent,
+                'fee_amount' => (float) $gatewayFeeAmount,
+                'total_payable' => (float) ($order->amount + $gatewayFeeAmount),
+            ],
+            'summary' => [
+                'subtotal' => (float) $order->subtotal,
+                'discount_total' => (float) $order->discount_total,
+                'tax_percent' => (int) $order->tax_percent,
+                'tax_amount' => (float) $order->tax_amount,
+                'total' => (float) $order->amount,
+                'gateway_fee_percent' => (float) $feePercent,
+                'gateway_fee_amount' => (float) $gatewayFeeAmount,
+                'total_payable_gateway' => (float) ($order->amount + $gatewayFeeAmount),
+            ],
+            'items' => $order->fresh()->items()->with('product')->get(),
+        ]);
     }
 
     private function computeReferralDiscountForUser(int $userId, float $subtotal): array
@@ -213,7 +208,7 @@ class UserCartController extends Controller
         $cartItems = CartItem::query()
             ->where('cart_id', $cart->id)
             ->with([
-                'product:id,category_id,subcategory_id,name,slug,type,description,tier_pricing,tier_profit,duration_days,price,is_active,is_published,rating,rating_count,purchases_count,popularity_score',
+                'product:id,category_id,subcategory_id,name,slug,type,description,tier_pricing,duration_days,price,is_active,is_published,rating,rating_count,purchases_count,popularity_score',
                 'product.category:id,name,slug',
                 'product.subcategory:id,category_id,name,description,slug,provider,image_url,image_path',
             ])
@@ -228,19 +223,14 @@ class UserCartController extends Controller
             $stock = (int) ($stockMap[(int) $item->product_id] ?? 0);
             $qty = (int) ($item->qty ?? 1);
 
-            $unitBasePrice = $product ? $this->resolveTierBasePrice($product, $tierKey) : 0;
-            $unitProfit = $product ? $this->resolveUnitProfit($product, $tierKey) : 0.0;
-            $unitPrice = $unitBasePrice + $unitProfit;
+            $unitPrice = $product ? $this->resolveUnitPrice($product, $tierKey) : 0;
             $canBuy = (bool) ($product?->is_active && $product?->is_published && $stock > 0);
 
             return [
                 'id' => $item->id,
                 'qty' => $qty,
-                'unit_base_price' => (int) $unitBasePrice,
-                'unit_profit' => (float) $unitProfit,
                 'unit_price' => (int) $unitPrice,
                 'line_subtotal' => (int) $unitPrice * $qty,
-                'line_profit' => (float) ($unitProfit * $qty),
                 'product' => $product,
                 'stock_available' => $stock,
                 'can_buy' => $canBuy,
@@ -442,10 +432,8 @@ class UserCartController extends Controller
                 $p = $ci->product;
                 $qty = (int) ($ci->qty ?? 1);
                 $unitPrice = $this->resolveUnitPrice($p, $tierKey);
-                $unitProfit = $this->resolveUnitProfit($p, $tierKey);
 
                 $line = (float) ($unitPrice * $qty);
-                $lineProfit = (float) ($unitProfit * $qty);
                 $subtotal += $line;
 
                 $computedItems[] = [
@@ -455,8 +443,6 @@ class UserCartController extends Controller
                     'qty' => $qty,
                     'unit_price' => (float) $unitPrice,
                     'line_subtotal' => (float) $line,
-                    'unit_profit' => (float) $unitProfit,
-                    'line_profit' => (float) $lineProfit,
                     'product_name' => (string) ($p->name ?? null),
                     'product_slug' => (string) ($p->slug ?? null),
                 ];
@@ -585,8 +571,6 @@ class UserCartController extends Controller
                     'qty' => (int) $it['qty'],
                     'unit_price' => (float) $it['unit_price'],
                     'line_subtotal' => (float) $it['line_subtotal'],
-                    'unit_profit' => (float) ($it['unit_profit'] ?? 0),
-                    'line_profit' => (float) ($it['line_profit'] ?? 0),
                     'product_name' => $it['product_name'],
                     'product_slug' => $it['product_slug'],
                 ]);
@@ -610,21 +594,196 @@ class UserCartController extends Controller
 
             CartItem::query()->where('cart_id', (int) $cart->id)->delete();
 
-            return $this->ok([
-                'order' => $order->fresh()->load(['items.product', 'vouchers', 'discountCampaigns']),
-                'discount_breakdown' => [
-                    'campaign_discount_total' => (float) $campaignDiscountTotal,
-                    'voucher_discount_total' => (float) $voucherDiscount,
-                    'referral_discount_total' => (float) $referralDiscount,
-                    'discount_total' => (float) $discountTotal,
-                    'applied_campaigns' => $campaignResult['applied'] ?? [],
-                ],
-                'payment_gateway_summary' => [
-                    'fee_percent' => (float) $feePercent,
-                    'fee_amount' => (float) $gatewayFeeAmount,
-                    'total_payable' => (float) ($amount + $gatewayFeeAmount),
-                ],
+            return $this->buildCheckoutSuccessPayload(
+                $order,
+                (float) $campaignDiscountTotal,
+                (float) $voucherDiscount,
+                (float) $referralDiscount,
+                (float) $discountTotal,
+                $campaignResult['applied'] ?? [],
+                (float) $feePercent,
+                (float) $gatewayFeeAmount
+            );
+        });
+    }
+
+    public function buyNow(Request $request)
+    {
+        $user = $this->requireUser($request);
+        if ($user instanceof \Illuminate\Http\JsonResponse) return $user;
+
+        $v = $request->validate([
+            'product_id' => ['required', 'integer', 'min:1'],
+            'qty' => ['nullable', 'integer', 'min:1', 'max:99'],
+            'voucher_code' => ['nullable', 'string', 'max:50'],
+        ]);
+
+        $qty = (int) ($v['qty'] ?? 1);
+        $tierKey = (string) ($user->tier ?? 'member');
+        $paymentSettings = $this->getPaymentSettings();
+        $taxPercent = (int) ($paymentSettings['tax_percent'] ?? 0);
+        $feePercent = (float) ($paymentSettings['gateway_fee_percent'] ?? 0.0);
+
+        $product = Product::query()
+            ->where('id', (int) $v['product_id'])
+            ->where('is_active', true)
+            ->where('is_published', true)
+            ->with(['category:id,name,slug', 'subcategory:id,category_id,name,slug,provider,image_url,image_path'])
+            ->first();
+
+        if (!$product) return $this->fail('Product not available', 404);
+
+        $stock = app(ProductAvailabilityService::class)->forProductId((int) $product->id);
+        if ($stock < $qty) {
+            return $this->fail('Stock tidak cukup', 422, [
+                'product_id' => (int) $product->id,
+                'stock_available' => (int) $stock,
+                'qty_requested' => (int) $qty,
             ]);
+        }
+
+        $unitPrice = $this->resolveUnitPrice($product, $tierKey);
+        if ($unitPrice <= 0) {
+            return $this->fail('Harga product belum diset (tier_pricing/price kosong)', 422, [
+                'product_id' => (int) $product->id,
+            ]);
+        }
+
+        return DB::transaction(function () use ($user, $product, $qty, $unitPrice, $taxPercent, $feePercent, $v) {
+            $computedItems = [[
+                'product_id' => (int) $product->id,
+                'category_id' => isset($product->category_id) ? (int) $product->category_id : null,
+                'subcategory_id' => isset($product->subcategory_id) ? (int) $product->subcategory_id : null,
+                'qty' => (int) $qty,
+                'unit_price' => (float) $unitPrice,
+                'line_subtotal' => (float) ($unitPrice * $qty),
+                'product_name' => (string) ($product->name ?? null),
+                'product_slug' => (string) ($product->slug ?? null),
+            ]];
+
+            $subtotal = (float) ($unitPrice * $qty);
+            $discountTotal = 0.0;
+
+            $campaignSvc = app(DiscountCampaignService::class);
+            $campaignResult = $campaignSvc->compute((int) $user->id, $computedItems, (float) $subtotal);
+            $campaignDiscountTotal = (float) ($campaignResult['total_discount'] ?? 0.0);
+            if ($campaignDiscountTotal > $subtotal) $campaignDiscountTotal = $subtotal;
+            $discountTotal += $campaignDiscountTotal;
+
+            $voucher = null;
+            $voucherDiscount = 0.0;
+
+            if (!empty($v['voucher_code'])) {
+                $code = strtoupper(trim((string) $v['voucher_code']));
+                $voucher = Voucher::query()->where('code', $code)->lockForUpdate()->first();
+
+                if (!$voucher) return $this->fail('Voucher tidak ditemukan', 404);
+                if (!$voucher->is_active) return $this->fail('Voucher tidak aktif', 422);
+                if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
+                    return $this->fail('Voucher sudah kedaluwarsa', 422);
+                }
+                if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
+                    return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
+                }
+                if ($voucher->quota !== null) {
+                    $used = $voucher->orders()
+                        ->whereIn('status', [OrderStatus::PAID->value, OrderStatus::FULFILLED->value])
+                        ->count();
+
+                    if ($used >= (int) $voucher->quota) {
+                        return $this->fail('Kuota voucher sudah habis', 422);
+                    }
+                }
+
+                if ($voucher->type == 'percent') {
+                    $voucherDiscount = (float) floor($subtotal * ((float) $voucher->value / 100));
+                } else {
+                    $voucherDiscount = (float) $voucher->value;
+                }
+
+                if ($voucherDiscount > $subtotal) $voucherDiscount = $subtotal;
+                $discountTotal += $voucherDiscount;
+            }
+
+            $ref = $this->computeReferralDiscountForUser((int) $user->id, (float) $subtotal);
+            $referralDiscount = (float) ($ref['discount'] ?? 0.0);
+            $referrerId = $ref['referrer_id'] ?? null;
+
+            if ($referralDiscount > 0 && $referrerId) {
+                $discountTotal += $referralDiscount;
+            }
+
+            if ($discountTotal > $subtotal) $discountTotal = $subtotal;
+
+            $taxAmount = $taxPercent > 0 ? round($subtotal * ($taxPercent / 100), 2) : 0.0;
+            $amount = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
+            $gatewayFeeAmount = $feePercent > 0 ? round($amount * ($feePercent / 100), 2) : 0.0;
+
+            $invoice = 'INV-' . now()->format('Ymd') . '-' . Str::upper(Str::random(8));
+
+            $order = Order::create([
+                'user_id' => (int) $user->id,
+                'product_id' => (int) $product->id,
+                'invoice_number' => $invoice,
+                'status' => OrderStatus::CREATED->value,
+                'qty' => (int) $qty,
+                'subtotal' => (float) $subtotal,
+                'discount_total' => (float) $discountTotal,
+                'tax_percent' => (int) $taxPercent,
+                'tax_amount' => (float) $taxAmount,
+                'gateway_fee_percent' => (float) $feePercent,
+                'gateway_fee_amount' => (float) $gatewayFeeAmount,
+                'amount' => (float) $amount,
+                'payment_gateway_code' => null,
+            ]);
+
+            if ($referralDiscount > 0 && $referrerId) {
+                ReferralTransaction::create([
+                    'referrer_id' => (int) $referrerId,
+                    'user_id' => (int) $user->id,
+                    'order_id' => (int) $order->id,
+                    'status' => 'pending',
+                    'order_amount' => (int) round((float) $order->amount),
+                    'discount_amount' => (int) round((float) $referralDiscount),
+                    'commission_amount' => 0,
+                    'occurred_at' => null,
+                ]);
+            }
+
+            OrderItem::create([
+                'order_id' => (int) $order->id,
+                'product_id' => (int) $product->id,
+                'qty' => (int) $qty,
+                'unit_price' => (float) $unitPrice,
+                'line_subtotal' => (float) ($unitPrice * $qty),
+                'product_name' => (string) ($product->name ?? null),
+                'product_slug' => (string) ($product->slug ?? null),
+            ]);
+
+            if ($voucher) {
+                $order->vouchers()->syncWithoutDetaching([
+                    $voucher->id => ['discount_amount' => (float) $voucherDiscount],
+                ]);
+            }
+
+            if (!empty($campaignResult['applied'])) {
+                foreach ($campaignResult['applied'] as $ac) {
+                    $order->discountCampaigns()->attach((int) $ac['id'], [
+                        'discount_amount' => (float) $ac['discount_amount'],
+                    ]);
+                }
+            }
+
+            return $this->buildCheckoutSuccessPayload(
+                $order,
+                (float) $campaignDiscountTotal,
+                (float) $voucherDiscount,
+                (float) $referralDiscount,
+                (float) $discountTotal,
+                $campaignResult['applied'] ?? [],
+                (float) $feePercent,
+                (float) $gatewayFeeAmount
+            );
         });
     }
 
@@ -716,10 +875,8 @@ class UserCartController extends Controller
             $p = $ci->product;
             $qty = (int) ($ci->qty ?? 1);
             $unitPrice = $this->resolveUnitPrice($p, $tierKey);
-            $unitProfit = $this->resolveUnitProfit($p, $tierKey);
 
             $line = (float) ($unitPrice * $qty);
-            $lineProfit = (float) ($unitProfit * $qty);
             $subtotal += $line;
 
             $items[] = [
@@ -727,8 +884,6 @@ class UserCartController extends Controller
                 'qty' => $qty,
                 'unit_price' => (float) $unitPrice,
                 'line_subtotal' => (float) $line,
-                'unit_profit' => (float) $unitProfit,
-                'line_profit' => (float) $lineProfit,
                 'product' => $p,
                 'tier' => $tierKey,
             ];
@@ -740,8 +895,6 @@ class UserCartController extends Controller
                 'qty' => $qty,
                 'unit_price' => (float) $unitPrice,
                 'line_subtotal' => (float) $line,
-                'unit_profit' => (float) $unitProfit,
-                'line_profit' => (float) $lineProfit,
             ];
         }
 
