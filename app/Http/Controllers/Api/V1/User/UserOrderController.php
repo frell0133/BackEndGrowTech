@@ -1110,7 +1110,7 @@ class UserOrderController extends Controller
                     ->lockForUpdate()
                     ->first();
 
-                if (!$lockedOrder) {
+                if (! $lockedOrder) {
                     return $this->fail('Order tidak ditemukan', 404);
                 }
 
@@ -1128,15 +1128,27 @@ class UserOrderController extends Controller
                     return $this->fail('Order sudah dibayar, tidak bisa dicancel', 409);
                 }
 
-                if ($orderStatus === OrderStatus::FAILED->value) {
+                if ($orderStatus === OrderStatus::CANCELLED->value) {
                     return $this->ok([
                         'cancelled' => true,
                         'order' => $lockedOrder->fresh(['payment']),
                     ]);
                 }
 
-                $lockedOrder->status = OrderStatus::FAILED->value;
+                $lockedOrder->status = OrderStatus::CANCELLED->value;
                 $lockedOrder->save();
+
+                if ($lockedOrder->payment) {
+                    $currentPaymentStatus = (string) ($lockedOrder->payment->status?->value ?? $lockedOrder->payment->status);
+
+                    if (in_array($currentPaymentStatus, [
+                        PaymentStatus::INITIATED->value,
+                        PaymentStatus::PENDING->value,
+                    ], true)) {
+                        $lockedOrder->payment->status = PaymentStatus::EXPIRED->value;
+                        $lockedOrder->payment->save();
+                    }
+                }
 
                 return $this->ok([
                     'cancelled' => true,

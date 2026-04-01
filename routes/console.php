@@ -1,5 +1,8 @@
 <?php
 
+use App\Enums\OrderStatus;
+use App\Enums\PaymentStatus;
+use App\Models\Order;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -118,4 +121,65 @@ Schedule::command('queue:prune-batches --hours=168 --unfinished=168 --cancelled=
 
 Schedule::command('sanctum:prune-expired --hours=24')
     ->dailyAt('02:30')
+    ->withoutOverlapping();
+
+Artisan::command('orders:auto-cancel-created', function () {
+    $cutoff = now()->subHour();
+    $updatedOrders = 0;
+    $updatedPayments = 0;
+
+    Order::query()
+        ->where('status', OrderStatus::CREATED->value)
+        ->where('created_at', '<=', $cutoff)
+        ->select('id')
+        ->orderBy('id')
+        ->chunkById(100, function ($rows) use (&$updatedOrders, &$updatedPayments) {
+            foreach ($rows as $row) {
+                DB::transaction(function () use ($row, &$updatedOrders, &$updatedPayments) {
+                    $lockedOrder = Order::query()
+                        ->with('payment')
+                        ->lockForUpdate()
+                        ->find($row->id);
+
+                    if (! $lockedOrder) {
+                        return;
+                    }
+
+                    $currentOrderStatus = (string) ($lockedOrder->status?->value ?? $lockedOrder->status);
+
+                    if ($currentOrderStatus !== OrderStatus::CREATED->value) {
+                        return;
+                    }
+
+                    $lockedOrder->status = OrderStatus::CANCELLED->value;
+                    $lockedOrder->save();
+                    $updatedOrders++;
+
+                    if ($lockedOrder->payment) {
+                        $currentPaymentStatus = (string) ($lockedOrder->payment->status?->value ?? $lockedOrder->payment->status);
+
+                        if (in_array($currentPaymentStatus, [
+                            PaymentStatus::INITIATED->value,
+                            PaymentStatus::PENDING->value,
+                        ], true)) {
+                            $lockedOrder->payment->status = PaymentStatus::EXPIRED->value;
+                            $lockedOrder->payment->save();
+                            $updatedPayments++;
+                        }
+                    }
+                });
+            }
+        });
+
+    Log::info('orders:auto-cancel-created executed', [
+        'updated_orders' => $updatedOrders,
+        'updated_payments' => $updatedPayments,
+        'cutoff' => $cutoff->toDateTimeString(),
+    ]);
+
+    $this->info("Updated orders: {$updatedOrders}, payments: {$updatedPayments}");
+})->purpose('Auto cancel created orders older than 1 hour');
+
+Schedule::command('orders:auto-cancel-created')
+    ->everyFiveMinutes()
     ->withoutOverlapping();

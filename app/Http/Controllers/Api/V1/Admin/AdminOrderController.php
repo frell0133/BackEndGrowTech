@@ -2,17 +2,72 @@
 
 namespace App\Http\Controllers\Api\V1\Admin;
 
+use App\Enums\OrderStatus;
+use App\Enums\PaymentStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class AdminOrderController extends Controller
 {
     use ApiResponse;
 
+    private function syncExpiredCreatedOrders(): void
+    {
+        $cutoff = now()->subHour();
+
+        Order::query()
+            ->where('status', OrderStatus::CREATED->value)
+            ->where('created_at', '<=', $cutoff)
+            ->select('id')
+            ->orderBy('id')
+            ->chunkById(100, function ($rows) {
+                foreach ($rows as $row) {
+                    DB::transaction(function () use ($row) {
+                        $lockedOrder = Order::query()
+                            ->with('payment')
+                            ->lockForUpdate()
+                            ->find($row->id);
+
+                        if (! $lockedOrder) {
+                            return;
+                        }
+
+                        $currentOrderStatus = (string) ($lockedOrder->status?->value ?? $lockedOrder->status);
+
+                        if ($currentOrderStatus !== OrderStatus::CREATED->value) {
+                            return;
+                        }
+
+                        $lockedOrder->status = OrderStatus::CANCELLED->value;
+                        $lockedOrder->save();
+
+                        $payment = $lockedOrder->payment;
+
+                        if (! $payment) {
+                            return;
+                        }
+
+                        $currentPaymentStatus = (string) ($payment->status?->value ?? $payment->status);
+
+                        if (in_array($currentPaymentStatus, [
+                            PaymentStatus::INITIATED->value,
+                            PaymentStatus::PENDING->value,
+                        ], true)) {
+                            $payment->status = PaymentStatus::EXPIRED->value;
+                            $payment->save();
+                        }
+                    });
+                }
+            });
+    }
+
     public function index(Request $request)
     {
+        $this->syncExpiredCreatedOrders();
+
         $perPage = max(1, min((int) $request->query('per_page', 20), 100));
 
         $status = trim((string) $request->query('status', ''));
