@@ -1,14 +1,14 @@
 <?php
 
-use App\Enums\OrderStatus;
-use App\Enums\PaymentStatus;
-use App\Models\Order;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Schedule;
+use App\Enums\OrderStatus;
+use App\Enums\PaymentStatus;
+use App\Models\Order;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());

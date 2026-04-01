@@ -113,12 +113,12 @@ class AdminOrderController extends Controller
         }
 
         if ($invoice !== '') {
-            $query->where('invoice_number', 'ilike', "%{$invoice}%");
+            $query->where('invoice_number', 'like', "%{$invoice}%");
         }
 
         if ($paymentReference !== '') {
             $query->whereHas('payment', function ($q) use ($paymentReference) {
-                $q->where('external_id', 'ilike', "%{$paymentReference}%");
+                $q->where('external_id', 'like', "%{$paymentReference}%");
             });
         }
 
@@ -133,14 +133,14 @@ class AdminOrderController extends Controller
         if ($product !== '') {
             $query->where(function ($q) use ($product) {
                 $q->whereHas('items', function ($item) use ($product) {
-                    $item->where('product_name', 'ilike', "%{$product}%")
+                    $item->where('product_name', 'like', "%{$product}%")
                         ->orWhereHas('product', function ($prod) use ($product) {
-                            $prod->where('name', 'ilike', "%{$product}%")
-                                ->orWhere('slug', 'ilike', "%{$product}%");
+                            $prod->where('name', 'like', "%{$product}%")
+                                ->orWhere('slug', 'like', "%{$product}%");
                         });
                 })->orWhereHas('product', function ($prod) use ($product) {
-                    $prod->where('name', 'ilike', "%{$product}%")
-                        ->orWhere('slug', 'ilike', "%{$product}%");
+                    $prod->where('name', 'like', "%{$product}%")
+                        ->orWhere('slug', 'like', "%{$product}%");
                 });
             });
         }
@@ -148,11 +148,11 @@ class AdminOrderController extends Controller
         if ($category !== '') {
             $query->where(function ($q) use ($category) {
                 $q->whereHas('items.product.category', function ($cat) use ($category) {
-                    $cat->where('name', 'ilike', "%{$category}%")
-                        ->orWhere('slug', 'ilike', "%{$category}%");
+                    $cat->where('name', 'like', "%{$category}%")
+                        ->orWhere('slug', 'like', "%{$category}%");
                 })->orWhereHas('product.category', function ($cat) use ($category) {
-                    $cat->where('name', 'ilike', "%{$category}%")
-                        ->orWhere('slug', 'ilike', "%{$category}%");
+                    $cat->where('name', 'like', "%{$category}%")
+                        ->orWhere('slug', 'like', "%{$category}%");
                 });
             });
         }
