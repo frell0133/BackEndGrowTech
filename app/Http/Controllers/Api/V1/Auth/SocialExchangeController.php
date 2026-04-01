@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\SystemAccessService;
+use App\Services\TrustedDeviceService;
 use App\Services\TwoFactorService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
@@ -14,12 +15,18 @@ class SocialExchangeController extends Controller
 {
     use ApiResponse;
 
-    public function exchange(Request $request, TwoFactorService $twoFactor, SystemAccessService $access)
-    {
+    public function exchange(
+        Request $request,
+        TwoFactorService $twoFactor,
+        SystemAccessService $access,
+        TrustedDeviceService $trustedDeviceService
+    ) {
         $validated = $request->validate([
             'code' => ['required', 'string'],
+            'remember' => ['nullable', 'boolean'],
         ]);
 
+        $remember = (bool) ($validated['remember'] ?? true);
         $payload = Cache::pull('social_exchange:' . $validated['code']);
 
         if (!$payload || empty($payload['user_id'])) {
@@ -40,8 +47,24 @@ class SocialExchangeController extends Controller
             );
         }
 
+        $trustedDevice = $trustedDeviceService->hasValidTrustedDevice($user, $request);
+
+        if ($trustedDevice) {
+            $token = $user->createToken('api-token-social-trusted-device')->plainTextToken;
+
+            $response = $this->ok([
+                'requires_2fa' => false,
+                'trusted_device' => true,
+                'user' => $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code'),
+                'token' => $token,
+                'token_type' => 'Bearer',
+            ]);
+
+            return $trustedDeviceService->rotateTrustedDevice($response, $trustedDevice, $request);
+        }
+
         $challenge = $twoFactor->startChallenge($user, 'social', [
-            'remember' => false,
+            'remember' => $remember,
             'provider' => (string) ($payload['provider'] ?? 'social'),
             'meta' => [
                 'provider' => (string) ($payload['provider'] ?? 'social'),
@@ -62,6 +85,7 @@ class SocialExchangeController extends Controller
             'channel' => 'email',
             'expires_in' => $challenge['expires_in'],
             'email_hint' => $challenge['email_hint'],
+            'remember' => $remember,
             'user' => $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code'),
         ]);
     }

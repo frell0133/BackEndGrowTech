@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Referral;
 use App\Models\User;
 use App\Services\SystemAccessService;
+use App\Services\TrustedDeviceService;
 use App\Services\TwoFactorService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
@@ -32,8 +33,10 @@ class AuthController extends Controller
             'password' => ['required', 'string', 'min:8', 'confirmed'],
             'referrer_code' => ['nullable', 'string', 'max:50'],
             'referral_code' => ['nullable', 'string', 'max:50'],
+            'remember' => ['nullable', 'boolean'],
         ]);
 
+        $remember = (bool) ($data['remember'] ?? true);
         $rawReferrerCode = (string) ($data['referrer_code'] ?? $data['referral_code'] ?? '');
         $referrerCode = strtoupper(trim($rawReferrerCode));
         $referrer = null;
@@ -71,7 +74,7 @@ class AuthController extends Controller
         });
 
         $challenge = $twoFactor->startChallenge($user, 'register', [
-            'remember' => false,
+            'remember' => $remember,
             'provider' => 'manual',
         ]);
 
@@ -91,6 +94,7 @@ class AuthController extends Controller
             'channel' => 'email',
             'expires_in' => $challenge['expires_in'],
             'email_hint' => $challenge['email_hint'],
+            'remember' => $remember,
             'user' => $this->serializeUser($user),
             'referral' => [
                 'used_referrer_code' => $referrer?->referral_code,
@@ -99,15 +103,19 @@ class AuthController extends Controller
         ], 201);
     }
 
-    public function login(Request $request, TwoFactorService $twoFactor, SystemAccessService $access)
-    {
+    public function login(
+        Request $request,
+        TwoFactorService $twoFactor,
+        SystemAccessService $access,
+        TrustedDeviceService $trustedDeviceService
+    ) {
         $credentials = $request->validate([
             'email' => ['required', 'email'],
             'password' => ['required'],
             'remember' => ['nullable', 'boolean'],
         ]);
 
-        $remember = (bool) ($credentials['remember'] ?? false);
+        $remember = (bool) ($credentials['remember'] ?? true);
 
         $user = User::query()
             ->where('email', strtolower(trim((string) $credentials['email'])))
@@ -123,6 +131,22 @@ class AuthController extends Controller
                 503,
                 ['maintenance' => true, 'key' => 'user_auth_access']
             );
+        }
+
+        $trustedDevice = $trustedDeviceService->hasValidTrustedDevice($user, $request);
+
+        if ($trustedDevice) {
+            $token = $user->createToken('api-token-trusted-device')->plainTextToken;
+
+            $response = $this->ok([
+                'requires_2fa' => false,
+                'trusted_device' => true,
+                'user' => $this->serializeUser($user),
+                'token' => $token,
+                'token_type' => 'Bearer',
+            ]);
+
+            return $trustedDeviceService->rotateTrustedDevice($response, $trustedDevice, $request);
         }
 
         $challenge = $twoFactor->startChallenge($user, 'login', [
@@ -144,11 +168,12 @@ class AuthController extends Controller
             'channel' => 'email',
             'expires_in' => $challenge['expires_in'],
             'email_hint' => $challenge['email_hint'],
+            'remember' => $remember,
             'user' => $this->serializeUser($user),
         ]);
     }
 
-    public function logout(Request $request)
+    public function logout(Request $request, TrustedDeviceService $trustedDeviceService)
     {
         $user = $request->user();
 
@@ -162,7 +187,14 @@ class AuthController extends Controller
             $token->delete();
         }
 
-        return $this->ok(['message' => 'Logged out']);
+        $response = $this->ok(['message' => 'Logged out']);
+
+        if ((bool) $request->boolean('forget_trusted_device')) {
+            $trustedDeviceService->revokeAllForUser($user);
+            return $trustedDeviceService->clearTrustedDeviceCookie($response);
+        }
+
+        return $response;
     }
 
     public function me(Request $request)

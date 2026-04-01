@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1\User;
 
 use App\Http\Controllers\Controller;
 use App\Services\SupabaseStorageService;
+use App\Services\TrustedDeviceService;
 use App\Support\ApiResponse;
 use App\Support\RuntimeCache;
 use Illuminate\Http\Request;
@@ -72,7 +73,7 @@ class UserProfileController extends Controller
         return $this->ok($user->fresh(), ['message' => 'Profil berhasil diperbarui']);
     }
 
-    public function updatePassword(Request $request)
+    public function updatePassword(Request $request, TrustedDeviceService $trustedDeviceService)
     {
         $user = $request->user();
         if (!$user) {
@@ -98,9 +99,13 @@ class UserProfileController extends Controller
 
         $user->password = $data['password'];
         $user->save();
+        $user->tokens()->delete();
+        $trustedDeviceService->revokeAllForUser($user);
         $this->bumpProfileVersion((int) $user->id);
 
-        return $this->ok(['changed' => true], ['message' => 'Password berhasil diubah']);
+        $response = $this->ok(['changed' => true], ['message' => 'Password berhasil diubah']);
+
+        return $trustedDeviceService->clearTrustedDeviceCookie($response);
     }
 
     public function signAvatarUpload(Request $request, SupabaseStorageService $supabase)

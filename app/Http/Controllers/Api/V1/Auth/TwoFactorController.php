@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AuthChallenge;
 use App\Models\User;
 use App\Services\SystemAccessService;
+use App\Services\TrustedDeviceService;
 use App\Services\TwoFactorService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
@@ -14,8 +15,12 @@ class TwoFactorController extends Controller
 {
     use ApiResponse;
 
-    public function verify(Request $request, TwoFactorService $twoFactor, SystemAccessService $access)
-    {
+    public function verify(
+        Request $request,
+        TwoFactorService $twoFactor,
+        SystemAccessService $access,
+        TrustedDeviceService $trustedDeviceService
+    ) {
         $data = $request->validate([
             'challenge_id' => ['required', 'string'],
             'code' => ['required', 'digits:6'],
@@ -60,11 +65,18 @@ class TwoFactorController extends Controller
         $tokenName = $this->tokenNameFromChallenge($challenge);
         $token = $user->createToken($tokenName)->plainTextToken;
 
-        return $this->ok([
+        $response = $this->ok([
             'user' => $this->serializeUser($user->fresh()),
             'token' => $token,
             'token_type' => 'Bearer',
+            'trusted_device' => (bool) $challenge->remember,
         ]);
+
+        if ((bool) $challenge->remember) {
+            return $trustedDeviceService->attachRememberedDevice($response, $user->fresh(), $request);
+        }
+
+        return $trustedDeviceService->clearTrustedDeviceCookie($response);
     }
 
     public function resend(Request $request, TwoFactorService $twoFactor, SystemAccessService $access)

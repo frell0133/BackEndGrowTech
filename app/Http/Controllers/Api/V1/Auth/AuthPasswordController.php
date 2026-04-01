@@ -3,13 +3,14 @@
 namespace App\Http\Controllers\Api\V1\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Services\TrustedDeviceService;
 use App\Support\ApiResponse;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Password;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Auth\Events\PasswordReset;
-use Illuminate\Support\Str;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Str;
 
 class AuthPasswordController extends Controller
 {
@@ -71,7 +72,7 @@ class AuthPasswordController extends Controller
     /**
      * Proses reset password
      */
-    public function reset(Request $request)
+    public function reset(Request $request, TrustedDeviceService $trustedDeviceService)
     {
         $data = $request->validate([
             'email' => ['required', 'email'],
@@ -81,11 +82,14 @@ class AuthPasswordController extends Controller
 
         $status = Password::reset(
             $data,
-            function ($user) use ($data) {
+            function ($user) use ($data, $trustedDeviceService) {
                 $user->forceFill([
                     'password' => Hash::make($data['password']),
                     'remember_token' => Str::random(60),
                 ])->save();
+
+                $trustedDeviceService->revokeAllForUser($user);
+                $user->tokens()->delete();
 
                 event(new PasswordReset($user));
             }
@@ -97,9 +101,11 @@ class AuthPasswordController extends Controller
             ]);
         }
 
-        return $this->ok([
+        $response = $this->ok([
             'status' => $status,
             'message' => 'Password berhasil direset. Silakan login kembali.',
         ]);
+
+        return $trustedDeviceService->clearTrustedDeviceCookie($response);
     }
 }

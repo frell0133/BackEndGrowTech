@@ -106,6 +106,11 @@ class User extends Authenticatable
         return $this->hasOne(\App\Models\Cart::class);
     }
 
+    public function trustedDevices()
+    {
+        return $this->hasMany(TrustedDevice::class);
+    }
+
     protected static function booted(): void
     {
         static::creating(function ($user) {
