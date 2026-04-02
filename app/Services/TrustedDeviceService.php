@@ -7,6 +7,7 @@ use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\Cookie as SymfonyCookie;
 
 class TrustedDeviceService
 {
@@ -39,7 +40,11 @@ class TrustedDeviceService
             return null;
         }
 
-        if ($device->user_agent_hash && !hash_equals((string) $device->user_agent_hash, $this->userAgentHash($request))) {
+        if (
+            $this->shouldBindUserAgent()
+            && $device->user_agent_hash
+            && !hash_equals((string) $device->user_agent_hash, $this->userAgentHash($request))
+        ) {
             return null;
         }
 
@@ -85,17 +90,7 @@ class TrustedDeviceService
 
     public function clearTrustedDeviceCookie(JsonResponse $response): JsonResponse
     {
-        return $response->withCookie(cookie(
-            $this->cookieName(),
-            '',
-            -1,
-            $this->cookiePath(),
-            $this->cookieDomain(),
-            $this->cookieSecure(),
-            true,
-            false,
-            $this->sameSite()
-        ));
+        return $response->withCookie($this->makeCookie('', now()->subYear()));
     }
 
     public function revokeAllForUser(User $user): int
@@ -128,21 +123,34 @@ class TrustedDeviceService
         ];
     }
 
-    private function makeCookie(string $value, $expiresAt)
+    private function makeCookie(string $value, $expiresAt): SymfonyCookie
     {
-        $minutes = max(1, now()->diffInMinutes($expiresAt));
+        $sameSite = $this->normalizedSameSite();
+        $secure = $this->cookieSecure();
+        $partitioned = $this->cookiePartitioned();
 
-        return cookie(
+        if ($partitioned) {
+            $sameSite = SymfonyCookie::SAMESITE_NONE;
+            $secure = true;
+        }
+
+        $cookie = SymfonyCookie::create(
             $this->cookieName(),
             $value,
-            $minutes,
+            $expiresAt,
             $this->cookiePath(),
             $this->cookieDomain(),
-            $this->cookieSecure(),
+            $secure,
             true,
             false,
-            $this->sameSite()
+            $sameSite
         );
+
+        if ($partitioned && method_exists($cookie, 'withPartitioned')) {
+            $cookie = $cookie->withPartitioned(true);
+        }
+
+        return $cookie;
     }
 
     private function cookieName(): string
@@ -167,7 +175,7 @@ class TrustedDeviceService
         $configured = config('trusted_device.secure');
 
         if ($configured !== null) {
-            return (bool) $configured;
+            return filter_var($configured, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? (bool) $configured;
         }
 
         return app()->environment('production');
@@ -176,6 +184,26 @@ class TrustedDeviceService
     private function sameSite(): ?string
     {
         return config('trusted_device.same_site', app()->environment('production') ? 'none' : 'lax');
+    }
+
+    private function normalizedSameSite(): ?string
+    {
+        $value = Str::lower(trim((string) $this->sameSite()));
+
+        return match ($value) {
+            'lax' => SymfonyCookie::SAMESITE_LAX,
+            'strict' => SymfonyCookie::SAMESITE_STRICT,
+            'none' => SymfonyCookie::SAMESITE_NONE,
+            '' => null,
+            default => app()->environment('production')
+                ? SymfonyCookie::SAMESITE_NONE
+                : SymfonyCookie::SAMESITE_LAX,
+        };
+    }
+
+    private function cookiePartitioned(): bool
+    {
+        return (bool) config('trusted_device.partitioned', false);
     }
 
     private function rememberDays(User $user): int
@@ -192,6 +220,11 @@ class TrustedDeviceService
         }
 
         return true;
+    }
+
+    private function shouldBindUserAgent(): bool
+    {
+        return (bool) config('trusted_device.bind_user_agent', true);
     }
 
     private function userAgentHash(Request $request): string
