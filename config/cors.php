@@ -9,13 +9,15 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => [
-        // 'https://frontendgrowtechtesting1-production-dfb9.up.railway.app',
-        'https://frontendgrowtechtesting1-production-6d21.up.railway.app',
-        'http://localhost:3000',
-    ],
+    'allowed_origins' => array_values(array_filter(array_map(
+        'trim',
+        explode(',', (string) env('CORS_ALLOWED_ORIGINS', 'http://localhost:3000'))
+    ))),
 
-    'allowed_origins_patterns' => [],
+    'allowed_origins_patterns' => array_values(array_filter(array_map(
+        'trim',
+        explode(',', (string) env('CORS_ALLOWED_ORIGINS_PATTERNS', ''))
+    ))),
 
     'allowed_headers' => ['*'],
 
@@ -23,6 +25,6 @@ return [
 
     'max_age' => 0,
 
-    'supports_credentials' => True,
+    'supports_credentials' => (bool) env('CORS_SUPPORTS_CREDENTIALS', true),
 
 ];
