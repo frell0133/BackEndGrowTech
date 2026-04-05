@@ -24,5 +24,14 @@ return [
 
     'days' => (int) env('TRUSTED_DEVICE_DAYS', 30),
     'admin_days' => (int) env('TRUSTED_DEVICE_ADMIN_DAYS', 7),
-    'allow_admin' => filter_var(env('TRUSTED_DEVICE_ALLOW_ADMIN', true), FILTER_VALIDATE_BOOLEAN),
+
+    'allow_admin' => filter_var(
+        env('TRUSTED_DEVICE_ALLOW_ADMIN', true),
+        FILTER_VALIDATE_BOOLEAN
+    ),
+
+    'bind_user_agent' => filter_var(
+        env('TRUSTED_DEVICE_BIND_USER_AGENT', true),
+        FILTER_VALIDATE_BOOLEAN
+    ),
 ];

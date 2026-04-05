@@ -142,7 +142,7 @@ class SocialAuthController extends Controller
     private function frontendUrl(): string
     {
         return rtrim(
-            (string) (config('app.frontend_url') ?: env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production-6d21.up.railway.app/')),
+            (string) (config('app.frontend_url') ?: env('FRONTEND_URL', 'http://localhost:3000')),
             '/'
         );
     }

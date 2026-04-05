@@ -123,6 +123,6 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
-    'frontend_url' => env('FRONTEND_URL', 'https://frontendgrowtechtesting1-production-6d21.up.railway.app/'),
+    'frontend_url' => env('FRONTEND_URL', 'http://localhost:3000'),
 
 ];
