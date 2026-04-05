@@ -14,6 +14,8 @@ class AdminProductController extends Controller
 {
     use ApiResponse;
 
+    private const TIER_KEYS = ['member', 'reseller', 'vip'];
+
     private function ensureValidSubCategory(?int $categoryId, ?int $subCategoryId): ?\Illuminate\Http\JsonResponse
     {
         if (!$categoryId || !$subCategoryId) {
@@ -30,6 +32,18 @@ class AdminProductController extends Controller
         }
 
         return null;
+    }
+
+    private function normalizeTierMap(?array $value): array
+    {
+        $normalized = [];
+
+        foreach (self::TIER_KEYS as $key) {
+            $raw = $value[$key] ?? 0;
+            $normalized[$key] = max(0, (int) round((float) $raw));
+        }
+
+        return $normalized;
     }
 
     public function index(Request $request)
@@ -49,6 +63,7 @@ class AdminProductController extends Controller
                 'type',
                 'duration_days',
                 'tier_pricing',
+                'tier_profit',
                 'is_active',
                 'is_published',
                 'rating',
@@ -110,6 +125,13 @@ class AdminProductController extends Controller
             'duration_days' => ['nullable', 'integer', 'min:1'],
             'description' => ['nullable', 'string'],
             'tier_pricing' => ['required', 'array'],
+            'tier_pricing.member' => ['nullable', 'numeric', 'min:0'],
+            'tier_pricing.reseller' => ['nullable', 'numeric', 'min:0'],
+            'tier_pricing.vip' => ['nullable', 'numeric', 'min:0'],
+            'tier_profit' => ['nullable', 'array'],
+            'tier_profit.member' => ['nullable', 'numeric', 'min:0'],
+            'tier_profit.reseller' => ['nullable', 'numeric', 'min:0'],
+            'tier_profit.vip' => ['nullable', 'numeric', 'min:0'],
             'is_active' => ['nullable', 'boolean'],
             'is_published' => ['nullable', 'boolean'],
             'track_stock' => ['nullable', 'boolean'],
@@ -125,6 +147,8 @@ class AdminProductController extends Controller
         $v['stock_min_alert'] = $v['stock_min_alert'] ?? 0;
         $v['rating'] = $v['rating'] ?? 0;
         $v['rating_count'] = $v['rating_count'] ?? 0;
+        $v['tier_pricing'] = $this->normalizeTierMap((array) ($v['tier_pricing'] ?? []));
+        $v['tier_profit'] = $this->normalizeTierMap((array) ($v['tier_profit'] ?? []));
 
         if ($error = $this->ensureValidSubCategory((int) $v['category_id'], (int) $v['subcategory_id'])) {
             return $error;
@@ -157,6 +181,13 @@ class AdminProductController extends Controller
             'duration_days' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'description' => ['sometimes', 'nullable', 'string'],
             'tier_pricing' => ['sometimes', 'array'],
+            'tier_pricing.member' => ['nullable', 'numeric', 'min:0'],
+            'tier_pricing.reseller' => ['nullable', 'numeric', 'min:0'],
+            'tier_pricing.vip' => ['nullable', 'numeric', 'min:0'],
+            'tier_profit' => ['sometimes', 'array'],
+            'tier_profit.member' => ['nullable', 'numeric', 'min:0'],
+            'tier_profit.reseller' => ['nullable', 'numeric', 'min:0'],
+            'tier_profit.vip' => ['nullable', 'numeric', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
             'is_published' => ['sometimes', 'boolean'],
             'track_stock' => ['sometimes', 'boolean'],
@@ -167,6 +198,14 @@ class AdminProductController extends Controller
 
         if (array_key_exists('name', $v) && !array_key_exists('slug', $v)) {
             $v['slug'] = Str::slug($v['name']);
+        }
+
+        if (array_key_exists('tier_pricing', $v)) {
+            $v['tier_pricing'] = $this->normalizeTierMap((array) $v['tier_pricing']);
+        }
+
+        if (array_key_exists('tier_profit', $v)) {
+            $v['tier_profit'] = $this->normalizeTierMap((array) $v['tier_profit']);
         }
 
         $nextCategoryId = array_key_exists('category_id', $v) ? (int) $v['category_id'] : (int) $p->category_id;
