@@ -78,6 +78,7 @@ class CategoryController extends Controller
                     $join->on('pc.subcategory_id', '=', 'subcategories.id');
                 })
                 ->where('subcategories.is_active', true)
+                ->with(['category:id,name,slug'])
                 ->orderBy('subcategories.sort_order')
                 ->orderBy('subcategories.name')
                 ->get();

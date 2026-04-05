@@ -11,6 +11,12 @@ class AdminPermissionController extends Controller
 {
     use ApiResponse;
 
+    private const HIDDEN_CUSTOM_PERMISSION_KEYS = [
+        'manage_stock_proofs',
+        'manage_product_stocks',
+        'manage_licenses',
+    ];
+
     public function index(Request $request)
     {
         $includeProtected = filter_var(
@@ -19,7 +25,11 @@ class AdminPermissionController extends Controller
         );
 
         $items = AdminPermission::query()
-            ->when(!$includeProtected, fn ($q) => $q->where('is_protected', false))
+            ->when(!$includeProtected, function ($query) {
+                $query
+                    ->where('is_protected', false)
+                    ->whereNotIn('key', self::HIDDEN_CUSTOM_PERMISSION_KEYS);
+            })
             ->orderBy('group')
             ->orderBy('key')
             ->get();
