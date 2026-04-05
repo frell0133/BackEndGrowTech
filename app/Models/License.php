@@ -8,6 +8,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class License extends Model
 {
     public const STATUS_AVAILABLE = 'available';
+    public const STATUS_TAKEN = 'taken';
+    public const STATUS_RESERVED = 'reserved';
+    public const STATUS_SOLD = 'sold';
+    public const STATUS_DISABLED = 'disabled';
     public const STATUS_USED = 'used';
     public const STATUS_REVOKED = 'revoked';
 
@@ -23,12 +27,15 @@ class License extends Model
         'reserved_order_id',
         'reserved_at',
         'delivered_at',
+        'order_id',
+        'sold_at',
     ];
 
     protected $casts = [
         'taken_at' => 'datetime',
         'reserved_at' => 'datetime',
         'delivered_at' => 'datetime',
+        'sold_at' => 'datetime',
         'metadata' => 'array',
     ];
 

@@ -131,9 +131,7 @@ class AdminLicenseController extends Controller
         $counts = [
             'available' => (clone $base)->where('status', 'available')->count(),
             'taken' => (clone $base)->where('status', 'taken')->count(),
-            'reserved' => (clone $base)->where('status', 'reserved')->count(),
-            'delivered' => (clone $base)->where('status', 'delivered')->count(),
-            'disabled' => (clone $base)->where('status', 'disabled')->count(),
+            'sold' => (clone $base)->where('status', 'sold')->count(),
             'total' => (clone $base)->count(),
         ];
 
