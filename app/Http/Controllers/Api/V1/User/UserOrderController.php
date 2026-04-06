@@ -1175,8 +1175,8 @@ class UserOrderController extends Controller
         $categories = $itemDetails->pluck('category')->filter()->unique()->values();
 
         $order->setAttribute('payment_reference', $order->payment?->external_id);
-        $order->setAttribute('transaction_datetime', $order->created_at?->format('Y-m-d H:i:s'));
-        $order->setAttribute('payment_datetime', $order->payment?->created_at?->format('Y-m-d H:i:s'));
+        $order->setAttribute('transaction_datetime', $order->created_at?->timezone('Asia/Jakarta')->format(\DateTimeInterface::ATOM));
+        $order->setAttribute('payment_datetime', $order->payment?->created_at?->timezone('Asia/Jakarta')->format(\DateTimeInterface::ATOM));
         $order->setAttribute('total_item_qty', (int) $itemDetails->sum(fn ($row) => (int) ($row['qty'] ?? 0)));
         $order->setAttribute('item_details', $itemDetails->values());
         $order->setAttribute('license_details', $licenseDetails);

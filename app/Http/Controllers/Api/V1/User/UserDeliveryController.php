@@ -111,6 +111,8 @@ class UserDeliveryController extends Controller
             && $firstDelivery->delivery_mode === 'one_time'
             && $firstDelivery->revealed_at === null;
 
+        $productNames = collect($order->items ?? [])->map(fn ($item) => $item->product_name)->filter()->values();
+
         return $this->ok([
             'order_id' => $order->id,
             'total_qty' => $totalQty,
@@ -120,6 +122,8 @@ class UserDeliveryController extends Controller
             'emailed' => $order->deliveries->whereNotNull('emailed_at')->count() > 0,
             'order_status' => (string) ($order->status?->value ?? $order->status),
             'payment_status' => (string) ($order->payment->status?->value ?? $order->payment->status ?? null),
+            'primary_product_name' => $productNames->first() ?? $order->product?->name,
+            'product_names' => $productNames->all(),
         ]);
     }
 

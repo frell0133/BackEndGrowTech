@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Enums\OrderStatus;
+use App\Jobs\SendOrderDeliveryEmailJob;
 use App\Models\Order;
 use App\Services\LedgerService;
 use App\Services\OrderFulfillmentService;
@@ -134,6 +135,19 @@ class ProcessPaidOrderJob implements ShouldQueue
             if ((string) ($order->status?->value ?? $order->status) !== OrderStatus::FULFILLED->value) {
                 $order->status = OrderStatus::FULFILLED->value;
                 $order->save();
+            }
+        }
+
+        $freshForDelivery = $order->fresh(['items', 'deliveries']);
+        $totalQty = $freshForDelivery?->items?->sum('qty') ?: (int) ($freshForDelivery->qty ?? 1);
+        $alreadyEmailed = $freshForDelivery && method_exists($freshForDelivery, 'deliveries')
+            ? $freshForDelivery->deliveries->whereNotNull('emailed_at')->count() > 0
+            : false;
+
+        if ($isFulfilled && $freshForDelivery && $totalQty === 1 && $freshForDelivery->deliveries->count() > 0 && ! $alreadyEmailed) {
+            $mailJob = SendOrderDeliveryEmailJob::dispatch((int) $freshForDelivery->id, 'paid_auto');
+            if (method_exists($mailJob, 'afterCommit')) {
+                $mailJob->afterCommit();
             }
         }
 
