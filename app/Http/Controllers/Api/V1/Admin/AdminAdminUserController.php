@@ -7,6 +7,7 @@ use App\Models\AdminPermission;
 use App\Models\AdminRole;
 use App\Models\User;
 use App\Services\AdminAuditLogger;
+use App\Services\TrustedDeviceService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,6 +15,15 @@ use Illuminate\Support\Facades\DB;
 class AdminAdminUserController extends Controller
 {
     use ApiResponse;
+
+    private function invalidateUserSessions(User $user): void
+    {
+        if (method_exists($user, 'tokens')) {
+            $user->tokens()->delete();
+        }
+
+        app(TrustedDeviceService::class)->revokeAllForUser($user);
+    }
 
     public function index(Request $request)
     {
@@ -67,6 +77,7 @@ class AdminAdminUserController extends Controller
             $user->save();
 
             $user->load('adminRole.permissions');
+            $this->invalidateUserSessions($user);
 
             $audit->log(
                 request: $request,
@@ -118,6 +129,7 @@ class AdminAdminUserController extends Controller
             $user->admin_role_id = null;
             $user->role = 'user';
             $user->save();
+            $this->invalidateUserSessions($user);
 
             $audit->log(
                 request: $request,
@@ -208,6 +220,7 @@ class AdminAdminUserController extends Controller
             $user->admin_role_id = $role->id;
             $user->save();
             $user->load('adminRole.permissions');
+            $this->invalidateUserSessions($user);
 
             $audit->log(
                 request: $request,
@@ -309,6 +322,7 @@ class AdminAdminUserController extends Controller
             $user->admin_role_id = $role->id;
             $user->save();
             $user->load('adminRole.permissions');
+            $this->invalidateUserSessions($user);
 
             $audit->log(
                 request: $request,

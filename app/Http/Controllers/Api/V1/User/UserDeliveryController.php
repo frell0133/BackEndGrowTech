@@ -18,32 +18,7 @@ class UserDeliveryController extends Controller
 {
     use ApiResponse;
 
-    private function revealWindowSeconds(): int
-    {
-        return 30;
-    }
-
-    private function buildRevealWindowPayload(?Delivery $delivery): array
-    {
-        $revealedAt = $delivery?->revealed_at;
-
-        if (!$revealedAt) {
-            return [
-                'reveal_expires_at' => null,
-                'remaining_seconds' => 0,
-                'still_reveal_visible' => false,
-            ];
-        }
-
-        $expiresAt = $revealedAt->copy()->addSeconds($this->revealWindowSeconds());
-        $remaining = max(0, now()->diffInSeconds($expiresAt, false));
-
-        return [
-            'reveal_expires_at' => $expiresAt->toIso8601String(),
-            'remaining_seconds' => $remaining,
-            'still_reveal_visible' => $remaining > 0,
-        ];
-    }
+    private const ONE_TIME_REVEAL_SECONDS = 30;
 
     private function loadOrderForUser(int $id, int $userId): ?Order
     {
@@ -86,6 +61,32 @@ class UserDeliveryController extends Controller
     private function deliveryMailDispatchLockKey(int $orderId): string
     {
         return 'dispatch:delivery:mail:order:' . $orderId;
+    }
+
+
+    private function revealExpiresAt(?Delivery $delivery)
+    {
+        if (!$delivery?->revealed_at) {
+            return null;
+        }
+
+        return $delivery->revealed_at->copy()->addSeconds(self::ONE_TIME_REVEAL_SECONDS);
+    }
+
+    private function revealRemainingSeconds(?Delivery $delivery): int
+    {
+        $expiresAt = $this->revealExpiresAt($delivery);
+
+        if (!$expiresAt) {
+            return 0;
+        }
+
+        return max(0, now()->diffInSeconds($expiresAt, false));
+    }
+
+    private function isRevealStillActive(?Delivery $delivery): bool
+    {
+        return $this->revealRemainingSeconds($delivery) > 0;
     }
 
     private function dispatchDeliveryMailJobOnce(int $orderId, string $trigger, bool $forceResend = false): bool
@@ -131,20 +132,27 @@ class UserDeliveryController extends Controller
         $totalQty = $this->getTotalQty($order);
         $firstDelivery = $order->deliveries->first();
 
-        $canReveal = $this->isPaidOrder($order)
+        $baseRevealAvailable = $this->isPaidOrder($order)
             && ($totalQty === 1)
             && $order->deliveries->count() === 1
             && $firstDelivery
             && $firstDelivery->delivery_mode === 'one_time';
 
+        $revealActive = $this->isRevealStillActive($firstDelivery);
+        $canReveal = $baseRevealAvailable && (!$firstDelivery?->revealed_at || $revealActive);
         $productNames = collect($order->items ?? [])->map(fn ($item) => $item->product_name)->filter()->values();
+        $revealExpiresAt = $this->revealExpiresAt($firstDelivery);
 
-        return $this->ok(array_merge([
+        return $this->ok([
             'order_id' => $order->id,
             'total_qty' => $totalQty,
             'delivery_mode' => $firstDelivery?->delivery_mode ?? ($totalQty === 1 ? 'one_time' : 'email_only'),
             'deliveries_count' => $order->deliveries->count(),
             'can_reveal' => $canReveal,
+            'reveal_active' => $revealActive,
+            'reveal_window_seconds' => self::ONE_TIME_REVEAL_SECONDS,
+            'reveal_remaining_seconds' => $this->revealRemainingSeconds($firstDelivery),
+            'reveal_expires_at' => optional($revealExpiresAt)?->toIso8601String(),
             'is_revealed' => $firstDelivery?->revealed_at !== null,
             'revealed_at' => optional($firstDelivery?->revealed_at)?->toIso8601String(),
             'emailed' => $order->deliveries->whereNotNull('emailed_at')->count() > 0,
@@ -153,7 +161,7 @@ class UserDeliveryController extends Controller
             'payment_status' => (string) ($order->payment->status?->value ?? $order->payment->status ?? null),
             'primary_product_name' => $productNames->first() ?? $order->product?->name,
             'product_names' => $productNames->all(),
-        ], $this->buildRevealWindowPayload($firstDelivery)));
+        ]);
     }
 
     public function reveal(Request $request, $id, OrderFulfillmentService $fulfill)
@@ -198,6 +206,11 @@ class UserDeliveryController extends Controller
             return $this->fail('This order is not one-time reveal', 422);
         }
 
+        if ($delivery->revealed_at && !$this->isRevealStillActive($delivery)) {
+            return $this->fail('One-time view sudah habis', 422, [
+                'reveal_window_seconds' => self::ONE_TIME_REVEAL_SECONDS,
+            ]);
+        }
 
         $result = DB::transaction(function () use ($delivery, $fulfill) {
             $lockedDelivery = Delivery::query()
@@ -231,6 +244,7 @@ class UserDeliveryController extends Controller
             return [
                 'ok' => true,
                 'data' => $fulfill->formatLicense($lockedDelivery->license),
+                'delivery' => $lockedDelivery->fresh(),
             ];
         });
 
@@ -242,26 +256,17 @@ class UserDeliveryController extends Controller
         }
 
         $payload = $result['data'] ?? [];
-        $freshDelivery = Delivery::query()->find($delivery->id);
-        $revealMeta = $this->buildRevealWindowPayload($freshDelivery);
+        $revealedDelivery = $result['delivery'] ?? $delivery;
 
-        if (!($revealMeta['still_reveal_visible'] ?? false)) {
-            return $this->ok(array_merge([
-                'message' => 'Reveal window expired',
-                'product_name' => $payload['product_name'] ?? null,
-                'license_key' => null,
-                'payload' => null,
-                'blurred' => true,
-            ], $revealMeta));
-        }
-
-        return $this->ok(array_merge([
+        return $this->ok([
             'message' => 'Revealed (one-time)',
             'product_name' => $payload['product_name'] ?? null,
             'license_key' => $payload['license_key'] ?? null,
             'payload' => $payload['payload'] ?? null,
-            'blurred' => false,
-        ], $revealMeta));
+            'reveal_window_seconds' => self::ONE_TIME_REVEAL_SECONDS,
+            'reveal_remaining_seconds' => $this->revealRemainingSeconds($revealedDelivery),
+            'reveal_expires_at' => optional($this->revealExpiresAt($revealedDelivery))?->toIso8601String(),
+        ]);
     }
 
     /**

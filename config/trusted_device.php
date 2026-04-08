@@ -23,7 +23,7 @@ return [
     'same_site' => strtolower((string) $trustedDeviceSameSite),
 
     'days' => (int) env('TRUSTED_DEVICE_DAYS', 30),
-    'admin_days' => (int) env('TRUSTED_DEVICE_ADMIN_DAYS', 7),
+    'admin_days' => (int) env('TRUSTED_DEVICE_ADMIN_DAYS', 30),
 
     'allow_admin' => filter_var(
         env('TRUSTED_DEVICE_ALLOW_ADMIN', true),
@@ -32,6 +32,11 @@ return [
 
     'bind_user_agent' => filter_var(
         env('TRUSTED_DEVICE_BIND_USER_AGENT', true),
+        FILTER_VALIDATE_BOOLEAN
+    ),
+
+    'ua_loose_match' => filter_var(
+        env('TRUSTED_DEVICE_UA_LOOSE_MATCH', true),
         FILTER_VALIDATE_BOOLEAN
     ),
 ];

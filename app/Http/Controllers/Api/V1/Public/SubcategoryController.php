@@ -42,18 +42,20 @@ class SubcategoryController extends Controller
                     'subcategories.provider',
                     'subcategories.image_url',
                     'subcategories.image_path',
+                    'subcategories.sort_order',
                     'subcategories.is_active',
                     DB::raw('subcategories.image_url as image'),
-                    DB::raw('pc.products_count as products_count'),
+                    DB::raw('COALESCE(pc.products_count, 0) as products_count'),
                 ])
-                ->joinSub($productCounts, 'pc', function ($join) {
+                ->leftJoinSub($productCounts, 'pc', function ($join) {
                     $join->on('pc.subcategory_id', '=', 'subcategories.id');
                 })
                 ->where('subcategories.is_active', true)
                 ->when($categoryId !== 'all' && $categoryId !== null && $categoryId !== '', function ($q) use ($categoryId) {
                     $q->where('subcategories.category_id', $categoryId);
                 })
-                ->with(['category:id,name,slug'])
+                ->whereHas('category', fn ($q) => $q->where('is_active', true))
+                ->with(['category:id,name,slug,is_active'])
                 ->orderBy('subcategories.sort_order')
                 ->orderBy('subcategories.name')
                 ->get();
@@ -82,7 +84,7 @@ class SubcategoryController extends Controller
                     $q->where('id', $idOrSlug)->orWhere('slug', $idOrSlug);
                 })
                 ->where('is_active', true)
-                ->with(['category:id,name,slug'])
+                ->with(['category:id,name,slug,is_active'])
                 ->first();
         });
 

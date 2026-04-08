@@ -39,8 +39,17 @@ class TrustedDeviceService
             return null;
         }
 
-        if ($this->shouldBindUserAgent() && $device->user_agent_hash && !hash_equals((string) $device->user_agent_hash, $this->userAgentHash($request))) {
-            return null;
+        if ($this->shouldBindUserAgent()) {
+            $currentHash = $this->userAgentHash($request);
+            $matches = $device->user_agent_hash && hash_equals((string) $device->user_agent_hash, $currentHash);
+
+            if (!$matches && $this->allowLooseUserAgentMatch()) {
+                $matches = $this->normalizedUserAgentFingerprint((string) $device->user_agent) === $this->normalizedUserAgentFingerprint((string) $request->userAgent());
+            }
+
+            if (!$matches) {
+                return null;
+            }
         }
 
         return $device;
@@ -183,6 +192,11 @@ class TrustedDeviceService
         return (bool) config('trusted_device.bind_user_agent', true);
     }
 
+    private function allowLooseUserAgentMatch(): bool
+    {
+        return (bool) config('trusted_device.ua_loose_match', true);
+    }
+
     private function rememberDays(User $user): int
     {
         return $user->role === 'admin'
@@ -206,12 +220,23 @@ class TrustedDeviceService
 
     private function normalizeUserAgent(string $userAgent): string
     {
-        $normalized = Str::lower(trim($userAgent));
-        $normalized = preg_replace('/\/[0-9._]+/', '', $normalized) ?: $normalized;
-        $normalized = preg_replace('/(version|chrome|crios|firefox|fxios|safari|edg|opr|opera)/', '$1', $normalized) ?: $normalized;
-        $normalized = preg_replace('/\s+/', ' ', $normalized) ?: $normalized;
+        return Str::lower(trim($userAgent));
+    }
 
-        return trim($normalized);
+    private function normalizedUserAgentFingerprint(string $userAgent): string
+    {
+        $normalized = $this->normalizeUserAgent($userAgent);
+
+        $normalized = preg_replace('/version\/[\d._]+/i', 'version', $normalized);
+        $normalized = preg_replace('/chrome\/[\d._]+/i', 'chrome', $normalized);
+        $normalized = preg_replace('/safari\/[\d._]+/i', 'safari', $normalized);
+        $normalized = preg_replace('/firefox\/[\d._]+/i', 'firefox', $normalized);
+        $normalized = preg_replace('/edg(?:e|ios|a)?\/[\d._]+/i', 'edge', $normalized);
+        $normalized = preg_replace('/opr\/[\d._]+/i', 'opera', $normalized);
+        $normalized = preg_replace('/\bmobile\b/i', 'mobile', $normalized);
+        $normalized = preg_replace('/\s+/', ' ', $normalized ?? '');
+
+        return trim((string) $normalized);
     }
 
     private function resolveDeviceName(Request $request): ?string

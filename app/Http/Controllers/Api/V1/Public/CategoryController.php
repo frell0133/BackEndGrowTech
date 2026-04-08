@@ -34,10 +34,12 @@ class CategoryController extends Controller
                     'categories.id',
                     'categories.name',
                     'categories.slug',
+                    'categories.redirect_link',
+                    'categories.sort_order',
                     'categories.is_active',
-                    DB::raw('pc.products_count as products_count'),
+                    DB::raw('COALESCE(pc.products_count, 0) as products_count'),
                 ])
-                ->joinSub($productCounts, 'pc', function ($join) {
+                ->leftJoinSub($productCounts, 'pc', function ($join) {
                     $join->on('pc.category_id', '=', 'categories.id');
                 })
                 ->where('categories.is_active', true)
@@ -82,14 +84,15 @@ class CategoryController extends Controller
                     'subcategories.provider',
                     'subcategories.image_url',
                     'subcategories.image_path',
+                    'subcategories.sort_order',
                     'subcategories.is_active',
-                    DB::raw('pc.products_count as products_count'),
+                    DB::raw('COALESCE(pc.products_count, 0) as products_count'),
                 ])
-                ->joinSub($productCounts, 'pc', function ($join) {
+                ->leftJoinSub($productCounts, 'pc', function ($join) {
                     $join->on('pc.subcategory_id', '=', 'subcategories.id');
                 })
                 ->where('subcategories.is_active', true)
-                ->with(['category:id,name,slug'])
+                ->with(['category:id,name,slug,is_active'])
                 ->orderBy('subcategories.sort_order')
                 ->orderBy('subcategories.name')
                 ->get();

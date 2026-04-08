@@ -119,12 +119,17 @@ class UserWithdrawController extends Controller
 
         $available = max(0, $commissionBalance - $pendingTotal);
 
+        $settings = ReferralSetting::current();
+        $minWd = (int) ($settings->min_withdrawal ?? 0);
+
         return $this->ok([
             'commission_balance' => $commissionBalance,
             'pending_total' => $pendingTotal,
             'available' => $available,
             'currency' => $commissionWallet->currency, // biasanya IDR_COMMISSION
             'wallet_id' => $commissionWallet->id,
+            'min_withdrawal' => $minWd,
+            'can_withdraw' => $minWd <= 0 ? $available > 0 : $available >= $minWd,
         ]);
     }
 }

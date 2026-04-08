@@ -105,12 +105,10 @@ class ContentController extends Controller
 
     public function page(string $slug)
     {
-        $page = PublicCache::rememberContent('page:' . $slug, 300, function () use ($slug) {
-            return Page::query()
-                ->where('slug', $slug)
-                ->where('is_published', true)
-                ->first();
-        });
+        $page = Page::query()
+            ->where('slug', $slug)
+            ->where('is_published', true)
+            ->first();
 
         if (!$page) {
             return $this->fail('Page tidak ditemukan', 404);
