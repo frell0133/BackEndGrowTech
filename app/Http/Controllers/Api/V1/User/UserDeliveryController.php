@@ -18,6 +18,33 @@ class UserDeliveryController extends Controller
 {
     use ApiResponse;
 
+    private function revealWindowSeconds(): int
+    {
+        return 30;
+    }
+
+    private function buildRevealWindowPayload(?Delivery $delivery): array
+    {
+        $revealedAt = $delivery?->revealed_at;
+
+        if (!$revealedAt) {
+            return [
+                'reveal_expires_at' => null,
+                'remaining_seconds' => 0,
+                'still_reveal_visible' => false,
+            ];
+        }
+
+        $expiresAt = $revealedAt->copy()->addSeconds($this->revealWindowSeconds());
+        $remaining = max(0, now()->diffInSeconds($expiresAt, false));
+
+        return [
+            'reveal_expires_at' => $expiresAt->toIso8601String(),
+            'remaining_seconds' => $remaining,
+            'still_reveal_visible' => $remaining > 0,
+        ];
+    }
+
     private function loadOrderForUser(int $id, int $userId): ?Order
     {
         return Order::query()
@@ -112,7 +139,7 @@ class UserDeliveryController extends Controller
 
         $productNames = collect($order->items ?? [])->map(fn ($item) => $item->product_name)->filter()->values();
 
-        return $this->ok([
+        return $this->ok(array_merge([
             'order_id' => $order->id,
             'total_qty' => $totalQty,
             'delivery_mode' => $firstDelivery?->delivery_mode ?? ($totalQty === 1 ? 'one_time' : 'email_only'),
@@ -126,7 +153,7 @@ class UserDeliveryController extends Controller
             'payment_status' => (string) ($order->payment->status?->value ?? $order->payment->status ?? null),
             'primary_product_name' => $productNames->first() ?? $order->product?->name,
             'product_names' => $productNames->all(),
-        ]);
+        ], $this->buildRevealWindowPayload($firstDelivery)));
     }
 
     public function reveal(Request $request, $id, OrderFulfillmentService $fulfill)
@@ -215,13 +242,26 @@ class UserDeliveryController extends Controller
         }
 
         $payload = $result['data'] ?? [];
+        $freshDelivery = Delivery::query()->find($delivery->id);
+        $revealMeta = $this->buildRevealWindowPayload($freshDelivery);
 
-        return $this->ok([
+        if (!($revealMeta['still_reveal_visible'] ?? false)) {
+            return $this->ok(array_merge([
+                'message' => 'Reveal window expired',
+                'product_name' => $payload['product_name'] ?? null,
+                'license_key' => null,
+                'payload' => null,
+                'blurred' => true,
+            ], $revealMeta));
+        }
+
+        return $this->ok(array_merge([
             'message' => 'Revealed (one-time)',
             'product_name' => $payload['product_name'] ?? null,
             'license_key' => $payload['license_key'] ?? null,
             'payload' => $payload['payload'] ?? null,
-        ]);
+            'blurred' => false,
+        ], $revealMeta));
     }
 
     /**

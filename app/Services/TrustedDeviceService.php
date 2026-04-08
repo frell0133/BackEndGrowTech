@@ -206,7 +206,12 @@ class TrustedDeviceService
 
     private function normalizeUserAgent(string $userAgent): string
     {
-        return Str::lower(trim($userAgent));
+        $normalized = Str::lower(trim($userAgent));
+        $normalized = preg_replace('/\/[0-9._]+/', '', $normalized) ?: $normalized;
+        $normalized = preg_replace('/(version|chrome|crios|firefox|fxios|safari|edg|opr|opera)/', '$1', $normalized) ?: $normalized;
+        $normalized = preg_replace('/\s+/', ' ', $normalized) ?: $normalized;
+
+        return trim($normalized);
     }
 
     private function resolveDeviceName(Request $request): ?string
