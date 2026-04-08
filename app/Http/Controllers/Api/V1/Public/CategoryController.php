@@ -17,10 +17,17 @@ class CategoryController extends Controller
     {
         $data = PublicCache::rememberCatalogTaxonomy('categories:index', 900, function () {
             $productCounts = Product::query()
-                ->selectRaw('category_id, COUNT(*) as products_count')
-                ->where('is_active', true)
-                ->where('is_published', true)
-                ->groupBy('category_id');
+                ->join('categories', 'categories.id', '=', 'products.category_id')
+                ->leftJoin('subcategories', 'subcategories.id', '=', 'products.subcategory_id')
+                ->selectRaw('products.category_id, COUNT(*) as products_count')
+                ->where('products.is_active', true)
+                ->where('products.is_published', true)
+                ->where('categories.is_active', true)
+                ->where(function ($q) {
+                    $q->whereNull('products.subcategory_id')
+                        ->orWhere('subcategories.is_active', true);
+                })
+                ->groupBy('products.category_id');
 
             return Category::query()
                 ->select([
@@ -55,11 +62,15 @@ class CategoryController extends Controller
                 ->firstOrFail();
 
             $productCounts = Product::query()
-                ->selectRaw('subcategory_id, COUNT(*) as products_count')
-                ->where('category_id', $category->id)
-                ->where('is_active', true)
-                ->where('is_published', true)
-                ->groupBy('subcategory_id');
+                ->join('categories', 'categories.id', '=', 'products.category_id')
+                ->join('subcategories', 'subcategories.id', '=', 'products.subcategory_id')
+                ->selectRaw('products.subcategory_id, COUNT(*) as products_count')
+                ->where('products.category_id', $category->id)
+                ->where('products.is_active', true)
+                ->where('products.is_published', true)
+                ->where('categories.is_active', true)
+                ->where('subcategories.is_active', true)
+                ->groupBy('products.subcategory_id');
 
             $subcategories = $category->subcategories()
                 ->select([

@@ -108,8 +108,7 @@ class UserDeliveryController extends Controller
             && ($totalQty === 1)
             && $order->deliveries->count() === 1
             && $firstDelivery
-            && $firstDelivery->delivery_mode === 'one_time'
-            && $firstDelivery->revealed_at === null;
+            && $firstDelivery->delivery_mode === 'one_time';
 
         $productNames = collect($order->items ?? [])->map(fn ($item) => $item->product_name)->filter()->values();
 
@@ -172,9 +171,6 @@ class UserDeliveryController extends Controller
             return $this->fail('This order is not one-time reveal', 422);
         }
 
-        if ($delivery->revealed_at) {
-            return $this->fail('Already revealed', 409);
-        }
 
         $result = DB::transaction(function () use ($delivery, $fulfill) {
             $lockedDelivery = Delivery::query()
@@ -199,17 +195,11 @@ class UserDeliveryController extends Controller
                 ];
             }
 
-            if ($lockedDelivery->revealed_at) {
-                return [
-                    'ok' => false,
-                    'status' => 409,
-                    'message' => 'Already revealed',
-                ];
+            if (!$lockedDelivery->revealed_at) {
+                $lockedDelivery->revealed_at = now();
+                $lockedDelivery->reveal_count = (int) ($lockedDelivery->reveal_count ?? 0) + 1;
+                $lockedDelivery->save();
             }
-
-            $lockedDelivery->revealed_at = now();
-            $lockedDelivery->reveal_count = (int) ($lockedDelivery->reveal_count ?? 0) + 1;
-            $lockedDelivery->save();
 
             return [
                 'ok' => true,

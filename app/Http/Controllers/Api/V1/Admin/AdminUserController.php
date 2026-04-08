@@ -11,6 +11,7 @@ use App\Models\LedgerEntry;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Hash;
+use App\Services\TrustedDeviceService;
 
 class AdminUserController extends Controller
 {
@@ -131,7 +132,21 @@ class AdminUserController extends Controller
             }
         }
 
+        $originalEmail = (string) $user->email;
+        $originalRole = (string) $user->role;
+
         $user->fill($validated)->save();
+
+        $emailChanged = isset($validated['email']) && strtolower((string) $validated['email']) !== strtolower($originalEmail);
+        $roleChanged = isset($validated['role']) && (string) $validated['role'] !== $originalRole;
+
+        if ($emailChanged || $roleChanged) {
+            if (method_exists($user, 'tokens')) {
+                $user->tokens()->delete();
+            }
+
+            app(TrustedDeviceService::class)->revokeAllForUser($user);
+        }
 
         return $this->ok($user, ['message' => 'User berhasil diupdate']);
     }

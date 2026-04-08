@@ -20,11 +20,15 @@ class SubcategoryController extends Controller
 
         $data = PublicCache::rememberCatalogTaxonomy('subcategories:index:' . $categoryId, 900, function () use ($categoryId) {
             $productCounts = Product::query()
-                ->selectRaw('subcategory_id, COUNT(*) as products_count')
-                ->where('is_active', true)
-                ->where('is_published', true)
+                ->join('categories', 'categories.id', '=', 'products.category_id')
+                ->join('subcategories', 'subcategories.id', '=', 'products.subcategory_id')
+                ->selectRaw('products.subcategory_id, COUNT(*) as products_count')
+                ->where('products.is_active', true)
+                ->where('products.is_published', true)
+                ->where('categories.is_active', true)
+                ->where('subcategories.is_active', true)
                 ->when($categoryId !== 'all' && $categoryId !== null && $categoryId !== '', function ($query) use ($categoryId) {
-                    $query->where('category_id', $categoryId);
+                    $query->where('products.category_id', $categoryId);
                 })
                 ->groupBy('subcategory_id');
 
