@@ -90,6 +90,72 @@ class UserCartController extends Controller
     /**
      * Ambil harga unit berdasarkan tier user (member/reseller/vip).
      */
+    private function buildCartResponseData($user, ?Cart $cart = null): array
+    {
+        $cart = $cart ?: $this->cartForUser((int) $user->id);
+
+        $tierKey = (string) ($user->tier ?? 'member');
+        $paymentSettings = $this->getPaymentSettings();
+        $taxPercent = (int) ($paymentSettings['tax_percent'] ?? 0);
+        $feePercent = (float) ($paymentSettings['gateway_fee_percent'] ?? 0.0);
+
+        $cartItems = CartItem::query()
+            ->where('cart_id', $cart->id)
+            ->with([
+                'product:id,category_id,subcategory_id,name,slug,type,description,tier_pricing,duration_days,price,is_active,is_published,rating,rating_count,purchases_count,popularity_score',
+                'product.category:id,name,slug',
+                'product.subcategory:id,category_id,name,description,slug,provider,image_url,image_path',
+            ])
+            ->get();
+
+        $stockMap = $this->getAvailableStockMap(
+            $cartItems->pluck('product_id')->filter()->unique()->map(fn ($id) => (int) $id)->values()->all()
+        );
+
+        $items = $cartItems->map(function (CartItem $item) use ($tierKey, $stockMap) {
+            $product = $item->product;
+            $stock = (int) ($stockMap[(int) $item->product_id] ?? 0);
+            $qty = (int) ($item->qty ?? 1);
+
+            $unitPrice = $product ? $this->resolveUnitPrice($product, $tierKey) : 0;
+            $canBuy = (bool) ($product?->is_active && $product?->is_published && $stock > 0);
+
+            return [
+                'id' => (int) $item->id,
+                'product_id' => (int) $item->product_id,
+                'qty' => $qty,
+                'unit_price' => (int) $unitPrice,
+                'line_subtotal' => (int) $unitPrice * $qty,
+                'product' => $product,
+                'stock_available' => $stock,
+                'can_buy' => $canBuy,
+            ];
+        })->values();
+
+        $subtotal = (float) $items->sum('line_subtotal');
+        $discountTotal = 0.0;
+        $taxAmount = $taxPercent > 0 ? round($subtotal * ($taxPercent / 100), 2) : 0.0;
+        $total = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
+        $gatewayFeeAmount = $feePercent > 0 ? round($total * ($feePercent / 100), 2) : 0.0;
+        $cartCount = (int) $items->sum(fn ($item) => (int) ($item['qty'] ?? 0));
+
+        return [
+            'items' => $items,
+            'count' => $cartCount,
+            'summary' => [
+                'subtotal' => $subtotal,
+                'tier' => $tierKey,
+                'discount_total' => $discountTotal,
+                'tax_percent' => $taxPercent,
+                'tax_amount' => $taxAmount,
+                'total' => $total,
+                'gateway_fee_percent' => (float) $feePercent,
+                'gateway_fee_amount' => (float) $gatewayFeeAmount,
+                'total_payable_gateway' => (float) ($total + $gatewayFeeAmount),
+            ],
+        ];
+    }
+
     private function resolveUnitPrice(Product $product, string $tierKey): int
     {
         $tier = (array) ($product->tier_pricing ?? []);
@@ -198,72 +264,7 @@ class UserCartController extends Controller
         $user = $this->requireUser($request);
         if ($user instanceof \Illuminate\Http\JsonResponse) return $user;
 
-        $cart = $this->cartForUser((int) $user->id);
-
-        $tierKey = (string) ($user->tier ?? 'member');
-        $paymentSettings = $this->getPaymentSettings();
-        $taxPercent = (int) ($paymentSettings['tax_percent'] ?? 0);
-        $feePercent = (float) ($paymentSettings['gateway_fee_percent'] ?? 0.0);
-
-        $cartItems = CartItem::query()
-            ->where('cart_id', $cart->id)
-            ->with([
-                'product:id,category_id,subcategory_id,name,slug,type,description,tier_pricing,duration_days,price,is_active,is_published,rating,rating_count,purchases_count,popularity_score',
-                'product.category:id,name,slug',
-                'product.subcategory:id,category_id,name,description,slug,provider,image_url,image_path',
-            ])
-            ->get();
-
-        $stockMap = $this->getAvailableStockMap(
-            $cartItems->pluck('product_id')->filter()->unique()->map(fn ($id) => (int) $id)->values()->all()
-        );
-
-        $items = $cartItems->map(function (CartItem $item) use ($tierKey, $stockMap) {
-            $product = $item->product;
-            $stock = (int) ($stockMap[(int) $item->product_id] ?? 0);
-            $qty = (int) ($item->qty ?? 1);
-
-            $unitPrice = $product ? $this->resolveUnitPrice($product, $tierKey) : 0;
-            $canBuy = (bool) ($product?->is_active && $product?->is_published && $stock > 0);
-
-            return [
-                'id' => $item->id,
-                'qty' => $qty,
-                'unit_price' => (int) $unitPrice,
-                'line_subtotal' => (int) $unitPrice * $qty,
-                'product' => $product,
-                'stock_available' => $stock,
-                'can_buy' => $canBuy,
-            ];
-        });
-
-        $subtotal = (float) $items->sum('line_subtotal');
-        $discountTotal = 0.0;
-
-        $taxAmount = $taxPercent > 0
-            ? round($subtotal * ($taxPercent / 100), 2)
-            : 0.0;
-
-        $total = (float) max(0, ($subtotal + $taxAmount) - $discountTotal);
-
-        $gatewayFeeAmount = $feePercent > 0
-            ? round($total * ($feePercent / 100), 2)
-            : 0.0;
-
-        return $this->ok([
-            'items' => $items,
-            'summary' => [
-                'subtotal' => $subtotal,
-                'tier' => $tierKey,
-                'discount_total' => $discountTotal,
-                'tax_percent' => $taxPercent,
-                'tax_amount' => $taxAmount,
-                'total' => $total,
-                'gateway_fee_percent' => (float) $feePercent,
-                'gateway_fee_amount' => (float) $gatewayFeeAmount,
-                'total_payable_gateway' => (float) ($total + $gatewayFeeAmount),
-            ],
-        ]);
+        return $this->ok($this->buildCartResponseData($user));
     }
 
     public function add(Request $request)
@@ -316,7 +317,10 @@ class UserCartController extends Controller
             ]);
         }
 
-        return $this->ok(['message' => 'Added to cart', 'item' => $item]);
+        return $this->ok(array_merge([
+            'message' => 'Added to cart',
+            'item' => $item->fresh(),
+        ], $this->buildCartResponseData($user, $cart)));
     }
 
     public function update(Request $request, int $id)
@@ -349,7 +353,10 @@ class UserCartController extends Controller
 
         $item->update(['qty' => $requestedQty]);
 
-        return $this->ok(['message' => 'Cart updated', 'item' => $item]);
+        return $this->ok(array_merge([
+            'message' => 'Cart updated',
+            'item' => $item->fresh(),
+        ], $this->buildCartResponseData($user, $cart)));
     }
 
     public function remove(Request $request, int $id)
@@ -366,7 +373,10 @@ class UserCartController extends Controller
 
         $item->delete();
 
-        return $this->ok(['message' => 'Removed']);
+        return $this->ok(array_merge([
+            'message' => 'Removed',
+            'removed_item_id' => $id,
+        ], $this->buildCartResponseData($user, $cart)));
     }
 
     public function checkout(Request $request)
