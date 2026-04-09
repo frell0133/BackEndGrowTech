@@ -16,10 +16,25 @@ class AdminProductController extends Controller
 
     private const TIER_KEYS = ['member', 'reseller', 'vip'];
 
+    private function normalizeNullableId(mixed $value): ?int
+    {
+        if ($value === null || $value === '' || $value === 0 || $value === '0') {
+            return null;
+        }
+
+        $normalized = (int) $value;
+
+        return $normalized > 0 ? $normalized : null;
+    }
+
     private function ensureValidSubCategory(?int $categoryId, ?int $subCategoryId): ?\Illuminate\Http\JsonResponse
     {
-        if (!$categoryId || !$subCategoryId) {
+        if (!$subCategoryId) {
             return null;
+        }
+
+        if (!$categoryId) {
+            return $this->fail('Kategori wajib dipilih saat subkategori diisi', 422);
         }
 
         $matched = SubCategory::query()
@@ -118,7 +133,7 @@ class AdminProductController extends Controller
     {
         $v = $request->validate([
             'category_id' => ['required', 'exists:categories,id'],
-            'subcategory_id' => ['required', 'exists:subcategories,id'],
+            'subcategory_id' => ['nullable', 'exists:subcategories,id'],
             'name' => ['required', 'string', 'max:180'],
             'slug' => ['nullable', 'string', 'max:180', 'unique:products,slug'],
             'type' => ['required', 'string', 'max:60'],
@@ -141,6 +156,7 @@ class AdminProductController extends Controller
         ]);
 
         $v['slug'] = $v['slug'] ?? Str::slug($v['name']);
+        $v['subcategory_id'] = $this->normalizeNullableId($v['subcategory_id'] ?? null);
         $v['is_active'] = $v['is_active'] ?? true;
         $v['is_published'] = $v['is_published'] ?? false;
         $v['track_stock'] = $v['track_stock'] ?? true;
@@ -150,7 +166,7 @@ class AdminProductController extends Controller
         $v['tier_pricing'] = $this->normalizeTierMap((array) ($v['tier_pricing'] ?? []));
         $v['tier_profit'] = $this->normalizeTierMap((array) ($v['tier_profit'] ?? []));
 
-        if ($error = $this->ensureValidSubCategory((int) $v['category_id'], (int) $v['subcategory_id'])) {
+        if ($error = $this->ensureValidSubCategory((int) $v['category_id'], $v['subcategory_id'])) {
             return $error;
         }
 
@@ -174,7 +190,7 @@ class AdminProductController extends Controller
 
         $v = $request->validate([
             'category_id' => ['sometimes', 'exists:categories,id'],
-            'subcategory_id' => ['sometimes', 'exists:subcategories,id'],
+            'subcategory_id' => ['sometimes', 'nullable', 'exists:subcategories,id'],
             'name' => ['sometimes', 'string', 'max:180'],
             'slug' => ['sometimes', 'string', 'max:180', 'unique:products,slug,' . $p->id],
             'type' => ['sometimes', 'string', 'max:60'],
@@ -200,6 +216,10 @@ class AdminProductController extends Controller
             $v['slug'] = Str::slug($v['name']);
         }
 
+        if (array_key_exists('subcategory_id', $v)) {
+            $v['subcategory_id'] = $this->normalizeNullableId($v['subcategory_id']);
+        }
+
         if (array_key_exists('tier_pricing', $v)) {
             $v['tier_pricing'] = $this->normalizeTierMap((array) $v['tier_pricing']);
         }
@@ -209,7 +229,9 @@ class AdminProductController extends Controller
         }
 
         $nextCategoryId = array_key_exists('category_id', $v) ? (int) $v['category_id'] : (int) $p->category_id;
-        $nextSubCategoryId = array_key_exists('subcategory_id', $v) ? (int) $v['subcategory_id'] : (int) $p->subcategory_id;
+        $nextSubCategoryId = array_key_exists('subcategory_id', $v)
+            ? $this->normalizeNullableId($v['subcategory_id'])
+            : $this->normalizeNullableId($p->subcategory_id);
 
         if ($error = $this->ensureValidSubCategory($nextCategoryId, $nextSubCategoryId)) {
             return $error;
@@ -262,6 +284,9 @@ class AdminProductController extends Controller
         PublicCache::bumpCatalog();
         PublicCache::bumpDashboard();
 
-        return $this->ok(['deleted' => false, 'deactivated' => true]);
+        return $this->ok([
+            'deleted' => true,
+            'soft_disabled' => true,
+        ]);
     }
 }

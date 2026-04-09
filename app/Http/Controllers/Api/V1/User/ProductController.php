@@ -3,13 +3,11 @@
 namespace App\Http\Controllers\Api\V1\User;
 
 use App\Http\Controllers\Controller;
-use App\Models\Favorite;
 use App\Models\Product;
 use App\Services\ProductAvailabilityService;
 use App\Support\ApiResponse;
 use App\Support\PublicCache;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class ProductController extends Controller
 {
@@ -18,6 +16,7 @@ class ProductController extends Controller
     private const INDEX_CACHE_TTL = 300;
     private const SHOW_CACHE_TTL = 300;
     private const INDEX_MAX_PER_PAGE = 30;
+    private const TIER_KEYS = ['member', 'reseller', 'vip'];
 
     private function normalizeSort(string $sort): string
     {
@@ -66,13 +65,70 @@ class ProductController extends Controller
             });
     }
 
+    private function normalizeTierMap(mixed $value): array
+    {
+        $rawMap = is_array($value) ? $value : [];
+        $normalized = [];
+
+        foreach (self::TIER_KEYS as $key) {
+            $normalized[$key] = max(0, (int) round((float) ($rawMap[$key] ?? 0)));
+        }
+
+        return $normalized;
+    }
+
+    private function buildTierFinalPricing(array $tierPricing, array $tierProfit): array
+    {
+        $final = [];
+
+        foreach (self::TIER_KEYS as $key) {
+            $final[$key] = (int) (($tierPricing[$key] ?? 0) + ($tierProfit[$key] ?? 0));
+        }
+
+        return $final;
+    }
+
+    private function presentProduct(mixed $product, ?int $availableStock = null): array
+    {
+        $data = is_array($product) ? $product : $product->toArray();
+
+        $tierPricing = $this->normalizeTierMap($data['tier_pricing'] ?? []);
+        $tierProfit = $this->normalizeTierMap($data['tier_profit'] ?? []);
+        $tierFinalPricing = $this->buildTierFinalPricing($tierPricing, $tierProfit);
+
+        $memberBase = (int) ($tierPricing['member'] ?? 0);
+        $memberProfit = (int) ($tierProfit['member'] ?? 0);
+        $memberFinal = (int) ($tierFinalPricing['member'] ?? ($memberBase + $memberProfit));
+
+        $favoritesCount = (int) ($data['favorites_count'] ?? 0);
+        $purchasesCount = (int) ($data['purchases_count'] ?? 0);
+        $stock = $availableStock ?? (int) ($data['available_stock'] ?? 0);
+
+        $data['tier_pricing'] = $tierPricing;
+        $data['tier_profit'] = $tierProfit;
+        $data['tier_final_pricing'] = $tierFinalPricing;
+        $data['display_price'] = $memberFinal;
+        $data['display_price_breakdown'] = [
+            'base_price' => $memberBase,
+            'profit' => $memberProfit,
+            'final_price' => $memberFinal,
+        ];
+        $data['favorites_count'] = $favoritesCount;
+        $data['available_stock'] = (int) $stock;
+        $data['stock'] = (int) $stock;
+        $data['sold'] = $purchasesCount;
+        $data['purchases_count'] = $purchasesCount;
+
+        return $data;
+    }
+
     public function index(Request $request, ProductAvailabilityService $availability)
     {
         $search = trim((string) $request->query('q', ''));
         $perPage = max(1, min((int) $request->query('per_page', 20), self::INDEX_MAX_PER_PAGE));
 
         $categoryId = $request->query('category_id');
-        $subcategoryId = $request->query('subcategory_id');
+        $subcategoryId = $request->query('subcategory_id') ?? $request->query('subcategory');
 
         $sort = $this->normalizeSort((string) $request->query('sort', 'latest'));
         $dir = strtolower((string) $request->query('dir', 'desc')) === 'asc' ? 'asc' : 'desc';
@@ -96,10 +152,6 @@ class ProductController extends Controller
             $dir,
             $availability
         ) {
-            $favoriteCountSub = Favorite::query()
-                ->selectRaw('product_id, COUNT(*) as favorites_count')
-                ->groupBy('product_id');
-
             $query = Product::query()
                 ->select([
                     'products.id',
@@ -110,6 +162,8 @@ class ProductController extends Controller
                     'products.type',
                     'products.description',
                     'products.tier_pricing',
+                    'products.tier_profit',
+                    'products.duration_days',
                     'products.price',
                     'products.rating',
                     'products.rating_count',
@@ -121,11 +175,7 @@ class ProductController extends Controller
                     'category:id,name,slug,is_active',
                     'subcategory:id,category_id,name,description,slug,provider,image_url,is_active',
                 ])
-                ->when($sort === 'favorite', function ($query) use ($favoriteCountSub) {
-                    $query->leftJoinSub($favoriteCountSub, 'favorite_counts', function ($join) {
-                        $join->on('favorite_counts.product_id', '=', 'products.id');
-                    })->addSelect(DB::raw('COALESCE(favorite_counts.favorites_count, 0) as favorites_count'));
-                })
+                ->withCount('favorites')
                 ->when($categoryId, fn ($q) => $q->where('products.category_id', $categoryId))
                 ->when($subcategoryId, fn ($q) => $q->where('products.subcategory_id', $subcategoryId))
                 ->when($search !== '', function ($q) use ($search) {
@@ -170,8 +220,11 @@ class ProductController extends Controller
             }
 
             $paginator = $query->paginate($perPage);
-            $products = $availability->attachToCollection($paginator->getCollection());
-            $paginator->setCollection($products);
+            $collection = $availability->attachToCollection($paginator->getCollection());
+
+            $paginator->setCollection(
+                $collection->map(fn ($product) => $this->presentProduct($product, (int) data_get($product, 'available_stock', 0)))
+            );
 
             return $paginator->toArray();
         });
@@ -200,6 +253,7 @@ class ProductController extends Controller
                     'type',
                     'description',
                     'tier_pricing',
+                    'tier_profit',
                     'duration_days',
                     'price',
                     'is_active',
@@ -215,9 +269,7 @@ class ProductController extends Controller
                     'category:id,name,slug,is_active',
                     'subcategory:id,category_id,name,description,slug,provider,image_url,image_path,is_active',
                 ])
-                ->withCount([
-                    'favorites',
-                ])
+                ->withCount('favorites')
                 ->whereKey($product->id)
                 ->where('is_active', true)
                 ->where('is_published', true)
@@ -232,9 +284,7 @@ class ProductController extends Controller
                 return null;
             }
 
-            $fresh->setAttribute('available_stock', $availability->forProductId((int) $fresh->id));
-
-            return $fresh->toArray();
+            return $this->presentProduct($fresh, $availability->forProductId((int) $fresh->id));
         });
 
         if (!$data) {
