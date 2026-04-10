@@ -470,9 +470,9 @@ class UserOrderController extends Controller
 
                     if ((int)$settings->min_order_amount <= 0 || (float)$subtotal >= (float)$settings->min_order_amount) {
 
-                        $usage = app(ReferralCommissionService::class)->getUsageSummary((int) $user->id);
+                        $usage = app(ReferralCommissionService::class)->getUsageSummary((int) $user->id, (int) $relation->referred_by);
 
-                        if ((int)$settings->max_uses_per_user <= 0 || !((bool) ($usage['limit_reached'] ?? false))) {
+                        if (!((bool) ($usage['limit_reached'] ?? false))) {
 
                             if ($settings->discount_type === 'fixed') {
                                 $referralDiscount = (float) ((int)$settings->discount_value);

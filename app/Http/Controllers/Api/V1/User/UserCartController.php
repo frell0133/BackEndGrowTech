@@ -228,7 +228,7 @@ class UserCartController extends Controller
             return ['discount' => 0.0, 'referrer_id' => null];
         }
 
-        $usage = app(ReferralCommissionService::class)->getUsageSummary($userId);
+        $usage = app(ReferralCommissionService::class)->getUsageSummary($userId, (int) $relation->referred_by);
 
         if ((bool) ($usage['limit_reached'] ?? false)) {
             return ['discount' => 0.0, 'referrer_id' => null];

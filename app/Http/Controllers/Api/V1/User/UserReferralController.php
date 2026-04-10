@@ -226,13 +226,25 @@ class UserReferralController extends Controller
             ]);
         }
 
-        $usage = app(ReferralCommissionService::class)->getUsageSummary((int) $user->id);
+        $usage = app(ReferralCommissionService::class)->getUsageSummary((int) $user->id, (int) $relation->referred_by);
         $usedByUser = (int) ($usage['used_by_user'] ?? 0);
 
-        if ((bool) ($usage['limit_reached'] ?? false)) {
+        if ((bool) ($usage['user_limit_reached'] ?? false)) {
             return $this->ok([
                 'eligible' => false,
                 'reason' => 'Limit penggunaan referral untuk user sudah habis',
+                'amount' => $amount,
+                'amount_source' => $amountSource,
+                'discount_amount' => 0,
+                'final_amount' => $amount,
+                'settings' => $settings,
+            ]);
+        }
+
+        if ((bool) ($usage['referrer_limit_reached'] ?? false)) {
+            return $this->ok([
+                'eligible' => false,
+                'reason' => 'Limit penggunaan referral untuk kode referral ini sudah habis',
                 'amount' => $amount,
                 'amount_source' => $amountSource,
                 'discount_amount' => 0,

@@ -84,7 +84,7 @@ class ReferralCommissionService
         return (int) $affected;
     }
 
-    public function getUsageSummary(int $userId): array
+    public function getUsageSummary(int $userId, ?int $referrerId = null): array
     {
         $this->cleanupStalePendingForUser($userId, ['source' => 'usage_summary']);
 
@@ -98,12 +98,35 @@ class ReferralCommissionService
             ->count();
 
         $maxUsesPerUser = (int) ($settings->max_uses_per_user ?? 0);
+        $userLimitReached = $maxUsesPerUser > 0 ? $usedByUser >= $maxUsesPerUser : false;
+
+        $usedByReferrer = null;
+        $maxUsesPerReferrer = (int) ($settings->max_uses_per_referrer ?? 0);
+        $referrerLimitReached = false;
+
+        if ($referrerId) {
+            $usedByReferrer = (int) ReferralTransaction::query()
+                ->where('referrer_id', $referrerId)
+                ->where('status', 'valid')
+                ->count();
+
+            $referrerLimitReached = $maxUsesPerReferrer > 0
+                ? $usedByReferrer >= $maxUsesPerReferrer
+                : false;
+        }
 
         return [
             'used_by_user' => (int) $usedByUser,
             'max_uses_per_user' => $maxUsesPerUser,
             'remaining_uses' => $maxUsesPerUser > 0 ? max(0, $maxUsesPerUser - $usedByUser) : null,
-            'limit_reached' => $maxUsesPerUser > 0 ? $usedByUser >= $maxUsesPerUser : false,
+            'user_limit_reached' => $userLimitReached,
+            'used_by_referrer' => $usedByReferrer,
+            'max_uses_per_referrer' => $maxUsesPerReferrer,
+            'remaining_uses_for_referrer' => ($referrerId && $maxUsesPerReferrer > 0 && $usedByReferrer !== null)
+                ? max(0, $maxUsesPerReferrer - $usedByReferrer)
+                : null,
+            'referrer_limit_reached' => $referrerLimitReached,
+            'limit_reached' => $userLimitReached || $referrerLimitReached,
         ];
     }
 
@@ -128,6 +151,21 @@ class ReferralCommissionService
                 $refTx->status = 'invalid';
                 $refTx->occurred_at = now();
                 $refTx->save();
+                return;
+            }
+
+            $usage = $this->getUsageSummary((int) $refTx->user_id, (int) $refTx->referrer_id);
+            if ((bool) ($usage['referrer_limit_reached'] ?? false)) {
+                $refTx->status = 'invalid';
+                $refTx->occurred_at = now();
+                $refTx->save();
+
+                Log::info('REFERRAL INVALIDATED BECAUSE REFERRER LIMIT REACHED', [
+                    'order_id' => (int) $order->id,
+                    'ref_tx_id' => (int) $refTx->id,
+                    'referrer_id' => (int) $refTx->referrer_id,
+                    'meta' => $meta,
+                ]);
                 return;
             }
 
