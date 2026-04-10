@@ -179,6 +179,11 @@ class UserCartController extends Controller
         return (int) $unitPrice;
     }
 
+    private function failWithCartState($user, Cart $cart, string $message, int $status = 422, array $extra = [])
+    {
+        return $this->fail($message, $status, array_merge($extra, $this->buildCartResponseData($user, $cart)));
+    }
+
     private function buildCheckoutSuccessPayload(Order $order, float $campaignDiscountTotal, float $voucherDiscount, float $referralDiscount, float $discountTotal, array $appliedCampaigns, float $feePercent, float $gatewayFeeAmount)
     {
         return $this->ok([
@@ -285,7 +290,7 @@ class UserCartController extends Controller
             ->where('is_published', true)
             ->first();
 
-        if (!$product) return $this->fail('Product not available', 404);
+        if (!$product) return $this->failWithCartState($user, $cart, 'Product not available', 404);
 
         $stock = app(ProductAvailabilityService::class)->forProductId((int) $product->id);
 
@@ -298,11 +303,11 @@ class UserCartController extends Controller
         $newQty = min(99, $existingQty + $qty);
 
         if ($stock < $newQty) {
-            return $this->fail('Stock tidak cukup', 422, array_merge([
+            return $this->failWithCartState($user, $cart, 'Stock tidak cukup', 422, [
                 'product_id' => (int) $product->id,
                 'stock_available' => (int) $stock,
                 'qty_requested' => (int) $newQty,
-            ], $this->buildCartResponseData($user, $cart)));
+            ]);
         }
 
         if ($item) {
@@ -342,11 +347,11 @@ class UserCartController extends Controller
         $stock = app(ProductAvailabilityService::class)->forProductId((int) $item->product_id);
 
         if ($stock < $requestedQty) {
-            return $this->fail('Stock tidak cukup', 422, array_merge([
+            return $this->failWithCartState($user, $cart, 'Stock tidak cukup', 422, [
                 'product_id' => (int) $item->product_id,
                 'stock_available' => (int) $stock,
                 'qty_requested' => (int) $requestedQty,
-            ], $this->buildCartResponseData($user, $cart)));
+            ]);
         }
 
         $item->update(['qty' => $requestedQty]);
@@ -639,7 +644,7 @@ class UserCartController extends Controller
             ->with(['category:id,name,slug', 'subcategory:id,category_id,name,slug,provider,image_url,image_path'])
             ->first();
 
-        if (!$product) return $this->fail('Product not available', 404);
+        if (!$product) return $this->failWithCartState($user, $cart, 'Product not available', 404);
 
         $stock = app(ProductAvailabilityService::class)->forProductId((int) $product->id);
         if ($stock < $qty) {
