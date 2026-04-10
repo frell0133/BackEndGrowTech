@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
+use App\Services\ReferralUsageService;
 
 class PaymentWebhookController extends Controller
 {
@@ -25,33 +26,37 @@ class PaymentWebhookController extends Controller
     public function handleMidtrans(
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger
+        LedgerService $ledger,
+        ReferralUsageService $referralUsage
     ) {
-        return $this->processWebhook('midtrans', $request, $gatewayManager, $ledger);
+        return $this->processWebhook('midtrans', $request, $gatewayManager, $ledger, $referralUsage);
     }
 
     public function handleDuitku(
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger
+        LedgerService $ledger,
+        ReferralUsageService $referralUsage
     ) {
-        return $this->processWebhook('duitku', $request, $gatewayManager, $ledger);
+        return $this->processWebhook('duitku', $request, $gatewayManager, $ledger, $referralUsage);
     }
 
     public function handle(
         string $gateway_code,
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger
+        LedgerService $ledger,
+        ReferralUsageService $referralUsage
     ) {
-        return $this->processWebhook($gateway_code, $request, $gatewayManager, $ledger);
+        return $this->processWebhook($gateway_code, $request, $gatewayManager, $ledger, $referralUsage);
     }
 
     protected function processWebhook(
         string $gatewayKey,
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger
+        LedgerService $ledger,
+        ReferralUsageService $referralUsage
     ) {
         try {
             $gateway = $gatewayManager->resolveWebhookGateway($gatewayKey);
@@ -284,6 +289,10 @@ class PaymentWebhookController extends Controller
 
                 if ($status === 'refunded') {
                     $lockedOrder->status = OrderStatus::REFUNDED->value;
+                }
+
+                if (in_array($status, ['failed', 'expired', 'refunded'], true)) {
+                    $referralUsage->invalidatePendingForOrder((int) $lockedOrder->id, 'payment_webhook_' . $status);
                 }
 
                 if ($lockedOrder->isDirty()) {

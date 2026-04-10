@@ -34,6 +34,7 @@ use Illuminate\Http\JsonResponse;
 // ✅ NEW: service untuk komisi referral saat PAID (wallet/midtrans)
 use App\Services\ReferralCommissionService;
 use App\Services\ProductAvailabilityService;
+use App\Services\ReferralUsageService;
 
 class UserOrderController extends Controller
 {
@@ -470,10 +471,7 @@ class UserOrderController extends Controller
 
                     if ((int)$settings->min_order_amount <= 0 || (float)$subtotal >= (float)$settings->min_order_amount) {
 
-                        $usedByUser = ReferralTransaction::query()
-                            ->where('user_id', (int) $user->id)
-                            ->whereIn('status', ['pending', 'valid'])
-                            ->count();
+                        $usedByUser = $referralUsage->countConsumableUsesForUser((int) $user->id);
 
                         if ((int)$settings->max_uses_per_user <= 0 || $usedByUser < (int)$settings->max_uses_per_user) {
 
@@ -1069,7 +1067,7 @@ class UserOrderController extends Controller
         return $this->ok($payload);
     }
 
-    private function syncExpiredCreatedOrdersForUser(int $userId): void
+    private function syncExpiredCreatedOrdersForUser(int $userId, ?ReferralUsageService $referralUsage = null): void
     {
         $cutoff = now()->subHour();
 
@@ -1111,6 +1109,10 @@ class UserOrderController extends Controller
                                 $lockedOrder->payment->status = PaymentStatus::EXPIRED->value;
                                 $lockedOrder->payment->save();
                             }
+                        }
+
+                        if ($referralUsage) {
+                            $referralUsage->invalidatePendingForOrder((int) $lockedOrder->id, 'created_order_auto_cancelled');
                         }
                     });
                 }
@@ -1192,10 +1194,10 @@ class UserOrderController extends Controller
         return $order;
     }
 
-    public function index(Request $request)
+    public function index(Request $request, ReferralUsageService $referralUsage)
     {
         $user = $request->user();
-        $this->syncExpiredCreatedOrdersForUser((int) $user->id);
+        $this->syncExpiredCreatedOrdersForUser((int) $user->id, $referralUsage);
 
         $perPage = max(1, min((int) $request->query('per_page', 10), 100));
         $status = trim((string) $request->query('status', ''));
@@ -1283,10 +1285,10 @@ class UserOrderController extends Controller
         return $this->ok($data);
     }
 
-    public function show(Request $request, string $id)
+    public function show(Request $request, string $id, ReferralUsageService $referralUsage)
     {
         $user = $request->user();
-        $this->syncExpiredCreatedOrdersForUser((int) $user->id);
+        $this->syncExpiredCreatedOrdersForUser((int) $user->id, $referralUsage);
 
         $order = Order::query()
             ->where('id', (int) $id)
@@ -1309,7 +1311,7 @@ class UserOrderController extends Controller
         return $this->ok($this->transformHistoryOrder($order));
     }
 
-    public function cancel(Request $request, string $id)
+    public function cancel(Request $request, string $id, ReferralUsageService $referralUsage)
     {
         $user = $request->user();
 
@@ -1365,6 +1367,8 @@ class UserOrderController extends Controller
                         $lockedOrder->payment->save();
                     }
                 }
+
+                $referralUsage->invalidatePendingForOrder((int) $lockedOrder->id, 'user_cancelled_order');
 
                 return $this->ok([
                     'cancelled' => true,

@@ -16,12 +16,13 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Support\DispatchesInvoiceEmail;
+use App\Services\ReferralUsageService;
 
 class MidtransWebhookController extends Controller
 {
     use DispatchesInvoiceEmail;
 
-    public function handle(Request $request, LedgerService $ledger, OrderFulfillmentService $fulfillment)
+    public function handle(Request $request, LedgerService $ledger, OrderFulfillmentService $fulfillment, ReferralUsageService $referralUsage)
     {
         $payload = $request->all();
 
@@ -331,6 +332,10 @@ class MidtransWebhookController extends Controller
                         'status' => $paymentStatus,
                         'raw_callback' => $payload,
                     ]);
+                }
+
+                if (in_array($mapped, ['failed', 'expired', 'refunded'], true)) {
+                    $referralUsage->invalidatePendingForOrder((int) $lockedOrder->id, 'midtrans_' . $mapped);
                 }
 
                 if (!$isPaid || $mapped !== 'paid') {

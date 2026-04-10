@@ -14,6 +14,7 @@ use App\Support\ApiResponse;
 use App\Support\UserTierEligibility;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use App\Services\ReferralUsageService;
 
 class UserReferralController extends Controller
 {
@@ -142,7 +143,7 @@ class UserReferralController extends Controller
         return (int) max(0, $subtotal);
     }
 
-    public function previewDiscount(Request $request)
+    public function previewDiscount(Request $request, ReferralUsageService $referralUsage)
     {
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
@@ -225,10 +226,7 @@ class UserReferralController extends Controller
             ]);
         }
 
-        $usedByUser = ReferralTransaction::query()
-            ->where('user_id', $user->id)
-            ->whereIn('status', ['pending', 'valid'])
-            ->count();
+        $usedByUser = $referralUsage->countConsumableUsesForUser((int) $user->id);
 
         if ((int) $settings->max_uses_per_user > 0 && $usedByUser >= (int) $settings->max_uses_per_user) {
             return $this->ok([
