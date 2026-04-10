@@ -298,11 +298,11 @@ class UserCartController extends Controller
         $newQty = min(99, $existingQty + $qty);
 
         if ($stock < $newQty) {
-            return $this->fail('Stock tidak cukup', 422, [
+            return $this->fail('Stock tidak cukup', 422, array_merge([
                 'product_id' => (int) $product->id,
                 'stock_available' => (int) $stock,
                 'qty_requested' => (int) $newQty,
-            ]);
+            ], $this->buildCartResponseData($user, $cart)));
         }
 
         if ($item) {
@@ -342,11 +342,11 @@ class UserCartController extends Controller
         $stock = app(ProductAvailabilityService::class)->forProductId((int) $item->product_id);
 
         if ($stock < $requestedQty) {
-            return $this->fail('Stock tidak cukup', 422, [
+            return $this->fail('Stock tidak cukup', 422, array_merge([
                 'product_id' => (int) $item->product_id,
                 'stock_available' => (int) $stock,
                 'qty_requested' => (int) $requestedQty,
-            ]);
+            ], $this->buildCartResponseData($user, $cart)));
         }
 
         $item->update(['qty' => $requestedQty]);
