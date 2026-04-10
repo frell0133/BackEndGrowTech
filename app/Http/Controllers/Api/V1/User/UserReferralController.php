@@ -143,24 +143,33 @@ class UserReferralController extends Controller
         return (int) max(0, $subtotal);
     }
 
+    private function buildPreviewPayload(
+        int $amount,
+        string $amountSource,
+        int $discountAmount,
+        ?ReferralSetting $settings,
+        ?Referral $relation,
+        array $usage = [],
+        bool $eligible = false,
+        ?string $reason = null,
+    ): array {
+        return [
+            'eligible' => $eligible,
+            'reason' => $reason,
+            'amount' => $amount,
+            'amount_source' => $amountSource,
+            'discount_amount' => (int) $discountAmount,
+            'final_amount' => (int) max(0, $amount - $discountAmount),
+            'referrer_id' => (int) ($relation?->referred_by ?? 0),
+            'settings' => $settings,
+            'usage' => $usage,
+        ];
+    }
+
     public function previewDiscount(Request $request)
     {
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
-
-        $tierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
-        if (!UserTierEligibility::isReferralTierAllowed($tierKey)) {
-            $amount = (int) ($request->input('amount') ?? $this->computeCartSubtotal($user));
-            return $this->ok([
-                'eligible' => false,
-                'reason' => UserTierEligibility::referralTierMessage($tierKey),
-                'amount' => $amount,
-                'amount_source' => $request->has('amount') ? 'request' : 'cart',
-                'discount_amount' => 0,
-                'final_amount' => $amount,
-                'settings' => ReferralSetting::current(),
-            ]);
-        }
 
         $data = $request->validate([
             'amount' => ['nullable', 'integer', 'min:0'],
@@ -174,83 +183,105 @@ class UserReferralController extends Controller
         }
 
         $settings = ReferralSetting::current();
-        if (!$settings || !$settings->isActiveNow()) {
-            return $this->ok([
-                'eligible' => false,
-                'reason' => 'Referral campaign tidak aktif / sudah expired',
-                'amount' => $amount,
-                'amount_source' => $amountSource,
-                'discount_amount' => 0,
-                'final_amount' => $amount,
-                'settings' => $settings,
-            ]);
-        }
-
         $relation = Referral::query()
             ->where('user_id', $user->id)
             ->first();
 
+        $usage = app(ReferralCommissionService::class)->getUsageSummary(
+            (int) $user->id,
+            (int) ($relation?->referred_by ?? 0)
+        );
+
+        $tierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
+        if (!UserTierEligibility::isReferralTierAllowed($tierKey)) {
+            return $this->ok($this->buildPreviewPayload(
+                amount: $amount,
+                amountSource: $amountSource,
+                discountAmount: 0,
+                settings: $settings,
+                relation: $relation,
+                usage: $usage,
+                eligible: false,
+                reason: UserTierEligibility::referralTierMessage($tierKey),
+            ));
+        }
+
+        if (!$settings || !$settings->isActiveNow()) {
+            return $this->ok($this->buildPreviewPayload(
+                amount: $amount,
+                amountSource: $amountSource,
+                discountAmount: 0,
+                settings: $settings,
+                relation: $relation,
+                usage: $usage,
+                eligible: false,
+                reason: 'Referral campaign tidak aktif / sudah expired',
+            ));
+        }
+
         if (!$relation || !$relation->locked_at) {
-            return $this->ok([
-                'eligible' => false,
-                'reason' => 'User belum attach referral code',
-                'amount' => $amount,
-                'amount_source' => $amountSource,
-                'discount_amount' => 0,
-                'final_amount' => $amount,
-                'settings' => $settings,
-            ]);
+            return $this->ok($this->buildPreviewPayload(
+                amount: $amount,
+                amountSource: $amountSource,
+                discountAmount: 0,
+                settings: $settings,
+                relation: $relation,
+                usage: $usage,
+                eligible: false,
+                reason: 'User belum attach referral code',
+            ));
         }
 
         if ($amount <= 0) {
-            return $this->ok([
-                'eligible' => false,
-                'reason' => 'Cart masih kosong',
-                'amount' => $amount,
-                'amount_source' => $amountSource,
-                'discount_amount' => 0,
-                'final_amount' => $amount,
-                'settings' => $settings,
-            ]);
+            return $this->ok($this->buildPreviewPayload(
+                amount: $amount,
+                amountSource: $amountSource,
+                discountAmount: 0,
+                settings: $settings,
+                relation: $relation,
+                usage: $usage,
+                eligible: false,
+                reason: 'Cart masih kosong',
+            ));
         }
 
         if ($amount < (int) $settings->min_order_amount) {
-            return $this->ok([
-                'eligible' => false,
-                'reason' => 'Minimal order belum terpenuhi',
-                'amount' => $amount,
-                'amount_source' => $amountSource,
-                'discount_amount' => 0,
-                'final_amount' => $amount,
-                'settings' => $settings,
-            ]);
-        }
-
-        $usage = app(ReferralCommissionService::class)->getUsageSummary((int) $user->id, (int) $relation->referred_by);
-        $usedByUser = (int) ($usage['used_by_user'] ?? 0);
-
-        if ((bool) ($usage['user_limit_reached'] ?? false)) {
-            return $this->ok([
-                'eligible' => false,
-                'reason' => 'Limit penggunaan referral untuk user sudah habis',
-                'amount' => $amount,
-                'amount_source' => $amountSource,
-                'discount_amount' => 0,
-                'final_amount' => $amount,
-                'settings' => $settings,
-            ]);
+            return $this->ok($this->buildPreviewPayload(
+                amount: $amount,
+                amountSource: $amountSource,
+                discountAmount: 0,
+                settings: $settings,
+                relation: $relation,
+                usage: $usage,
+                eligible: false,
+                reason: 'Minimal order belum terpenuhi',
+            ));
         }
 
         if ((bool) ($usage['referrer_limit_reached'] ?? false)) {
-            return $this->ok([
-                'eligible' => false,
-                'reason' => 'Limit penggunaan referral untuk kode referral ini sudah habis',
-                'amount' => $amount,
-                'amount_source' => $amountSource,
-                'discount_amount' => 0,
-                'final_amount' => $amount,
-                'settings' => $settings,
-            ]);
+            return $this->ok($this->buildPreviewPayload(
+                amount: $amount,
+                amountSource: $amountSource,
+                discountAmount: 0,
+                settings: $settings,
+                relation: $relation,
+                usage: $usage,
+                eligible: false,
+                reason: 'Kuota penggunaan kode referral sudah habis',
+            ));
+        }
+
+        if ((bool) ($usage['user_limit_reached'] ?? false)) {
+            return $this->ok($this->buildPreviewPayload(
+                amount: $amount,
+                amountSource: $amountSource,
+                discountAmount: 0,
+                settings: $settings,
+                relation: $relation,
+                usage: $usage,
+                eligible: false,
+                reason: 'Limit penggunaan referral untuk user sudah habis',
+            ));
         }
 
         $discount = 0;
@@ -266,16 +297,16 @@ class UserReferralController extends Controller
 
         $discount = min($discount, $amount);
 
-        return $this->ok([
-            'eligible' => true,
-            'reason' => null,
-            'amount' => $amount,
-            'amount_source' => $amountSource,
-            'discount_amount' => (int) $discount,
-            'final_amount' => (int) max(0, $amount - $discount),
-            'referrer_id' => (int) $relation->referred_by,
-            'settings' => $settings,
-        ]);
+        return $this->ok($this->buildPreviewPayload(
+            amount: $amount,
+            amountSource: $amountSource,
+            discountAmount: $discount,
+            settings: $settings,
+            relation: $relation,
+            usage: $usage,
+            eligible: true,
+            reason: null,
+        ));
     }
 
     public function history(Request $request)

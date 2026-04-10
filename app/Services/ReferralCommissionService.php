@@ -90,8 +90,6 @@ class ReferralCommissionService
 
         $settings = ReferralSetting::current();
 
-        // Hanya referral yang benar-benar valid/paid yang dihitung sebagai usage final.
-        // Pending tidak boleh langsung menghabiskan kuota penggunaan user.
         $usedByUser = ReferralTransaction::query()
             ->where('user_id', $userId)
             ->where('status', 'valid')
@@ -100,18 +98,23 @@ class ReferralCommissionService
         $maxUsesPerUser = (int) ($settings->max_uses_per_user ?? 0);
         $userLimitReached = $maxUsesPerUser > 0 ? $usedByUser >= $maxUsesPerUser : false;
 
-        $usedByReferrer = null;
+        $usedOnReferrerCode = null;
         $maxUsesPerReferrer = (int) ($settings->max_uses_per_referrer ?? 0);
+        $referrerRemainingUses = null;
         $referrerLimitReached = false;
 
         if ($referrerId) {
-            $usedByReferrer = (int) ReferralTransaction::query()
+            $usedOnReferrerCode = (int) ReferralTransaction::query()
                 ->where('referrer_id', $referrerId)
                 ->where('status', 'valid')
                 ->count();
 
+            $referrerRemainingUses = $maxUsesPerReferrer > 0
+                ? max(0, $maxUsesPerReferrer - $usedOnReferrerCode)
+                : null;
+
             $referrerLimitReached = $maxUsesPerReferrer > 0
-                ? $usedByReferrer >= $maxUsesPerReferrer
+                ? $usedOnReferrerCode >= $maxUsesPerReferrer
                 : false;
         }
 
@@ -119,14 +122,16 @@ class ReferralCommissionService
             'used_by_user' => (int) $usedByUser,
             'max_uses_per_user' => $maxUsesPerUser,
             'remaining_uses' => $maxUsesPerUser > 0 ? max(0, $maxUsesPerUser - $usedByUser) : null,
-            'user_limit_reached' => $userLimitReached,
-            'used_by_referrer' => $usedByReferrer,
+            'is_unlimited_for_user' => $maxUsesPerUser === 0,
+            'user_limit_reached' => (bool) $userLimitReached,
+
+            'used_on_referrer_code' => $usedOnReferrerCode,
             'max_uses_per_referrer' => $maxUsesPerReferrer,
-            'remaining_uses_for_referrer' => ($referrerId && $maxUsesPerReferrer > 0 && $usedByReferrer !== null)
-                ? max(0, $maxUsesPerReferrer - $usedByReferrer)
-                : null,
-            'referrer_limit_reached' => $referrerLimitReached,
-            'limit_reached' => $userLimitReached || $referrerLimitReached,
+            'remaining_uses_for_referrer' => $referrerRemainingUses,
+            'is_unlimited_for_referrer' => $maxUsesPerReferrer === 0,
+            'referrer_limit_reached' => (bool) $referrerLimitReached,
+
+            'limit_reached' => (bool) ($userLimitReached || $referrerLimitReached),
         ];
     }
 
@@ -151,21 +156,6 @@ class ReferralCommissionService
                 $refTx->status = 'invalid';
                 $refTx->occurred_at = now();
                 $refTx->save();
-                return;
-            }
-
-            $usage = $this->getUsageSummary((int) $refTx->user_id, (int) $refTx->referrer_id);
-            if ((bool) ($usage['referrer_limit_reached'] ?? false)) {
-                $refTx->status = 'invalid';
-                $refTx->occurred_at = now();
-                $refTx->save();
-
-                Log::info('REFERRAL INVALIDATED BECAUSE REFERRER LIMIT REACHED', [
-                    'order_id' => (int) $order->id,
-                    'ref_tx_id' => (int) $refTx->id,
-                    'referrer_id' => (int) $refTx->referrer_id,
-                    'meta' => $meta,
-                ]);
                 return;
             }
 
