@@ -23,7 +23,7 @@ use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
 use App\Models\Referral;
 use App\Services\ProductAvailabilityService;
-use App\Services\ReferralUsageService;
+use App\Services\ReferralCommissionService;
 
 class UserCartController extends Controller
 {
@@ -209,7 +209,7 @@ class UserCartController extends Controller
         ]);
     }
 
-    private function computeReferralDiscountForUser(int $userId, float $subtotal, ReferralUsageService $referralUsage): array
+    private function computeReferralDiscountForUser(int $userId, float $subtotal): array
     {
         $settings = ReferralSetting::current();
         if (!$settings || !$settings->isActiveNow()) {
@@ -228,9 +228,9 @@ class UserCartController extends Controller
             return ['discount' => 0.0, 'referrer_id' => null];
         }
 
-        $usedByUser = $referralUsage->countConsumableUsesForUser($userId);
+        $usage = app(ReferralCommissionService::class)->getUsageSummary($userId);
 
-        if ((int)$settings->max_uses_per_user > 0 && $usedByUser >= (int)$settings->max_uses_per_user) {
+        if ((bool) ($usage['limit_reached'] ?? false)) {
             return ['discount' => 0.0, 'referrer_id' => null];
         }
 
@@ -517,7 +517,7 @@ class UserCartController extends Controller
             $referralDiscount = 0.0;
             $referrerId = null;
 
-            $ref = $this->computeReferralDiscountForUser((int) $user->id, (float) $subtotal, $referralUsage);
+            $ref = $this->computeReferralDiscountForUser((int) $user->id, (float) $subtotal);
             $referralDiscount = (float) ($ref['discount'] ?? 0.0);
             $referrerId = $ref['referrer_id'] ?? null;
 
@@ -713,7 +713,7 @@ class UserCartController extends Controller
                 $discountTotal += $voucherDiscount;
             }
 
-            $ref = $this->computeReferralDiscountForUser((int) $user->id, (float) $subtotal, $referralUsage);
+            $ref = $this->computeReferralDiscountForUser((int) $user->id, (float) $subtotal);
             $referralDiscount = (float) ($ref['discount'] ?? 0.0);
             $referrerId = $ref['referrer_id'] ?? null;
 

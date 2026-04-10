@@ -12,17 +12,17 @@ use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
 use App\Services\LedgerService;
 use App\Services\OrderFulfillmentService;
+use App\Services\ReferralCommissionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Support\DispatchesInvoiceEmail;
-use App\Services\ReferralUsageService;
 
 class MidtransWebhookController extends Controller
 {
     use DispatchesInvoiceEmail;
 
-    public function handle(Request $request, LedgerService $ledger, OrderFulfillmentService $fulfillment, ReferralUsageService $referralUsage)
+    public function handle(Request $request, LedgerService $ledger, OrderFulfillmentService $fulfillment)
     {
         $payload = $request->all();
 
@@ -334,95 +334,25 @@ class MidtransWebhookController extends Controller
                     ]);
                 }
 
-                if (in_array($mapped, ['failed', 'expired', 'refunded'], true)) {
-                    $referralUsage->invalidatePendingForOrder((int) $lockedOrder->id, 'midtrans_' . $mapped);
-                }
-
                 if (!$isPaid || $mapped !== 'paid') {
-                    return;
-                }
-
-                $refTx = ReferralTransaction::query()
-                    ->where('order_id', (int) $lockedOrder->id)
-                    ->lockForUpdate()
-                    ->first();
-
-                if ($refTx && $refTx->status !== 'valid') {
-                    $settings = ReferralSetting::current();
-
-                    if (!$settings || !($settings->enabled ?? false)) {
-                        $refTx->status = 'invalid';
-                        $refTx->occurred_at = now();
-                        $refTx->save();
-                    } else {
-                        $orderAmount = (int) round((float) ($lockedOrder->amount ?? 0));
-
-                        $commission = 0;
-                        if (($settings->commission_type ?? 'percent') === 'fixed') {
-                            $commission = (int) ($settings->commission_value ?? 0);
-                        } else {
-                            $pct = (int) ($settings->commission_value ?? 0);
-                            $commission = (int) floor($orderAmount * $pct / 100);
-                        }
-
-                        $commission = max(0, $commission);
-
-                        $refTx->status = 'valid';
-                        $refTx->order_amount = $orderAmount;
-                        $refTx->commission_amount = $commission;
-                        $refTx->occurred_at = now();
-                        $refTx->save();
-
-                        if ($commission > 0) {
-                            $ledger->creditReferralCommissionToCommissionWallet(
-                                referrerUserId: (int) $refTx->referrer_id,
-                                commissionAmount: (int) $commission,
-                                idempotencyKey: 'REF_COMMISSION:' . (int) $refTx->id,
-                                note: 'Referral commission -> IDR_COMMISSION (Midtrans Paid)',
-                                referenceType: 'referral_transaction',
-                                referenceId: (int) $refTx->id
-                            );
-
-                            Log::info('REFERRAL COMMISSION CREDITED TO COMMISSION WALLET', [
-                                'order_db_id' => (int) $lockedOrder->id,
-                                'referral_tx_id' => (int) $refTx->id,
-                                'referrer_id' => (int) $refTx->referrer_id,
-                                'commission' => (int) $commission,
-                                'wallet_currency' => 'IDR_COMMISSION',
-                                'midtrans_order_id' => $orderId,
-                                'transaction_status' => $transactionStatus,
-                                'payment_type' => $paymentType,
-                                'transaction_id' => $transactionId,
-                                'settlement_time' => $settlementTime,
-                            ]);
-                        }
+                    if (in_array($mapped, ['failed', 'expired', 'refunded'], true)) {
+                        app(ReferralCommissionService::class)->invalidateOrderReferral((int) $lockedOrder->id, [
+                            'source' => 'midtrans_webhook',
+                            'status' => $mapped,
+                        ]);
                     }
-                }
 
-                $res = $fulfillment->fulfillPaidOrder($lockedOrder->fresh());
-
-                if (!($res['ok'] ?? false)) {
-                    Log::error('FULFILLMENT FAILED AFTER PAID', [
-                        'order_db_id' => $lockedOrder->id,
-                        'invoice_number' => $lockedOrder->invoice_number,
-                        'message' => $res['message'] ?? null,
-                    ]);
                     return;
                 }
 
-                $lockedOrder->status = OrderStatus::FULFILLED->value;
-                $lockedOrder->save();
-
-                $this->dispatchInvoiceEmailAfterCommit(
-                    (int) $lockedOrder->id,
-                    'midtrans_paid',
-                    (string) $lockedOrder->invoice_number
+                app(ReferralCommissionService::class)->handleOrderPaid(
+                    $lockedOrder->fresh(),
+                    $ledger,
+                    [
+                        'source' => 'midtrans_webhook',
+                        'payment_type' => $paymentType,
+                    ]
                 );
-
-                Log::info('MIDTRANS ORDER PAID -> FULFILLED', [
-                    'midtrans_order_id' => $orderId,
-                    'order_db_id' => $lockedOrder->id,
-                ]);
             });
 
             return response()->json(['success' => true, 'message' => 'OK (order)'], 200);

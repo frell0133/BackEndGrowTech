@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Enums\OrderStatus;
+use App\Enums\PaymentStatus;
 use App\Models\Order;
 use App\Models\ReferralSetting;
 use App\Models\ReferralTransaction;
@@ -10,26 +12,111 @@ use Illuminate\Support\Facades\Log;
 
 class ReferralCommissionService
 {
-    /**
-     * Dipanggil setiap kali order sudah PAID (midtrans/wallet).
-     * - set referral_tx -> valid
-     * - credit komisi ke wallet IDR_COMMISSION
-     * Idempotent via status valid + idempotency_key ledger.
-     */
+    public function invalidateOrderReferral(int $orderId, array $meta = []): void
+    {
+        DB::transaction(function () use ($orderId, $meta) {
+            $refTx = ReferralTransaction::query()
+                ->where('order_id', $orderId)
+                ->where('status', 'pending')
+                ->lockForUpdate()
+                ->first();
+
+            if (!$refTx) {
+                return;
+            }
+
+            $refTx->status = 'invalid';
+            $refTx->occurred_at = now();
+            $refTx->save();
+
+            Log::info('REFERRAL INVALIDATED FOR ORDER', [
+                'order_id' => (int) $orderId,
+                'ref_tx_id' => (int) $refTx->id,
+                'meta' => $meta,
+            ]);
+        });
+    }
+
+    public function cleanupStalePendingForUser(int $userId, array $meta = []): int
+    {
+        $invalidOrderStatuses = [
+            OrderStatus::CANCELLED->value,
+            OrderStatus::FAILED->value,
+            OrderStatus::EXPIRED->value,
+            OrderStatus::REFUNDED->value,
+        ];
+
+        $invalidPaymentStatuses = [
+            PaymentStatus::FAILED->value,
+            PaymentStatus::EXPIRED->value,
+            PaymentStatus::REFUNDED->value,
+        ];
+
+        $query = ReferralTransaction::query()
+            ->where('user_id', $userId)
+            ->where('status', 'pending')
+            ->where(function ($q) use ($invalidOrderStatuses, $invalidPaymentStatuses) {
+                $q->whereNull('order_id')
+                    ->orWhereHas('order', function ($oq) use ($invalidOrderStatuses, $invalidPaymentStatuses) {
+                        $oq->whereIn('status', $invalidOrderStatuses)
+                            ->orWhereHas('payment', function ($pq) use ($invalidPaymentStatuses) {
+                                $pq->whereIn('status', $invalidPaymentStatuses);
+                            });
+                    });
+            });
+
+        $affected = (clone $query)->update([
+            'status' => 'invalid',
+            'occurred_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        if ($affected > 0) {
+            Log::info('REFERRAL STALE PENDING CLEANED', [
+                'user_id' => (int) $userId,
+                'affected' => (int) $affected,
+                'meta' => $meta,
+            ]);
+        }
+
+        return (int) $affected;
+    }
+
+    public function getUsageSummary(int $userId): array
+    {
+        $this->cleanupStalePendingForUser($userId, ['source' => 'usage_summary']);
+
+        $settings = ReferralSetting::current();
+        $usedByUser = ReferralTransaction::query()
+            ->where('user_id', $userId)
+            ->whereIn('status', ['pending', 'valid'])
+            ->count();
+
+        $maxUsesPerUser = (int) ($settings->max_uses_per_user ?? 0);
+
+        return [
+            'used_by_user' => (int) $usedByUser,
+            'max_uses_per_user' => $maxUsesPerUser,
+            'remaining_uses' => $maxUsesPerUser > 0 ? max(0, $maxUsesPerUser - $usedByUser) : null,
+            'limit_reached' => $maxUsesPerUser > 0 ? $usedByUser >= $maxUsesPerUser : false,
+        ];
+    }
+
     public function handleOrderPaid(Order $order, LedgerService $ledger, array $meta = []): void
     {
         DB::transaction(function () use ($order, $ledger, $meta) {
-
             $refTx = ReferralTransaction::query()
                 ->where('order_id', (int) $order->id)
                 ->lockForUpdate()
                 ->first();
 
-            // order tidak pakai referral
-            if (!$refTx) return;
+            if (!$refTx) {
+                return;
+            }
 
-            // sudah diproses
-            if ($refTx->status === 'valid') return;
+            if ($refTx->status === 'valid') {
+                return;
+            }
 
             $settings = ReferralSetting::current();
             if (!$settings || !$settings->isActiveNow()) {

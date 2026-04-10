@@ -34,7 +34,6 @@ use Illuminate\Http\JsonResponse;
 // ✅ NEW: service untuk komisi referral saat PAID (wallet/midtrans)
 use App\Services\ReferralCommissionService;
 use App\Services\ProductAvailabilityService;
-use App\Services\ReferralUsageService;
 
 class UserOrderController extends Controller
 {
@@ -471,9 +470,9 @@ class UserOrderController extends Controller
 
                     if ((int)$settings->min_order_amount <= 0 || (float)$subtotal >= (float)$settings->min_order_amount) {
 
-                        $usedByUser = $referralUsage->countConsumableUsesForUser((int) $user->id);
+                        $usage = app(ReferralCommissionService::class)->getUsageSummary((int) $user->id);
 
-                        if ((int)$settings->max_uses_per_user <= 0 || $usedByUser < (int)$settings->max_uses_per_user) {
+                        if ((int)$settings->max_uses_per_user <= 0 || !((bool) ($usage['limit_reached'] ?? false))) {
 
                             if ($settings->discount_type === 'fixed') {
                                 $referralDiscount = (float) ((int)$settings->discount_value);
@@ -1067,7 +1066,7 @@ class UserOrderController extends Controller
         return $this->ok($payload);
     }
 
-    private function syncExpiredCreatedOrdersForUser(int $userId, ?ReferralUsageService $referralUsage = null): void
+    private function syncExpiredCreatedOrdersForUser(int $userId): void
     {
         $cutoff = now()->subHour();
 
@@ -1109,10 +1108,6 @@ class UserOrderController extends Controller
                                 $lockedOrder->payment->status = PaymentStatus::EXPIRED->value;
                                 $lockedOrder->payment->save();
                             }
-                        }
-
-                        if ($referralUsage) {
-                            $referralUsage->invalidatePendingForOrder((int) $lockedOrder->id, 'created_order_auto_cancelled');
                         }
                     });
                 }
@@ -1194,10 +1189,10 @@ class UserOrderController extends Controller
         return $order;
     }
 
-    public function index(Request $request, ReferralUsageService $referralUsage)
+    public function index(Request $request)
     {
         $user = $request->user();
-        $this->syncExpiredCreatedOrdersForUser((int) $user->id, $referralUsage);
+        $this->syncExpiredCreatedOrdersForUser((int) $user->id);
 
         $perPage = max(1, min((int) $request->query('per_page', 10), 100));
         $status = trim((string) $request->query('status', ''));
@@ -1285,10 +1280,10 @@ class UserOrderController extends Controller
         return $this->ok($data);
     }
 
-    public function show(Request $request, string $id, ReferralUsageService $referralUsage)
+    public function show(Request $request, string $id)
     {
         $user = $request->user();
-        $this->syncExpiredCreatedOrdersForUser((int) $user->id, $referralUsage);
+        $this->syncExpiredCreatedOrdersForUser((int) $user->id);
 
         $order = Order::query()
             ->where('id', (int) $id)
@@ -1311,7 +1306,7 @@ class UserOrderController extends Controller
         return $this->ok($this->transformHistoryOrder($order));
     }
 
-    public function cancel(Request $request, string $id, ReferralUsageService $referralUsage)
+    public function cancel(Request $request, string $id)
     {
         $user = $request->user();
 
@@ -1347,6 +1342,11 @@ class UserOrderController extends Controller
                     OrderStatus::FAILED->value,
                     OrderStatus::EXPIRED->value,
                 ], true)) {
+                    app(ReferralCommissionService::class)->invalidateOrderReferral((int) $lockedOrder->id, [
+                        'source' => 'user_cancel_already_closed',
+                        'order_status' => $orderStatus,
+                    ]);
+
                     return $this->ok([
                         'cancelled' => true,
                         'order' => $lockedOrder->fresh(['payment']),
@@ -1368,7 +1368,10 @@ class UserOrderController extends Controller
                     }
                 }
 
-                $referralUsage->invalidatePendingForOrder((int) $lockedOrder->id, 'user_cancelled_order');
+                app(ReferralCommissionService::class)->invalidateOrderReferral((int) $lockedOrder->id, [
+                    'source' => 'user_cancel',
+                    'order_status' => OrderStatus::CANCELLED->value,
+                ]);
 
                 return $this->ok([
                     'cancelled' => true,

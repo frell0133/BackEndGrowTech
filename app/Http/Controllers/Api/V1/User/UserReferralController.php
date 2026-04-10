@@ -12,9 +12,9 @@ use App\Models\ReferralTransaction;
 use App\Models\User;
 use App\Support\ApiResponse;
 use App\Support\UserTierEligibility;
+use App\Services\ReferralCommissionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use App\Services\ReferralUsageService;
 
 class UserReferralController extends Controller
 {
@@ -143,7 +143,7 @@ class UserReferralController extends Controller
         return (int) max(0, $subtotal);
     }
 
-    public function previewDiscount(Request $request, ReferralUsageService $referralUsage)
+    public function previewDiscount(Request $request)
     {
         $user = $request->user();
         if (!$user) return $this->fail('Unauthenticated', 401);
@@ -226,9 +226,10 @@ class UserReferralController extends Controller
             ]);
         }
 
-        $usedByUser = $referralUsage->countConsumableUsesForUser((int) $user->id);
+        $usage = app(ReferralCommissionService::class)->getUsageSummary((int) $user->id);
+        $usedByUser = (int) ($usage['used_by_user'] ?? 0);
 
-        if ((int) $settings->max_uses_per_user > 0 && $usedByUser >= (int) $settings->max_uses_per_user) {
+        if ((bool) ($usage['limit_reached'] ?? false)) {
             return $this->ok([
                 'eligible' => false,
                 'reason' => 'Limit penggunaan referral untuk user sudah habis',

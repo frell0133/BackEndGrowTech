@@ -11,13 +11,13 @@ use App\Models\Payment;
 use App\Models\WalletTopup;
 use App\Services\LedgerService;
 use App\Services\Payments\PaymentGatewayManager;
+use App\Services\ReferralCommissionService;
 use App\Support\DispatchesInvoiceEmail;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
-use App\Services\ReferralUsageService;
 
 class PaymentWebhookController extends Controller
 {
@@ -26,37 +26,33 @@ class PaymentWebhookController extends Controller
     public function handleMidtrans(
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger,
-        ReferralUsageService $referralUsage
+        LedgerService $ledger
     ) {
-        return $this->processWebhook('midtrans', $request, $gatewayManager, $ledger, $referralUsage);
+        return $this->processWebhook('midtrans', $request, $gatewayManager, $ledger);
     }
 
     public function handleDuitku(
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger,
-        ReferralUsageService $referralUsage
+        LedgerService $ledger
     ) {
-        return $this->processWebhook('duitku', $request, $gatewayManager, $ledger, $referralUsage);
+        return $this->processWebhook('duitku', $request, $gatewayManager, $ledger);
     }
 
     public function handle(
         string $gateway_code,
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger,
-        ReferralUsageService $referralUsage
+        LedgerService $ledger
     ) {
-        return $this->processWebhook($gateway_code, $request, $gatewayManager, $ledger, $referralUsage);
+        return $this->processWebhook($gateway_code, $request, $gatewayManager, $ledger);
     }
 
     protected function processWebhook(
         string $gatewayKey,
         Request $request,
         PaymentGatewayManager $gatewayManager,
-        LedgerService $ledger,
-        ReferralUsageService $referralUsage
+        LedgerService $ledger
     ) {
         try {
             $gateway = $gatewayManager->resolveWebhookGateway($gatewayKey);
@@ -291,10 +287,6 @@ class PaymentWebhookController extends Controller
                     $lockedOrder->status = OrderStatus::REFUNDED->value;
                 }
 
-                if (in_array($status, ['failed', 'expired', 'refunded'], true)) {
-                    $referralUsage->invalidatePendingForOrder((int) $lockedOrder->id, 'payment_webhook_' . $status);
-                }
-
                 if ($lockedOrder->isDirty()) {
                     $lockedOrder->save();
                 }
@@ -338,6 +330,21 @@ class PaymentWebhookController extends Controller
                     'invoice_emailed_at' => $lockedOrder->invoice_emailed_at,
                 ]);
             });
+
+            if ($finalOrderId && in_array($status, ['failed', 'expired', 'refunded'], true)) {
+                try {
+                    app(ReferralCommissionService::class)->invalidateOrderReferral($finalOrderId, [
+                        'source' => 'payment_webhook',
+                        'status' => $status,
+                    ]);
+                } catch (\Throwable $e) {
+                    Log::error('REFERRAL INVALIDATE FAILED (payment_webhook)', [
+                        'order_id' => $finalOrderId,
+                        'status' => $status,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
 
             if ($shouldDispatchPaidOrderJob && $finalOrderId) {
                 $dispatched = $this->dispatchPaidOrderJobOnce(
