@@ -15,25 +15,27 @@ class ReferralCommissionService
     public function invalidateOrderReferral(int $orderId, array $meta = []): void
     {
         DB::transaction(function () use ($orderId, $meta) {
-            $refTx = ReferralTransaction::query()
+            $rows = ReferralTransaction::query()
                 ->where('order_id', $orderId)
                 ->where('status', 'pending')
                 ->lockForUpdate()
-                ->first();
+                ->get();
 
-            if (!$refTx) {
+            if ($rows->isEmpty()) {
                 return;
             }
 
-            $refTx->status = 'invalid';
-            $refTx->occurred_at = now();
-            $refTx->save();
+            foreach ($rows as $refTx) {
+                $refTx->status = 'invalid';
+                $refTx->occurred_at = now();
+                $refTx->save();
 
-            Log::info('REFERRAL INVALIDATED FOR ORDER', [
-                'order_id' => (int) $orderId,
-                'ref_tx_id' => (int) $refTx->id,
-                'meta' => $meta,
-            ]);
+                Log::info('REFERRAL INVALIDATED FOR ORDER', [
+                    'order_id' => (int) $orderId,
+                    'ref_tx_id' => (int) $refTx->id,
+                    'meta' => $meta,
+                ]);
+            }
         });
     }
 
@@ -87,9 +89,12 @@ class ReferralCommissionService
         $this->cleanupStalePendingForUser($userId, ['source' => 'usage_summary']);
 
         $settings = ReferralSetting::current();
+
+        // Hanya referral yang benar-benar valid/paid yang dihitung sebagai usage final.
+        // Pending tidak boleh langsung menghabiskan kuota penggunaan user.
         $usedByUser = ReferralTransaction::query()
             ->where('user_id', $userId)
-            ->whereIn('status', ['pending', 'valid'])
+            ->where('status', 'valid')
             ->count();
 
         $maxUsesPerUser = (int) ($settings->max_uses_per_user ?? 0);
