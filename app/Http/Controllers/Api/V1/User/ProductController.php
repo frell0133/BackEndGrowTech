@@ -79,7 +79,13 @@ class ProductController extends Controller
 
     private function buildTierFinalPricing(array $tierPricing, array $tierProfit): array
     {
-        return $tierPricing;
+        $final = [];
+
+        foreach (self::TIER_KEYS as $key) {
+            $final[$key] = (int) ($tierPricing[$key] ?? 0);
+        }
+
+        return $final;
     }
 
     private function presentProduct(mixed $product, ?int $availableStock = null): array
@@ -92,7 +98,7 @@ class ProductController extends Controller
 
         $memberBase = (int) ($tierPricing['member'] ?? 0);
         $memberProfit = (int) ($tierProfit['member'] ?? 0);
-        $memberFinal = (int) ($tierPricing['member'] ?? $memberBase);
+        $memberFinal = (int) ($tierFinalPricing['member'] ?? $memberBase);
 
         $favoritesCount = (int) ($data['favorites_count'] ?? 0);
         $purchasesCount = (int) ($data['purchases_count'] ?? 0);
