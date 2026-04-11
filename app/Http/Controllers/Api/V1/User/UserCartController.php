@@ -284,46 +284,58 @@ class UserCartController extends Controller
 
         $qty = (int) ($v['qty'] ?? 1);
 
-        $product = Product::query()
-            ->where('id', $v['product_id'])
-            ->where('is_active', true)
-            ->where('is_published', true)
-            ->first();
+        return DB::transaction(function () use ($user, $cart, $v, $qty) {
+            Cart::query()
+                ->whereKey($cart->id)
+                ->lockForUpdate()
+                ->first();
 
-        if (!$product) return $this->failWithCartState($user, $cart, 'Product not available', 404);
+            $product = Product::query()
+                ->where('id', (int) $v['product_id'])
+                ->where('is_active', true)
+                ->where('is_published', true)
+                ->first();
 
-        $stock = app(ProductAvailabilityService::class)->forProductId((int) $product->id);
+            if (!$product) {
+                return $this->failWithCartState($user, $cart, 'Product not available', 404);
+            }
 
-        $item = CartItem::query()
-            ->where('cart_id', $cart->id)
-            ->where('product_id', $product->id)
-            ->first();
+            $item = CartItem::query()
+                ->where('cart_id', $cart->id)
+                ->where('product_id', $product->id)
+                ->lockForUpdate()
+                ->first();
 
-        $existingQty = (int) ($item->qty ?? 0);
-        $newQty = min(99, $existingQty + $qty);
+            $stock = app(ProductAvailabilityService::class)->forProductId((int) $product->id);
 
-        if ($stock < $newQty) {
-            return $this->failWithCartState($user, $cart, 'Stock tidak cukup', 422, [
-                'product_id' => (int) $product->id,
-                'stock_available' => (int) $stock,
-                'qty_requested' => (int) $newQty,
-            ]);
-        }
+            $existingQty = (int) ($item->qty ?? 0);
+            $newQty = min(99, $existingQty + $qty);
 
-        if ($item) {
-            $item->update(['qty' => $newQty]);
-        } else {
-            $item = CartItem::create([
-                'cart_id' => $cart->id,
-                'product_id' => $product->id,
-                'qty' => $qty,
-            ]);
-        }
+            if ($stock < $newQty) {
+                return $this->failWithCartState($user, $cart, 'Stock tidak cukup', 422, [
+                    'product_id' => (int) $product->id,
+                    'stock_available' => (int) $stock,
+                    'qty_requested' => (int) $newQty,
+                ]);
+            }
 
-        return $this->ok(array_merge([
-            'message' => 'Added to cart',
-            'item' => $item->fresh(),
-        ], $this->buildCartResponseData($user, $cart)));
+            if ($item) {
+                $item->update([
+                    'qty' => $newQty,
+                ]);
+            } else {
+                $item = CartItem::create([
+                    'cart_id' => $cart->id,
+                    'product_id' => $product->id,
+                    'qty' => $qty,
+                ]);
+            }
+
+            return $this->ok(array_merge([
+                'message' => 'Added to cart',
+                'item' => $item->fresh(),
+            ], $this->buildCartResponseData($user, $cart)));
+        }, 3);
     }
 
     public function update(Request $request, int $id)
@@ -337,29 +349,39 @@ class UserCartController extends Controller
             'qty' => ['required', 'integer', 'min:1', 'max:99'],
         ]);
 
-        $item = CartItem::query()
-            ->where('id', $id)
-            ->where('cart_id', $cart->id)
-            ->firstOrFail();
-
         $requestedQty = (int) $v['qty'];
 
-        $stock = app(ProductAvailabilityService::class)->forProductId((int) $item->product_id);
+        return DB::transaction(function () use ($user, $cart, $id, $requestedQty) {
+            Cart::query()
+                ->whereKey($cart->id)
+                ->lockForUpdate()
+                ->first();
 
-        if ($stock < $requestedQty) {
-            return $this->failWithCartState($user, $cart, 'Stock tidak cukup', 422, [
-                'product_id' => (int) $item->product_id,
-                'stock_available' => (int) $stock,
-                'qty_requested' => (int) $requestedQty,
+            $item = CartItem::query()
+                ->where('id', $id)
+                ->where('cart_id', $cart->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $stock = app(ProductAvailabilityService::class)->forProductId((int) $item->product_id);
+
+            if ($stock < $requestedQty) {
+                return $this->failWithCartState($user, $cart, 'Stock tidak cukup', 422, [
+                    'product_id' => (int) $item->product_id,
+                    'stock_available' => (int) $stock,
+                    'qty_requested' => (int) $requestedQty,
+                ]);
+            }
+
+            $item->update([
+                'qty' => $requestedQty,
             ]);
-        }
 
-        $item->update(['qty' => $requestedQty]);
-
-        return $this->ok(array_merge([
-            'message' => 'Cart updated',
-            'item' => $item->fresh(),
-        ], $this->buildCartResponseData($user, $cart)));
+            return $this->ok(array_merge([
+                'message' => 'Cart updated',
+                'item' => $item->fresh(),
+            ], $this->buildCartResponseData($user, $cart)));
+        }, 3);
     }
 
     public function remove(Request $request, int $id)
