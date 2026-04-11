@@ -1114,6 +1114,17 @@ class UserOrderController extends Controller
             });
     }
 
+    private function displayStatusForUser(string $status): string
+    {
+        $normalized = strtolower(trim($status));
+
+        if ($normalized === OrderStatus::CREATED->value) {
+            return OrderStatus::CANCELLED->value;
+        }
+
+        return $normalized;
+    }
+
     private function transformHistoryOrder(Order $order): Order
     {
         $items = collect($order->items ?? []);
@@ -1171,6 +1182,11 @@ class UserOrderController extends Controller
 
         $categories = $itemDetails->pluck('category')->filter()->unique()->values();
 
+        $rawStatus = (string) ($order->status?->value ?? $order->status ?? '');
+        $displayStatus = $this->displayStatusForUser($rawStatus);
+
+        $order->setAttribute('display_status', $displayStatus);
+        $order->setAttribute('display_status_label', strtoupper($displayStatus));
         $order->setAttribute('payment_reference', $order->payment?->external_id);
         $order->setAttribute('transaction_datetime', $order->created_at?->timezone('Asia/Jakarta')->format(\DateTimeInterface::ATOM));
         $order->setAttribute('payment_datetime', $order->payment?->created_at?->timezone('Asia/Jakarta')->format(\DateTimeInterface::ATOM));
