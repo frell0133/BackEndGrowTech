@@ -160,23 +160,35 @@ class UserCartController extends Controller
     private function resolveUnitPrice(Product $product, string $tierKey): int
     {
         $tier = (array) ($product->tier_pricing ?? []);
-        $unitPrice = 0;
+        $tierProfit = (array) ($product->tier_profit ?? []);
+        $basePrice = 0;
+        $unitProfit = 0;
 
         if (!empty($tier)) {
-            $unitPrice = (int) ($tier[$tierKey] ?? 0);
-            if ($unitPrice <= 0) $unitPrice = (int) ($tier['member'] ?? 0);
+            $basePrice = (int) ($tier[$tierKey] ?? 0);
+            if ($basePrice <= 0) $basePrice = (int) ($tier['member'] ?? 0);
 
-            if ($unitPrice <= 0) {
+            if ($basePrice <= 0) {
                 $vals = array_values($tier);
-                $unitPrice = (int) ($vals[0] ?? 0);
+                $basePrice = (int) ($vals[0] ?? 0);
             }
         }
 
-        if ($unitPrice <= 0) {
-            $unitPrice = (int) ($product->price ?? 0);
+        if (!empty($tierProfit)) {
+            $unitProfit = (int) ($tierProfit[$tierKey] ?? 0);
+            if ($unitProfit <= 0) $unitProfit = (int) ($tierProfit['member'] ?? 0);
+
+            if ($unitProfit <= 0) {
+                $profitValues = array_values($tierProfit);
+                $unitProfit = (int) ($profitValues[0] ?? 0);
+            }
         }
 
-        return (int) $unitPrice;
+        if ($basePrice <= 0) {
+            $basePrice = (int) ($product->price ?? 0);
+        }
+
+        return (int) max(0, $basePrice + $unitProfit);
     }
 
     private function failWithCartState($user, Cart $cart, string $message, int $status = 422, array $extra = [])
