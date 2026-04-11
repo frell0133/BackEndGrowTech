@@ -24,10 +24,27 @@ use App\Models\ReferralTransaction;
 use App\Models\Referral;
 use App\Services\ProductAvailabilityService;
 use App\Services\ReferralCommissionService;
+use App\Support\UserTierEligibility;
 
 class UserCartController extends Controller
 {
     use ApiResponse;
+
+    private function rejectVoucherIfTierNotEligible(Voucher $voucher, ?string $tierKey)
+    {
+        if (!UserTierEligibility::voucherAllowed($voucher, $tierKey)) {
+            return $this->fail(
+                UserTierEligibility::voucherMessage($voucher, $tierKey),
+                422,
+                [
+                    'tier' => UserTierEligibility::normalizeTier($tierKey),
+                    'rules' => UserTierEligibility::tierSummaryFromRules($voucher->rules ?? []),
+                ]
+            );
+        }
+
+        return null;
+    }
 
     private function requireUser(Request $request)
     {
@@ -504,6 +521,7 @@ class UserCartController extends Controller
 
             if (!empty($v['voucher_code'])) {
                 $code = strtoupper(trim((string) $v['voucher_code']));
+                $tierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
 
                 $voucher = Voucher::query()
                     ->where('code', $code)
@@ -515,9 +533,15 @@ class UserCartController extends Controller
                 if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
                     return $this->fail('Voucher sudah kedaluwarsa', 422);
                 }
+
+                if ($response = $this->rejectVoucherIfTierNotEligible($voucher, $tierKey)) {
+                    return $response;
+                }
+
                 if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
                     return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
                 }
+
                 if ($voucher->quota !== null) {
                     $used = $voucher->orders()
                         ->whereIn('status', [OrderStatus::PAID->value, OrderStatus::FULFILLED->value])
@@ -528,7 +552,7 @@ class UserCartController extends Controller
                     }
                 }
 
-                if ($voucher->type == 'percent') {
+                if ($voucher->type === 'percent') {
                     $voucherDiscount = (float) floor($subtotal * ((float) $voucher->value / 100));
                 } else {
                     $voucherDiscount = (float) $voucher->value;
@@ -708,37 +732,45 @@ class UserCartController extends Controller
             $voucher = null;
             $voucherDiscount = 0.0;
 
-            if (!empty($v['voucher_code'])) {
-                $code = strtoupper(trim((string) $v['voucher_code']));
-                $voucher = Voucher::query()->where('code', $code)->lockForUpdate()->first();
+                if (!empty($v['voucher_code'])) {
+                    $code = strtoupper(trim((string) $v['voucher_code']));
+                    $tierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
 
-                if (!$voucher) return $this->fail('Voucher tidak ditemukan', 404);
-                if (!$voucher->is_active) return $this->fail('Voucher tidak aktif', 422);
-                if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
-                    return $this->fail('Voucher sudah kedaluwarsa', 422);
-                }
-                if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
-                    return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
-                }
-                if ($voucher->quota !== null) {
-                    $used = $voucher->orders()
-                        ->whereIn('status', [OrderStatus::PAID->value, OrderStatus::FULFILLED->value])
-                        ->count();
+                    $voucher = Voucher::query()->where('code', $code)->lockForUpdate()->first();
 
-                    if ($used >= (int) $voucher->quota) {
-                        return $this->fail('Kuota voucher sudah habis', 422);
+                    if (!$voucher) return $this->fail('Voucher tidak ditemukan', 404);
+                    if (!$voucher->is_active) return $this->fail('Voucher tidak aktif', 422);
+                    if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
+                        return $this->fail('Voucher sudah kedaluwarsa', 422);
                     }
-                }
 
-                if ($voucher->type == 'percent') {
-                    $voucherDiscount = (float) floor($subtotal * ((float) $voucher->value / 100));
-                } else {
-                    $voucherDiscount = (float) $voucher->value;
-                }
+                    if ($response = $this->rejectVoucherIfTierNotEligible($voucher, $tierKey)) {
+                        return $response;
+                    }
 
-                if ($voucherDiscount > $subtotal) $voucherDiscount = $subtotal;
-                $discountTotal += $voucherDiscount;
-            }
+                    if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
+                        return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
+                    }
+
+                    if ($voucher->quota !== null) {
+                        $used = $voucher->orders()
+                            ->whereIn('status', [OrderStatus::PAID->value, OrderStatus::FULFILLED->value])
+                            ->count();
+
+                        if ($used >= (int) $voucher->quota) {
+                            return $this->fail('Kuota voucher sudah habis', 422);
+                        }
+                    }
+
+                    if ($voucher->type === 'percent') {
+                        $voucherDiscount = (float) floor($subtotal * ((float) $voucher->value / 100));
+                    } else {
+                        $voucherDiscount = (float) $voucher->value;
+                    }
+
+                    if ($voucherDiscount > $subtotal) $voucherDiscount = $subtotal;
+                    $discountTotal += $voucherDiscount;
+                }
 
             $ref = $this->computeReferralDiscountForUser((int) $user->id, (float) $subtotal);
             $referralDiscount = (float) ($ref['discount'] ?? 0.0);
@@ -951,16 +983,24 @@ class UserCartController extends Controller
         $voucherDiscount = 0.0;
         if (!empty($v['voucher_code'])) {
             $code = strtoupper(trim((string) $v['voucher_code']));
+            $tierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
 
             $voucher = Voucher::query()->where('code', $code)->first();
+
             if (!$voucher) return $this->fail('Voucher tidak ditemukan', 404);
             if (!$voucher->is_active) return $this->fail('Voucher tidak aktif', 422);
             if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
                 return $this->fail('Voucher sudah kedaluwarsa', 422);
             }
+
+            if ($response = $this->rejectVoucherIfTierNotEligible($voucher, $tierKey)) {
+                return $response;
+            }
+
             if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
                 return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
             }
+
             if ($voucher->quota !== null) {
                 $used = $voucher->orders()
                     ->whereIn('status', [OrderStatus::PAID->value, OrderStatus::FULFILLED->value])

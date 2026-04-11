@@ -30,6 +30,7 @@ use App\Models\Referral;
 use App\Jobs\ProcessPaidOrderJob;
 use App\Models\License;
 use Illuminate\Http\JsonResponse;
+use App\Support\UserTierEligibility;
 
 // ✅ NEW: service untuk komisi referral saat PAID (wallet/midtrans)
 use App\Services\ReferralCommissionService;
@@ -38,6 +39,22 @@ use App\Services\ProductAvailabilityService;
 class UserOrderController extends Controller
 {
     use ApiResponse, DispatchesInvoiceEmail;
+
+    private function rejectVoucherIfTierNotEligible(Voucher $voucher, ?string $tierKey)
+    {
+        if (!UserTierEligibility::voucherAllowed($voucher, $tierKey)) {
+            return $this->fail(
+                UserTierEligibility::voucherMessage($voucher, $tierKey),
+                422,
+                [
+                    'tier' => UserTierEligibility::normalizeTier($tierKey),
+                    'rules' => UserTierEligibility::tierSummaryFromRules($voucher->rules ?? []),
+                ]
+            );
+        }
+
+        return null;
+    }
 
     // =========================
     // Helpers: settings
@@ -418,6 +435,7 @@ class UserOrderController extends Controller
 
             if (!empty($v['voucher_code'])) {
                 $code = strtoupper(trim((string) $v['voucher_code']));
+                $safeTierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
 
                 $voucher = Voucher::query()
                     ->where('code', $code)
@@ -429,9 +447,15 @@ class UserOrderController extends Controller
                 if ($voucher->expires_at && Carbon::parse($voucher->expires_at)->isPast()) {
                     return $this->fail('Voucher sudah kedaluwarsa', 422);
                 }
+
+                if ($response = $this->rejectVoucherIfTierNotEligible($voucher, $safeTierKey)) {
+                    return $response;
+                }
+
                 if ($voucher->min_purchase !== null && $subtotal < (float) $voucher->min_purchase) {
                     return $this->fail('Subtotal belum memenuhi minimal pembelian voucher', 422);
                 }
+
                 if ($voucher->quota !== null) {
                     $used = $voucher->orders()
                         ->whereIn('status', [OrderStatus::PAID->value, OrderStatus::FULFILLED->value])
@@ -442,16 +466,16 @@ class UserOrderController extends Controller
                     }
                 }
 
-                if ($voucher->type === 'percent') {
-                    $voucherDiscount = (float) floor($subtotal * ((float) $voucher->value / 100));
-                } else {
-                    $voucherDiscount = (float) $voucher->value;
-                }
+    if ($voucher->type === 'percent') {
+        $voucherDiscount = (float) floor($subtotal * ((float) $voucher->value / 100));
+    } else {
+        $voucherDiscount = (float) $voucher->value;
+    }
 
-                if ($voucherDiscount > $subtotal) $voucherDiscount = $subtotal;
+    if ($voucherDiscount > $subtotal) $voucherDiscount = $subtotal;
 
-                $discountTotal += $voucherDiscount;
-            }
+    $discountTotal += $voucherDiscount;
+}
 
             // =========================
             // ✅ REFERRAL DISCOUNT

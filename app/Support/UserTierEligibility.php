@@ -37,6 +37,29 @@ class UserTierEligibility
         return array_values($normalized);
     }
 
+    /**
+     * Canonical business rule:
+     * - allowed_tiers = tier yang boleh memakai voucher
+     * - excluded_tiers = pengecualian/blokir
+     * - jika ada overlap, excluded harus menang
+     */
+    public static function normalizeTierRules(?array $rules): array
+    {
+        $safeRules = is_array($rules) ? $rules : [];
+
+        $allowed = self::sanitizeTiers((array) ($safeRules['allowed_tiers'] ?? []));
+        $excluded = self::sanitizeTiers((array) ($safeRules['excluded_tiers'] ?? []));
+
+        if (!empty($excluded)) {
+            $allowed = array_values(array_diff($allowed, $excluded));
+        }
+
+        return [
+            'allowed_tiers' => $allowed,
+            'excluded_tiers' => $excluded,
+        ];
+    }
+
     public static function isReferralTierAllowed(?string $tier): bool
     {
         return self::normalizeTier($tier) === User::TIER_MEMBER;
@@ -51,12 +74,12 @@ class UserTierEligibility
 
     public static function voucherAllowed(Voucher $voucher, ?string $tier): bool
     {
-        $rules = is_array($voucher->rules) ? $voucher->rules : [];
+        $rules = self::normalizeTierRules(is_array($voucher->rules) ? $voucher->rules : []);
 
         return self::passesTierRules(
             self::normalizeTier($tier),
-            self::sanitizeTiers((array) ($rules['allowed_tiers'] ?? [])),
-            self::sanitizeTiers((array) ($rules['excluded_tiers'] ?? [])),
+            $rules['allowed_tiers'],
+            $rules['excluded_tiers'],
         );
     }
 
@@ -69,23 +92,18 @@ class UserTierEligibility
 
     public static function discountCampaignAllowed(DiscountCampaign $campaign, ?string $tier): bool
     {
-        $rules = is_array($campaign->tier_rules) ? $campaign->tier_rules : [];
+        $rules = self::normalizeTierRules(is_array($campaign->tier_rules) ? $campaign->tier_rules : []);
 
         return self::passesTierRules(
             self::normalizeTier($tier),
-            self::sanitizeTiers((array) ($rules['allowed_tiers'] ?? [])),
-            self::sanitizeTiers((array) ($rules['excluded_tiers'] ?? [])),
+            $rules['allowed_tiers'],
+            $rules['excluded_tiers'],
         );
     }
 
     public static function tierSummaryFromRules(?array $rules): array
     {
-        $safeRules = is_array($rules) ? $rules : [];
-
-        return [
-            'allowed_tiers' => self::sanitizeTiers((array) ($safeRules['allowed_tiers'] ?? [])),
-            'excluded_tiers' => self::sanitizeTiers((array) ($safeRules['excluded_tiers'] ?? [])),
-        ];
+        return self::normalizeTierRules($rules);
     }
 
     public static function passesTierRules(string $tier, array $allowedTiers = [], array $excludedTiers = []): bool
