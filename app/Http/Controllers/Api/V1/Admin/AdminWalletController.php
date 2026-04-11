@@ -73,6 +73,12 @@ class AdminWalletController extends Controller
      */
     public function adjust(Request $request, LedgerService $ledgerService)
     {
+        $admin = $request->user();
+
+        $request->merge([
+            'direction' => strtolower((string) $request->input('direction')),
+        ]);
+
         $data = $request->validate([
             'user_id' => ['required', 'integer', 'min:1'],
             'direction' => ['required', 'in:credit,debit'],
@@ -81,17 +87,27 @@ class AdminWalletController extends Controller
             'note' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        // kalau LedgerService kamu belum punya method adjust(),
-        // paling aman: map debit/credit ke method yang sudah ada.
-        // Aku asumsikan LedgerService kamu punya adjust().
-        // Kalau belum, bilang—nanti aku sesuaikan dengan service kamu.
+        $userId = (int) $data['user_id'];
+        $amount = (int) $data['amount'];
+        $direction = (string) $data['direction'];
+
+        $idempotencyKey = $data['idempotency_key']
+            ?? ('ADMIN-ADJUST-' . $direction . '-' . $userId . '-' . $amount . '-' . now()->format('YmdHis'));
+
+        $note = trim(
+            '[ADMIN_ADJUST] actor_admin_id=' . ($admin?->id ?? 'unknown')
+            . ' target_user_id=' . $userId
+            . ' direction=' . $direction
+            . ' amount=' . $amount
+            . (!empty($data['note']) ? ' | ' . $data['note'] : '')
+        );
 
         $tx = $ledgerService->adjust(
-            (int) $data['user_id'],
-            (string) $data['direction'],
-            (int) $data['amount'],
-            $data['idempotency_key'] ?? null,
-            $data['note'] ?? null
+            $userId,
+            $direction,
+            $amount,
+            $idempotencyKey,
+            $note
         );
 
         return response()->json([

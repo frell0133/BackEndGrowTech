@@ -214,6 +214,72 @@ class LedgerService
         });
     }
 
+    public function adjust(
+        int $userId,
+        string $direction,
+        int $amount,
+        ?string $idempotencyKey = null,
+        ?string $note = null
+    ): LedgerTransaction {
+        if ($amount <= 0) {
+            throw ValidationException::withMessages([
+                'amount' => 'Amount harus > 0',
+            ]);
+        }
+
+        $direction = strtolower(trim($direction));
+
+        if (!in_array($direction, ['credit', 'debit'], true)) {
+            throw ValidationException::withMessages([
+                'direction' => 'Direction harus credit atau debit',
+            ]);
+        }
+
+        return DB::transaction(function () use ($userId, $direction, $amount, $idempotencyKey, $note) {
+            if ($idempotencyKey) {
+                $existing = LedgerTransaction::where('idempotency_key', $idempotencyKey)->first();
+                if ($existing) {
+                    return $existing;
+                }
+            }
+
+            $userWallet = $this->getOrCreateUserWallet($userId);
+            $userWallet = Wallet::whereKey($userWallet->id)->lockForUpdate()->firstOrFail();
+
+            if ($direction === 'debit' && (int) $userWallet->balance < $amount) {
+                throw ValidationException::withMessages([
+                    'amount' => 'Saldo user tidak cukup untuk debit',
+                ]);
+            }
+
+            $tx = LedgerTransaction::create([
+                'type' => 'ADJUST',
+                'status' => 'SUCCESS',
+                'idempotency_key' => $idempotencyKey,
+                'note' => $note ?? 'Admin balance adjustment',
+            ]);
+
+            $ledgerDirection = $direction === 'debit' ? 'DEBIT' : 'CREDIT';
+
+            [$before, $after] = $this->applyBalanceInt($userWallet, $ledgerDirection, $amount);
+
+            $userWallet->update([
+                'balance' => $after,
+            ]);
+
+            LedgerEntry::create([
+                'ledger_transaction_id' => $tx->id,
+                'wallet_id' => $userWallet->id,
+                'direction' => $ledgerDirection,
+                'amount' => $amount,
+                'balance_before' => $before,
+                'balance_after' => $after,
+            ]);
+
+            return $tx;
+        });
+    }
+
     // =========================
     // TRANSFER WALLET -> WALLET (generic)
     // =========================
