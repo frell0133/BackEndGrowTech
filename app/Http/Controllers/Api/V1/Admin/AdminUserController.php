@@ -135,6 +135,10 @@ class AdminUserController extends Controller
         $originalEmail = (string) $user->email;
         $originalRole = (string) $user->role;
 
+        if (($validated['role'] ?? null) === 'user') {
+            $validated['admin_role_id'] = null;
+        }
+
         $user->fill($validated)->save();
 
         $emailChanged = isset($validated['email']) && strtolower((string) $validated['email']) !== strtolower($originalEmail);
