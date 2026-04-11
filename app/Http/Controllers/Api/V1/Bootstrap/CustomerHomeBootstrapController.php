@@ -88,6 +88,7 @@ class CustomerHomeBootstrapController extends Controller
                     'products.type',
                     'products.description',
                     'products.tier_pricing',
+                    'products.tier_profit',
                     'products.duration_days',
                     'products.price',
                     'products.is_active',
@@ -106,6 +107,7 @@ class CustomerHomeBootstrapController extends Controller
                 ->where('products.is_published', true)
                 ->orderByDesc('products.rating')
                 ->orderByDesc('products.purchases_count')
+                ->orderByDesc('products.popularity_score')
                 ->orderByDesc('products.rating_count')
                 ->orderByDesc('products.id')
                 ->limit(4)

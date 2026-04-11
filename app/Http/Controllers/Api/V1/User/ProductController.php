@@ -98,7 +98,7 @@ class ProductController extends Controller
 
         $memberBase = (int) ($tierPricing['member'] ?? 0);
         $memberProfit = (int) ($tierProfit['member'] ?? 0);
-        $memberFinal = (int) ($tierFinalPricing['member'] ?? $memberBase);
+        $memberFinal = (int) $memberBase;
 
         $favoritesCount = (int) ($data['favorites_count'] ?? 0);
         $purchasesCount = (int) ($data['purchases_count'] ?? 0);
@@ -110,7 +110,7 @@ class ProductController extends Controller
         $data['display_price'] = $memberFinal;
         $data['display_price_breakdown'] = [
             'base_price' => $memberBase,
-            'profit' => $memberProfit,
+            'profit' => 0,
             'final_price' => $memberFinal,
         ];
         $data['favorites_count'] = $favoritesCount;
