@@ -15,8 +15,6 @@ class CustomerHomeBootstrapController extends Controller
 {
     use ApiResponse;
 
-    private const TIER_KEYS = ['member', 'reseller', 'vip'];
-
     public function __invoke(SystemAccessService $access, ProductAvailabilityService $availability)
     {
         $payload = PublicCache::rememberContent('bootstrap:customer-home:payload', 60, function () use ($access, $availability) {
@@ -39,60 +37,6 @@ class CustomerHomeBootstrapController extends Controller
         });
 
         return $this->ok($payload);
-    }
-
-    private function normalizeTierMap(mixed $value): array
-    {
-        $rawMap = is_array($value) ? $value : [];
-        $normalized = [];
-
-        foreach (self::TIER_KEYS as $key) {
-            $normalized[$key] = max(0, (int) round((float) ($rawMap[$key] ?? 0)));
-        }
-
-        return $normalized;
-    }
-
-    private function buildTierFinalPricing(array $tierPricing, array $tierProfit): array
-    {
-        $final = [];
-
-        foreach (self::TIER_KEYS as $key) {
-            $final[$key] = (int) (($tierPricing[$key] ?? 0) + ($tierProfit[$key] ?? 0));
-        }
-
-        return $final;
-    }
-
-    private function presentProduct(mixed $product, ?int $availableStock = null): array
-    {
-        $data = is_array($product) ? $product : $product->toArray();
-
-        $tierPricing = $this->normalizeTierMap($data['tier_pricing'] ?? []);
-        $tierProfit = $this->normalizeTierMap($data['tier_profit'] ?? []);
-        $tierFinalPricing = $this->buildTierFinalPricing($tierPricing, $tierProfit);
-
-        $memberBase = (int) ($tierPricing['member'] ?? 0);
-        $memberProfit = (int) ($tierProfit['member'] ?? 0);
-        $memberFinal = (int) ($tierFinalPricing['member'] ?? ($memberBase + $memberProfit));
-        $purchasesCount = (int) ($data['purchases_count'] ?? 0);
-        $stock = $availableStock ?? (int) ($data['available_stock'] ?? 0);
-
-        $data['tier_pricing'] = $tierPricing;
-        $data['tier_profit'] = $tierProfit;
-        $data['tier_final_pricing'] = $tierFinalPricing;
-        $data['display_price'] = $memberFinal;
-        $data['display_price_breakdown'] = [
-            'base_price' => $memberBase,
-            'profit' => $memberProfit,
-            'final_price' => $memberFinal,
-        ];
-        $data['available_stock'] = (int) $stock;
-        $data['stock'] = (int) $stock;
-        $data['sold'] = $purchasesCount;
-        $data['purchases_count'] = $purchasesCount;
-
-        return $data;
     }
 
     private function getBanners(): array
@@ -144,7 +88,6 @@ class CustomerHomeBootstrapController extends Controller
                     'products.type',
                     'products.description',
                     'products.tier_pricing',
-                    'products.tier_profit',
                     'products.duration_days',
                     'products.price',
                     'products.is_active',
@@ -156,19 +99,13 @@ class CustomerHomeBootstrapController extends Controller
                     'products.created_at',
                 ])
                 ->with([
-                    'category:id,name,slug,is_active',
-                    'subcategory:id,category_id,name,description,slug,provider,image_url,image_path,is_active',
+                    'category:id,name,slug',
+                    'subcategory:id,category_id,name,description,slug,provider,image_url,image_path',
                 ])
                 ->where('products.is_active', true)
                 ->where('products.is_published', true)
-                ->whereHas('category', fn ($q) => $q->where('is_active', true))
-                ->where(function ($q) {
-                    $q->whereNull('products.subcategory_id')
-                        ->orWhereHas('subcategory', fn ($sq) => $sq->where('is_active', true));
-                })
-                ->orderByDesc('products.popularity_score')
-                ->orderByDesc('products.purchases_count')
                 ->orderByDesc('products.rating')
+                ->orderByDesc('products.purchases_count')
                 ->orderByDesc('products.rating_count')
                 ->orderByDesc('products.id')
                 ->limit(4)
@@ -176,9 +113,8 @@ class CustomerHomeBootstrapController extends Controller
 
             return $availability
                 ->attachToCollection($products)
-                ->map(fn ($product) => $this->presentProduct($product, (int) data_get($product, 'available_stock', 0)))
                 ->values()
-                ->all();
+                ->toArray();
         });
     }
 }
