@@ -7,18 +7,18 @@ use App\Http\Controllers\Controller;
 use App\Models\Favorite;
 use App\Models\Order;
 use App\Models\Product;
+use App\Services\ProductAvailabilityService;
 use App\Support\ApiResponse;
 use App\Support\PublicCache;
 use App\Support\RuntimeCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use App\Services\ProductAvailabilityService;
 
 class UserFavoriteController extends Controller
 {
     use ApiResponse;
 
-    private const INDEX_MAX_PER_PAGE = 50;
+    private const INDEX_MAX_PER_PAGE = 100;
     private const INDEX_TTL = 10;
     private const INDEX_VERSION_PREFIX = 'favorites:index:version:user:';
 
@@ -27,26 +27,36 @@ class UserFavoriteController extends Controller
         $user = $request->user();
         $perPage = max(1, min((int) $request->query('per_page', 20), self::INDEX_MAX_PER_PAGE));
         $page = max(1, (int) $request->query('page', 1));
+        $scope = $request->query('scope', 'favorited');
+        $includeAll = $scope === 'all';
         $version = $this->currentIndexVersion((int) $user->id);
 
         $cacheKey = sprintf(
-            'favorites:index:user:%d:v:%d:page:%d:per_page:%d',
+            'favorites:index:user:%d:v:%d:page:%d:per_page:%d:scope:%s',
             (int) $user->id,
             $version,
             $page,
-            $perPage
+            $perPage,
+            $includeAll ? 'all' : 'favorited'
         );
 
-        $data = RuntimeCache::remember($cacheKey, self::INDEX_TTL, function () use ($user, $perPage) {
-            return Favorite::query()
+        $data = RuntimeCache::remember($cacheKey, self::INDEX_TTL, function () use ($user, $perPage, $includeAll) {
+            $query = Favorite::query()
                 ->select([
                     'id',
                     'user_id',
                     'product_id',
                     'rating',
+                    'is_favorited',
                     'created_at',
                 ])
-                ->where('user_id', $user->id)
+                ->where('user_id', $user->id);
+
+            if (!$includeAll) {
+                $query->where('is_favorited', true);
+            }
+
+            return $query
                 ->with([
                     'product:id,category_id,subcategory_id,name,slug,rating,rating_count,is_active,is_published',
                     'product.subcategory:id,category_id,name,slug,image_url',
@@ -97,10 +107,31 @@ class UserFavoriteController extends Controller
         }
 
         DB::transaction(function () use ($user, $product, $rating) {
-            Favorite::query()->updateOrCreate(
-                ['user_id' => $user->id, 'product_id' => $product->id],
-                ['rating' => $rating]
-            );
+            $favorite = Favorite::query()
+                ->where('user_id', $user->id)
+                ->where('product_id', $product->id)
+                ->first();
+
+            if ($favorite) {
+                $payload = [];
+
+                if (is_null($rating)) {
+                    $payload['is_favorited'] = true;
+                } else {
+                    $payload['rating'] = $rating;
+                }
+
+                if (!empty($payload)) {
+                    $favorite->fill($payload)->save();
+                }
+            } else {
+                Favorite::query()->create([
+                    'user_id' => $user->id,
+                    'product_id' => $product->id,
+                    'rating' => $rating,
+                    'is_favorited' => is_null($rating),
+                ]);
+            }
 
             $this->refreshProductRatingAggregate($product->id, (int) ($product->purchases_count ?? 0));
         });
@@ -108,7 +139,10 @@ class UserFavoriteController extends Controller
         $this->bumpIndexVersion((int) $user->id);
         PublicCache::bumpCatalogProducts();
 
-        return $this->ok(['message' => 'Favorite saved']);
+        return $this->ok([
+            'message' => 'Favorite saved',
+            'can_edit_rating' => !is_null($rating),
+        ]);
     }
 
     public function destroy(Request $request, int $productId)
@@ -127,7 +161,12 @@ class UserFavoriteController extends Controller
         $product = Product::query()->find($productId);
 
         DB::transaction(function () use ($fav, $product) {
-            $fav->delete();
+            if (!is_null($fav->rating)) {
+                $fav->is_favorited = false;
+                $fav->save();
+            } else {
+                $fav->delete();
+            }
 
             if ($product) {
                 $this->refreshProductRatingAggregate($product->id, (int) ($product->purchases_count ?? 0));

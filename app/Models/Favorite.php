@@ -7,10 +7,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Favorite extends Model
 {
-    protected $fillable = ['user_id', 'product_id', 'rating'];
+    protected $fillable = ['user_id', 'product_id', 'rating', 'is_favorited'];
 
     protected $casts = [
         'rating' => 'integer',
+        'is_favorited' => 'boolean',
     ];
 
     public function user(): BelongsTo
