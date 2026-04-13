@@ -7,10 +7,50 @@ use App\Models\Voucher;
 use App\Support\ApiResponse;
 use App\Support\UserTierEligibility;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class AdminVoucherController extends Controller
 {
     use ApiResponse;
+
+    private function normalizeIncomingCode(Request $request): void
+    {
+        $request->merge([
+            'code' => Voucher::normalizeCode($request->input('code')),
+        ]);
+    }
+
+    private function voucherRules(?Voucher $voucher = null): array
+    {
+        return [
+            'code' => [
+                'nullable',
+                'string',
+                'max:50',
+                'regex:/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/',
+                Rule::unique('vouchers', 'code')->ignore($voucher?->id),
+            ],
+            'type' => ['required_without:id', 'in:fixed,percent'],
+            'value' => ['required_without:id', 'numeric', 'min:0'],
+            'quota' => ['nullable', 'integer', 'min:1'],
+            'min_purchase' => ['nullable', 'numeric', 'min:0'],
+            'expires_at' => ['nullable', 'date'],
+            'rules' => ['nullable', 'array'],
+            'rules.allowed_tiers' => ['nullable', 'array'],
+            'rules.allowed_tiers.*' => ['string', 'in:member,reseller,vip'],
+            'rules.excluded_tiers' => ['nullable', 'array'],
+            'rules.excluded_tiers.*' => ['string', 'in:member,reseller,vip'],
+            'is_active' => ['nullable', 'boolean'],
+        ];
+    }
+
+    private function voucherMessages(): array
+    {
+        return [
+            'code.regex' => 'Format kode voucher hanya boleh huruf besar, angka, dan tanda hubung (-).',
+            'code.unique' => 'Kode voucher sudah digunakan. Gunakan kode yang unik.',
+        ];
+    }
 
     public function index(Request $request)
     {
@@ -33,20 +73,9 @@ class AdminVoucherController extends Controller
 
     public function store(Request $request)
     {
-        $data = $request->validate([
-            'code' => ['nullable', 'string', 'max:50', 'unique:vouchers,code'],
-            'type' => ['required', 'in:fixed,percent'],
-            'value' => ['required', 'numeric', 'min:0'],
-            'quota' => ['nullable', 'integer', 'min:1'],
-            'min_purchase' => ['nullable', 'numeric', 'min:0'],
-            'expires_at' => ['nullable', 'date'],
-            'rules' => ['nullable', 'array'],
-            'rules.allowed_tiers' => ['nullable', 'array'],
-            'rules.allowed_tiers.*' => ['string', 'in:member,reseller,vip'],
-            'rules.excluded_tiers' => ['nullable', 'array'],
-            'rules.excluded_tiers.*' => ['string', 'in:member,reseller,vip'],
-            'is_active' => ['nullable', 'boolean'],
-        ]);
+        $this->normalizeIncomingCode($request);
+
+        $data = $request->validate($this->voucherRules(), $this->voucherMessages());
 
         if (($data['type'] ?? null) === 'percent' && ($data['value'] ?? 0) > 100) {
             return $this->fail('Value percent maksimal 100', 422);
@@ -86,20 +115,13 @@ class AdminVoucherController extends Controller
     {
         $voucher = Voucher::findOrFail($id);
 
-        $data = $request->validate([
-            'code' => ['nullable', 'string', 'max:50', 'unique:vouchers,code,' . $voucher->id],
-            'type' => ['sometimes', 'in:fixed,percent'],
-            'value' => ['sometimes', 'numeric', 'min:0'],
-            'quota' => ['nullable', 'integer', 'min:1'],
-            'min_purchase' => ['nullable', 'numeric', 'min:0'],
-            'expires_at' => ['nullable', 'date'],
-            'rules' => ['nullable', 'array'],
-            'rules.allowed_tiers' => ['nullable', 'array'],
-            'rules.allowed_tiers.*' => ['string', 'in:member,reseller,vip'],
-            'rules.excluded_tiers' => ['nullable', 'array'],
-            'rules.excluded_tiers.*' => ['string', 'in:member,reseller,vip'],
-            'is_active' => ['nullable', 'boolean'],
-        ]);
+        $this->normalizeIncomingCode($request);
+
+        $rules = $this->voucherRules($voucher);
+        $rules['type'] = ['sometimes', 'in:fixed,percent'];
+        $rules['value'] = ['sometimes', 'numeric', 'min:0'];
+
+        $data = $request->validate($rules, $this->voucherMessages());
 
         if (($data['type'] ?? $voucher->type) === 'percent' && (($data['value'] ?? $voucher->value) > 100)) {
             return $this->fail('Value percent maksimal 100', 422);
@@ -114,9 +136,9 @@ class AdminVoucherController extends Controller
         $voucher->fill($data);
         $voucher->save();
 
-        $rules = UserTierEligibility::normalizeTierRules($voucher->rules ?? []);
-        $voucher->setAttribute('rules', $rules);
-        $voucher->setAttribute('tier_rules', $rules);
+        $normalizedRules = UserTierEligibility::normalizeTierRules($voucher->rules ?? []);
+        $voucher->setAttribute('rules', $normalizedRules);
+        $voucher->setAttribute('tier_rules', $normalizedRules);
 
         return $this->ok($voucher);
     }

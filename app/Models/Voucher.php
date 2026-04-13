@@ -33,15 +33,47 @@ class Voucher extends Model
             ->withPivot(['discount_amount'])
             ->withTimestamps();
     }
-    
+
+    public static function normalizeCode(?string $code): ?string
+    {
+        $raw = trim((string) $code);
+
+        if ($raw === '') {
+            return null;
+        }
+
+        $normalized = Str::of($raw)
+            ->upper()
+            ->replaceMatches('/[^A-Z0-9-]+/', '-')
+            ->replaceMatches('/-+/', '-')
+            ->trim('-')
+            ->value();
+
+        return $normalized === '' ? null : $normalized;
+    }
+
+    public function setCodeAttribute($value): void
+    {
+        $this->attributes['code'] = static::normalizeCode($value);
+    }
+
     protected static function booted(): void
     {
         static::creating(function ($voucher) {
-            if (!empty($voucher->code)) return;
+            if (!empty($voucher->code)) {
+                $voucher->code = static::normalizeCode($voucher->code);
+                return;
+            }
 
             do {
-                $voucher->code = 'PROMO-' . Str::upper(Str::random(8)); // contoh: PROMO-8KDJ2LQA
+                $voucher->code = 'PROMO-' . Str::upper(Str::random(8));
             } while (static::where('code', $voucher->code)->exists());
+        });
+
+        static::updating(function ($voucher) {
+            if (array_key_exists('code', $voucher->getAttributes())) {
+                $voucher->code = static::normalizeCode($voucher->code);
+            }
         });
     }
 }

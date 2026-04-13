@@ -434,7 +434,7 @@ class UserOrderController extends Controller
             $voucherDiscount = 0.0;
 
             if (!empty($v['voucher_code'])) {
-                $code = strtoupper(trim((string) $v['voucher_code']));
+                $$code = trim((string) $v['voucher_code']);
                 $safeTierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
 
                 $voucher = Voucher::query()

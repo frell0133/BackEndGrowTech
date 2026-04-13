@@ -21,11 +21,13 @@ class UserVoucherController extends Controller
         }
 
         $v = $request->validate([
-            'code' => ['required', 'string', 'max:50'],
+            'code' => ['required', 'string', 'max:50', 'regex:/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/'],
             'subtotal' => ['required', 'numeric', 'min:0'],
+        ], [
+            'code.regex' => 'Format kode voucher tidak valid. Gunakan huruf besar, angka, dan tanda hubung (-).',
         ]);
 
-        $code = strtoupper(trim($v['code']));
+        $code = trim((string) $v['code']);
         $subtotal = (float) $v['subtotal'];
         $tierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
 

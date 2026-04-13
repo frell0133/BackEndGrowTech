@@ -520,7 +520,7 @@ class UserCartController extends Controller
             $voucherDiscount = 0.0;
 
             if (!empty($v['voucher_code'])) {
-                $code = strtoupper(trim((string) $v['voucher_code']));
+                $code = trim((string) $v['voucher_code']);
                 $tierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
 
                 $voucher = Voucher::query()
@@ -733,7 +733,7 @@ class UserCartController extends Controller
             $voucherDiscount = 0.0;
 
                 if (!empty($v['voucher_code'])) {
-                    $code = strtoupper(trim((string) $v['voucher_code']));
+                    $code = trim((string) $v['voucher_code']);
                     $tierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
 
                     $voucher = Voucher::query()->where('code', $code)->lockForUpdate()->first();
@@ -982,7 +982,7 @@ class UserCartController extends Controller
         // ✅ voucher discount (preview: no lock; quota check still ok)
         $voucherDiscount = 0.0;
         if (!empty($v['voucher_code'])) {
-            $code = strtoupper(trim((string) $v['voucher_code']));
+            $code = trim((string) $v['voucher_code']);
             $tierKey = UserTierEligibility::normalizeTier($user->tier ?? 'member');
 
             $voucher = Voucher::query()->where('code', $code)->first();
