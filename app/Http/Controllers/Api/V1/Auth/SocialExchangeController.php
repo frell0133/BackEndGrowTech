@@ -51,6 +51,7 @@ class SocialExchangeController extends Controller
 
         if ($trustedDevice) {
             $token = $user->createToken('api-token-social-trusted-device')->plainTextToken;
+            $issued = $trustedDeviceService->issueRememberedDevicePayload($user, $request, $trustedDevice);
 
             $response = $this->ok([
                 'requires_2fa' => false,
@@ -58,9 +59,21 @@ class SocialExchangeController extends Controller
                 'user' => $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code'),
                 'token' => $token,
                 'token_type' => 'Bearer',
+                'trusted_device_credential' => $issued['credential'],
+                'trusted_device_expires_at' => $issued['expires_at'],
             ]);
 
-            return $trustedDeviceService->rotateTrustedDevice($response, $trustedDevice, $request);
+            return $response->withCookie(cookie(
+                config('trusted_device.cookie_name', 'gt_trusted_device'),
+                $issued['credential'],
+                max(1, now()->diffInMinutes($issued['device']->expires_at)),
+                config('trusted_device.cookie_path', '/'),
+                config('trusted_device.cookie_domain'),
+                (bool) config('trusted_device.secure', app()->environment('production')),
+                true,
+                false,
+                config('trusted_device.same_site', app()->environment('production') ? 'none' : 'lax')
+            ));
         }
 
         $challenge = $twoFactor->startChallenge($user, 'social', [

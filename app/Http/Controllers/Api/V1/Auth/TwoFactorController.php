@@ -65,15 +65,34 @@ class TwoFactorController extends Controller
         $tokenName = $this->tokenNameFromChallenge($challenge);
         $token = $user->createToken($tokenName)->plainTextToken;
 
-        $response = $this->ok([
+        $payload = [
             'user' => $this->serializeUser($user->fresh()),
             'token' => $token,
             'token_type' => 'Bearer',
             'trusted_device' => (bool) $challenge->remember,
-        ]);
+        ];
+
+        $response = $this->ok($payload);
 
         if ((bool) $challenge->remember) {
-            return $trustedDeviceService->attachRememberedDevice($response, $user->fresh(), $request);
+            $issued = $trustedDeviceService->issueRememberedDevicePayload($user->fresh(), $request);
+
+            $response = $this->ok(array_merge($payload, [
+                'trusted_device_credential' => $issued['credential'],
+                'trusted_device_expires_at' => $issued['expires_at'],
+            ]));
+
+            return $response->withCookie(cookie(
+                config('trusted_device.cookie_name', 'gt_trusted_device'),
+                $issued['credential'],
+                max(1, now()->diffInMinutes($issued['device']->expires_at)),
+                config('trusted_device.cookie_path', '/'),
+                config('trusted_device.cookie_domain'),
+                (bool) config('trusted_device.secure', app()->environment('production')),
+                true,
+                false,
+                config('trusted_device.same_site', app()->environment('production') ? 'none' : 'lax')
+            ));
         }
 
         return $trustedDeviceService->clearTrustedDeviceCookie($response);

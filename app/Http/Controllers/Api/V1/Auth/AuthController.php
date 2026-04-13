@@ -133,10 +133,10 @@ class AuthController extends Controller
             );
         }
 
-        $trustedDevice = $trustedDeviceService->hasValidTrustedDevice($user, $request);
-
-        if ($trustedDevice) {
+    $trustedDevice = $trustedDeviceService->hasValidTrustedDevice($user, $request);
+       if ($trustedDevice) {
             $token = $user->createToken('api-token-trusted-device')->plainTextToken;
+            $issued = $trustedDeviceService->issueRememberedDevicePayload($user, $request, $trustedDevice);
 
             $response = $this->ok([
                 'requires_2fa' => false,
@@ -144,9 +144,21 @@ class AuthController extends Controller
                 'user' => $this->serializeUser($user),
                 'token' => $token,
                 'token_type' => 'Bearer',
+                'trusted_device_credential' => $issued['credential'],
+                'trusted_device_expires_at' => $issued['expires_at'],
             ]);
 
-            return $trustedDeviceService->rotateTrustedDevice($response, $trustedDevice, $request);
+            return $response->withCookie(cookie(
+                config('trusted_device.cookie_name', 'gt_trusted_device'),
+                $issued['credential'],
+                max(1, now()->diffInMinutes($trustedDevice->fresh()->expires_at ?? now()->addDays(30))),
+                config('trusted_device.cookie_path', '/'),
+                config('trusted_device.cookie_domain'),
+                (bool) config('trusted_device.secure', app()->environment('production')),
+                true,
+                false,
+                config('trusted_device.same_site', app()->environment('production') ? 'none' : 'lax')
+            ));
         }
 
         $challenge = $twoFactor->startChallenge($user, 'login', [

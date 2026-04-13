@@ -10,13 +10,16 @@ use Illuminate\Support\Str;
 
 class TrustedDeviceService
 {
+    public const TRUSTED_DEVICE_HEADER = 'X-Trusted-Device';
+    public const DEVICE_FINGERPRINT_HEADER = 'X-Device-Fingerprint';
+
     public function hasValidTrustedDevice(User $user, Request $request): ?TrustedDevice
     {
         if (!$this->isEligible($user) || !$user->email_verified_at) {
             return null;
         }
 
-        $parsed = $this->parseCookieValue((string) $request->cookie($this->cookieName()));
+        $parsed = $this->extractCredentialFromRequest($request);
 
         if (!$parsed) {
             return null;
@@ -39,28 +42,20 @@ class TrustedDeviceService
             return null;
         }
 
-        if ($this->shouldBindUserAgent()) {
-            $currentHash = $this->userAgentHash($request);
-            $matches = $device->user_agent_hash && hash_equals((string) $device->user_agent_hash, $currentHash);
-
-            if (!$matches && $this->allowLooseUserAgentMatch()) {
-                $matches = $this->normalizedUserAgentFingerprint((string) $device->user_agent) === $this->normalizedUserAgentFingerprint((string) $request->userAgent());
-            }
-
-            if (!$matches) {
-                return null;
-            }
+        if (!$this->matchesFingerprint($device, $request) && !$this->matchesUserAgent($device, $request)) {
+            return null;
         }
+
+        $device->forceFill([
+            'last_ip' => $request->ip(),
+            'last_used_at' => now(),
+        ])->save();
 
         return $device;
     }
 
-    public function attachRememberedDevice(JsonResponse $response, User $user, Request $request, ?TrustedDevice $device = null): JsonResponse
+    public function issueRememberedDevicePayload(User $user, Request $request, ?TrustedDevice $device = null): array
     {
-        if (!$this->isEligible($user)) {
-            return $response;
-        }
-
         $selector = $device?->selector ?: Str::random(24);
         $plainToken = Str::random(64);
         $expiresAt = now()->addDays($this->rememberDays($user));
@@ -72,6 +67,7 @@ class TrustedDeviceService
             'device_name' => $this->resolveDeviceName($request),
             'user_agent' => Str::limit((string) $request->userAgent(), 1000, ''),
             'user_agent_hash' => $this->shouldBindUserAgent() ? $this->userAgentHash($request) : null,
+            'fingerprint_hash' => $this->fingerprintHashFromRequest($request),
             'last_ip' => $request->ip(),
             'last_used_at' => now(),
             'expires_at' => $expiresAt,
@@ -80,11 +76,29 @@ class TrustedDeviceService
 
         if ($device) {
             $device->update($payload);
+            $trustedDevice = $device->fresh();
         } else {
-            $device = TrustedDevice::create($payload);
+            $trustedDevice = TrustedDevice::create($payload);
         }
 
-        return $response->withCookie($this->makeCookie($selector . '|' . $plainToken, $expiresAt));
+        return [
+            'device' => $trustedDevice,
+            'selector' => $selector,
+            'plain_token' => $plainToken,
+            'credential' => $selector . '|' . $plainToken,
+            'expires_at' => $expiresAt->toIso8601String(),
+        ];
+    }
+
+    public function attachRememberedDevice(JsonResponse $response, User $user, Request $request, ?TrustedDevice $device = null): JsonResponse
+    {
+        if (!$this->isEligible($user)) {
+            return $response;
+        }
+
+        $issued = $this->issueRememberedDevicePayload($user, $request, $device);
+
+        return $response->withCookie($this->makeCookie($issued['credential'], $issued['device']->expires_at));
     }
 
     public function rotateTrustedDevice(JsonResponse $response, TrustedDevice $device, Request $request): JsonResponse
@@ -117,7 +131,18 @@ class TrustedDeviceService
             ]);
     }
 
-    private function parseCookieValue(string $value): ?array
+    private function extractCredentialFromRequest(Request $request): ?array
+    {
+        $headerValue = trim((string) $request->header(self::TRUSTED_DEVICE_HEADER, ''));
+
+        if ($headerValue !== '') {
+            return $this->parseCredentialValue($headerValue);
+        }
+
+        return $this->parseCredentialValue((string) $request->cookie($this->cookieName()));
+    }
+
+    private function parseCredentialValue(string $value): ?array
     {
         $value = trim($value);
 
@@ -135,6 +160,45 @@ class TrustedDeviceService
             'selector' => $selector,
             'token' => $token,
         ];
+    }
+
+    private function matchesFingerprint(TrustedDevice $device, Request $request): bool
+    {
+        $currentFingerprint = $this->fingerprintHashFromRequest($request);
+
+        if (!$currentFingerprint || !$device->fingerprint_hash) {
+            return false;
+        }
+
+        return hash_equals((string) $device->fingerprint_hash, $currentFingerprint);
+    }
+
+    private function matchesUserAgent(TrustedDevice $device, Request $request): bool
+    {
+        if (!$this->shouldBindUserAgent()) {
+            return true;
+        }
+
+        $currentHash = $this->userAgentHash($request);
+        $matches = $device->user_agent_hash && hash_equals((string) $device->user_agent_hash, $currentHash);
+
+        if (!$matches && $this->allowLooseUserAgentMatch()) {
+            $matches = $this->normalizedUserAgentFingerprint((string) $device->user_agent)
+                === $this->normalizedUserAgentFingerprint((string) $request->userAgent());
+        }
+
+        return $matches;
+    }
+
+    private function fingerprintHashFromRequest(Request $request): ?string
+    {
+        $fingerprint = trim((string) $request->header(self::DEVICE_FINGERPRINT_HEADER, ''));
+
+        if ($fingerprint === '') {
+            return null;
+        }
+
+        return hash('sha256', $fingerprint);
     }
 
     private function makeCookie(string $value, $expiresAt)
@@ -167,7 +231,6 @@ class TrustedDeviceService
     private function cookieDomain(): ?string
     {
         $value = config('trusted_device.cookie_domain');
-
         return $value !== null && $value !== '' ? (string) $value : null;
     }
 
