@@ -607,6 +607,7 @@ class UserCartController extends Controller
                 'gateway_fee_amount' => (float) $gatewayFeeAmount,
                 'amount' => (float) $amount, // base (tanpa fee gateway)
                 'payment_gateway_code' => null,
+                'checkout_source' => 'cart',
             ]);
 
             // ✅ referral transaction (pending) jika diskon referral dipakai
@@ -650,8 +651,6 @@ class UserCartController extends Controller
                     ]);
                 }
             }
-
-            CartItem::query()->where('cart_id', (int) $cart->id)->delete();
 
             return $this->buildCheckoutSuccessPayload(
                 $order,
@@ -802,6 +801,7 @@ class UserCartController extends Controller
                 'gateway_fee_amount' => (float) $gatewayFeeAmount,
                 'amount' => (float) $amount,
                 'payment_gateway_code' => null,
+                'checkout_source' => 'buy_now',
             ]);
 
             if ($referralDiscount > 0 && $referrerId) {

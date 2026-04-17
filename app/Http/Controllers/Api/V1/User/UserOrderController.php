@@ -34,6 +34,9 @@ use App\Support\UserTierEligibility;
 
 // ✅ NEW: service untuk komisi referral saat PAID (wallet/midtrans)
 use App\Services\ReferralCommissionService;
+use App\Services\LicenseStockService;
+use App\Models\Cart;
+use App\Models\CartItem;
 use App\Services\ProductAvailabilityService;
 
 class UserOrderController extends Controller
@@ -615,6 +618,52 @@ class UserOrderController extends Controller
         });
     }
 
+    private function clearUserCartForOrderSource(Order $order, int $userId): void
+    {
+        $source = (string) ($order->checkout_source ?? '');
+
+        if ($source !== 'cart') {
+            return;
+        }
+
+        $cart = Cart::query()->firstOrCreate(['user_id' => $userId]);
+        CartItem::query()->where('cart_id', (int) $cart->id)->delete();
+    }
+
+    private function reserveStockForOrder(Order $order, LicenseStockService $licenseStockService): void
+    {
+        $items = $order->items;
+
+        if (!$items || $items->isEmpty()) {
+            $items = collect([(object) [
+                'product_id' => (int) ($order->product_id ?? 0),
+                'qty' => (int) ($order->qty ?? 1),
+            ]]);
+        }
+
+        foreach ($items as $item) {
+            $productId = (int) ($item->product_id ?? 0);
+            $qty = max(1, (int) ($item->qty ?? 1));
+
+            if ($productId <= 0) {
+                continue;
+            }
+
+            $alreadyReserved = License::query()
+                ->where('product_id', $productId)
+                ->where('reserved_order_id', (int) $order->id)
+                ->where('status', License::STATUS_RESERVED)
+                ->count();
+
+            if ($alreadyReserved >= $qty) {
+                continue;
+            }
+
+            $needReserve = $qty - $alreadyReserved;
+            $licenseStockService->reserve($productId, (int) $order->id, $needReserve);
+        }
+    }
+
     private function availableLicenseStock(int $productId): int
     {
         return app(ProductAvailabilityService::class)->forProductId($productId);
@@ -664,7 +713,8 @@ class UserOrderController extends Controller
         MidtransService $midtrans,
         LedgerService $ledger,
         OrderFulfillmentService $fulfillment,
-        \App\Services\Payments\PaymentGatewayManager $gatewayManager
+        \App\Services\Payments\PaymentGatewayManager $gatewayManager,
+        LicenseStockService $licenseStockService
     ) {
         $user = $request->user();
 
@@ -768,6 +818,8 @@ class UserOrderController extends Controller
                             return $stockError;
                         }
 
+                        $this->reserveStockForOrder($locked, $licenseStockService);
+
                         $amountInt = (int) round((float) $locked->amount);
                         if ($amountInt <= 0) {
                             return $this->fail('Amount invalid', 422);
@@ -811,6 +863,7 @@ class UserOrderController extends Controller
                             'paid_at' => now()->toDateTimeString(),
                         ];
                         $payment->save();
+                        $this->clearUserCartForOrderSource($locked, (int) $user->id);
 
                         return [
                             'order_id' => (int) $locked->id,
@@ -853,6 +906,7 @@ class UserOrderController extends Controller
                         'error' => $e->getMessage(),
                     ]);
 
+                    try { $licenseStockService->releaseByOrder((int) $order->id); } catch (\Throwable $ignored) {}
                     return $this->fail($e->getMessage(), 422);
                 }
             }
@@ -887,6 +941,8 @@ class UserOrderController extends Controller
                     return $stockError;
                 }
 
+                $this->reserveStockForOrder($locked, $licenseStockService);
+
                 $baseAmount = (float) $locked->amount;
                 $fee = $this->resolveGatewayFee($gateway, $baseAmount);
                 $grossAmount = round($baseAmount + (float) $fee['amount'], 2);
@@ -912,6 +968,7 @@ class UserOrderController extends Controller
                     'initiated_at' => now()->toDateTimeString(),
                 ]);
                 $payment->save();
+                $this->clearUserCartForOrderSource($locked, (int) $user->id);
 
                 return [
                     'order_id' => (int) $locked->id,
@@ -1012,6 +1069,7 @@ class UserOrderController extends Controller
                 ]);
             });
         } catch (\Throwable $e) {
+            try { $licenseStockService->releaseByOrder((int) $order->id); } catch (\Throwable $ignored) {}
             return $this->fail($e->getMessage(), 422);
         } finally {
             try {

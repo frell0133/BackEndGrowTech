@@ -14,6 +14,21 @@ class AdminSubCategoryController extends Controller
 {
     use ApiResponse;
 
+    private function defaultImagePayload(array $validated): array
+    {
+        $hasImageUrl = !empty($validated['image_url']);
+        $hasImagePath = !empty($validated['image_path']);
+
+        if ($hasImageUrl || $hasImagePath) {
+            return $validated;
+        }
+
+        $validated['image_url'] = '/logogrowtech.png';
+        $validated['image_path'] = 'defaults/logogrowtech.png';
+
+        return $validated;
+    }
+
     public function index(Request $request)
     {
         $categoryId = $request->query('category_id');
@@ -48,7 +63,7 @@ class AdminSubCategoryController extends Controller
             'description' => ['nullable', 'string'],
         ]);
 
-        $sub = SubCategory::create($validated);
+        $sub = SubCategory::create($this->defaultImagePayload($validated));
 
         PublicCache::bumpCatalog();
         PublicCache::bumpDashboard();
@@ -82,7 +97,7 @@ class AdminSubCategoryController extends Controller
             'description' => ['nullable', 'string'],
         ]);
 
-        $sub->update($validated);
+        $sub->update($this->defaultImagePayload($validated));
 
         PublicCache::bumpCatalog();
         PublicCache::bumpDashboard();

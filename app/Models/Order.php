@@ -26,6 +26,7 @@ class Order extends Model
         'gateway_fee_percent',
         'gateway_fee_amount',
         'payment_gateway_code',
+        'checkout_source',
         'invoice_emailed_at',
     ];
 
@@ -38,6 +39,7 @@ class Order extends Model
         'gateway_fee_percent' => 'decimal:3',
         'gateway_fee_amount' => 'decimal:2',
         'status' => OrderStatus::class,
+        'checkout_source' => 'string',
         'invoice_emailed_at' => 'datetime',
     ];
 

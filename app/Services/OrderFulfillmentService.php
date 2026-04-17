@@ -173,7 +173,16 @@ class OrderFulfillmentService
 
                 $licenses = License::query()
                     ->where('product_id', $productId)
-                    ->where('status', 'available')
+                    ->where(function ($query) use ($lockedOrder) {
+                        $query->where(function ($reserved) use ($lockedOrder) {
+                            $reserved->where('status', 'reserved')
+                                ->where('reserved_order_id', (int) $lockedOrder->id);
+                        })->orWhere(function ($available) {
+                            $available->where('status', 'available')
+                                ->whereNull('reserved_order_id');
+                        });
+                    })
+                    ->orderByRaw("CASE WHEN status = 'reserved' THEN 0 ELSE 1 END")
                     ->orderBy('id')
                     ->lockForUpdate()
                     ->limit($remainingQty)
