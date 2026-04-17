@@ -6,10 +6,19 @@ use App\Http\Controllers\Controller;
 use App\Models\LedgerEntry;
 use App\Models\WalletTopup;
 use App\Services\LedgerService;
+use App\Support\RuntimeCache;
 use Illuminate\Http\Request;
 
 class AdminWalletController extends Controller
 {
+    private function flushUserWalletCaches(int $userId): void
+    {
+        RuntimeCache::forget(sprintf('wallet:summary:user:%d', $userId));
+        RuntimeCache::forget(sprintf('wallet:ledger:user:%d:page:%d:per_page:%d', $userId, 1, 20));
+        RuntimeCache::forget(sprintf('bootstrap:checkout:user:%d', $userId));
+    }
+
+
     /**
      * POST /api/v1/admin/wallet/topup
      * Manual topup oleh admin (rescue case)
@@ -55,6 +64,8 @@ class AdminWalletController extends Controller
             $idempotencyKey,
             $note
         );
+
+        $this->flushUserWalletCaches($userId);
 
         return response()->json([
             'success' => true,
@@ -109,6 +120,8 @@ class AdminWalletController extends Controller
             $idempotencyKey,
             $note
         );
+
+        $this->flushUserWalletCaches($userId);
 
         return response()->json([
             'success' => true,

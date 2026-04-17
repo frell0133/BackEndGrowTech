@@ -10,6 +10,7 @@ use App\Models\Referral;
 use App\Models\LedgerEntry;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Hash;
 use App\Services\TrustedDeviceService;
 
@@ -118,7 +119,18 @@ class AdminUserController extends Controller
             'password' => ['sometimes','nullable','string','min:8'],
             'role' => ['sometimes', Rule::in(['user','admin'])],
             'tier' => ['sometimes', Rule::in(User::allowedTiers())],
+        ], [
+            'email.unique' => 'Gagal update user, terdeteksi email yang sama pada database user.',
         ]);
+
+        $provider = strtolower((string) ($user->provider ?? ''));
+        $isSocialAccount = $provider !== '' && !in_array($provider, ['manual', 'email'], true);
+
+        if ($isSocialAccount && array_key_exists('email', $validated)) {
+            throw ValidationException::withMessages([
+                'email' => ['Email akun social login tidak dapat diubah dari manajemen user.'],
+            ]);
+        }
 
         if (array_key_exists('email', $validated)) {
             $validated['email'] = strtolower($validated['email']);
