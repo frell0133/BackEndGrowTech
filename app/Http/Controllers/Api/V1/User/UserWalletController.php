@@ -5,42 +5,39 @@ namespace App\Http\Controllers\Api\V1\User;
 use App\Http\Controllers\Controller;
 use App\Models\LedgerEntry;
 use App\Services\LedgerService;
-use App\Support\RuntimeCache;
 use Illuminate\Http\Request;
 
 class UserWalletController extends Controller
 {
-    private const SUMMARY_TTL = 8;
     private const LEDGER_TTL = 8;
 
     public function summary(Request $request, LedgerService $ledgerService)
     {
         $userId = (int) $request->user()->id;
-        $cacheKey = sprintf('wallet:summary:user:%d', $userId);
+        $wallet = $ledgerService->getOrCreateUserWallet($userId);
 
-        $payload = RuntimeCache::remember($cacheKey, self::SUMMARY_TTL, function () use ($ledgerService, $userId) {
-            $wallet = $ledgerService->getOrCreateUserWallet($userId);
+        $lastEntries = LedgerEntry::with('transaction:id,type')
+            ->where('wallet_id', $wallet->id)
+            ->orderByDesc('id')
+            ->limit(10)
+            ->get()
+            ->map(function ($entry) {
+                return [
+                    'id' => $entry->id,
+                    'tx_id' => $entry->ledger_transaction_id,
+                    'type' => $entry->transaction?->type,
+                    'direction' => $entry->direction,
+                    'amount' => $entry->amount,
+                    'balance_after' => $entry->balance_after,
+                    'created_at' => $entry->created_at,
+                ];
+            })
+            ->values()
+            ->all();
 
-            $lastEntries = LedgerEntry::with('transaction:id,type')
-                ->where('wallet_id', $wallet->id)
-                ->orderByDesc('id')
-                ->limit(10)
-                ->get()
-                ->map(function ($entry) {
-                    return [
-                        'id' => $entry->id,
-                        'tx_id' => $entry->ledger_transaction_id,
-                        'type' => $entry->transaction?->type,
-                        'direction' => $entry->direction,
-                        'amount' => $entry->amount,
-                        'balance_after' => $entry->balance_after,
-                        'created_at' => $entry->created_at,
-                    ];
-                })
-                ->values()
-                ->all();
-
-            return [
+        return response()->json([
+            'success' => true,
+            'data' => [
                 'wallet' => [
                     'id' => $wallet->id,
                     'balance' => (int) $wallet->balance,
@@ -48,13 +45,8 @@ class UserWalletController extends Controller
                     'status' => $wallet->status,
                 ],
                 'last_entries' => $lastEntries,
-            ];
-        });
-
-        return response()->json([
-            'success' => true,
-            'data' => $payload,
-        ]);
+            ],
+        ])->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
     }
 
     public function ledger(Request $request, LedgerService $ledgerService)
