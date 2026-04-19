@@ -789,7 +789,7 @@ class UserOrderController extends Controller
         try {
             if ($this->isWalletMethod($selected)) {
                 try {
-                    $result = DB::transaction(function () use ($order, $user, $ledger) {
+                    $result = DB::transaction(function () use ($order, $user, $ledger, $licenseStockService) {
                         $locked = Order::query()
                             ->where('id', (int) $order->id)
                             ->where('user_id', (int) $user->id)
@@ -916,7 +916,7 @@ class UserOrderController extends Controller
                 return $this->fail('Payment gateway tidak tersedia atau tidak aktif', 422);
             }
 
-            $prepared = DB::transaction(function () use ($order, $user, $gateway) {
+            $prepared = DB::transaction(function () use ($order, $user, $gateway, $licenseStockService) {
                 $locked = Order::query()
                     ->where('id', (int) $order->id)
                     ->where('user_id', (int) $user->id)
