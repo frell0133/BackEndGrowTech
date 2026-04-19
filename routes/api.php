@@ -312,6 +312,7 @@ Route::prefix('v1')->group(function () {
         // Wallet (User)
         Route::get('wallet/summary', [UserWalletController::class, 'summary']);
         Route::get('wallet/ledger', [UserWalletController::class, 'ledger']);
+        Route::get('wallet/topups', [UserWalletController::class, 'topups']);
         Route::get('/wallet/topups/{orderId}', [UserTopupController::class, 'show']);
 
         // TOPUP QRIS init

@@ -9,6 +9,7 @@ use App\Services\SystemAccessService;
 use App\Services\TrustedDeviceService;
 use App\Services\TwoFactorService;
 use App\Support\ApiResponse;
+use App\Services\SupabaseStorageService;
 use Illuminate\Http\Request;
 
 class TwoFactorController extends Controller
@@ -155,6 +156,30 @@ class TwoFactorController extends Controller
 
     private function serializeUser(User $user): array
     {
-        return $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code');
+        $bucket = (string) config('services.supabase.bucket_avatars', 'avatars');
+        $avatarUrl = null;
+
+        if (!empty($user->avatar_path)) {
+            try {
+                $avatarUrl = app(SupabaseStorageService::class)->publicObjectUrl($bucket, $user->avatar_path);
+            } catch (\Throwable $e) {
+                $avatarUrl = $user->avatar ?: null;
+            }
+        } elseif (!empty($user->avatar)) {
+            $avatarUrl = $user->avatar;
+        }
+
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->role,
+            'tier' => $user->tier,
+            'referral_code' => $user->referral_code,
+            'avatar' => $user->avatar,
+            'avatar_path' => $user->avatar_path,
+            'avatar_url' => $avatarUrl,
+            'full_name' => $user->full_name,
+        ];
     }
 }

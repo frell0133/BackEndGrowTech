@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api\V1\User;
 
 use App\Http\Controllers\Controller;
 use App\Models\LedgerEntry;
+use App\Models\WalletTopup;
 use App\Services\LedgerService;
+use App\Support\RuntimeCache;
 use Illuminate\Http\Request;
 
 class UserWalletController extends Controller
@@ -46,6 +48,39 @@ class UserWalletController extends Controller
                 ],
                 'last_entries' => $lastEntries,
             ],
+        ])->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    }
+
+
+
+    public function topups(Request $request)
+    {
+        $userId = (int) $request->user()->id;
+        $perPage = max(1, min((int) $request->query('per_page', 20), 100));
+
+        $rows = WalletTopup::query()
+            ->where('user_id', $userId)
+            ->orderByDesc('id')
+            ->paginate($perPage)
+            ->through(function ($topup) {
+                return [
+                    'id' => (int) $topup->id,
+                    'order_id' => $topup->order_id,
+                    'amount' => (float) $topup->amount,
+                    'gateway_fee_amount' => (float) ($topup->gateway_fee_amount ?? 0),
+                    'gateway_fee_percent' => (float) ($topup->gateway_fee_percent ?? 0),
+                    'gateway_code' => $topup->gateway_code,
+                    'gateway' => $topup->gateway_code,
+                    'status' => $topup->status,
+                    'paid_at' => optional($topup->paid_at)?->toISOString(),
+                    'posted_to_ledger_at' => optional($topup->posted_to_ledger_at)?->toISOString(),
+                    'created_at' => optional($topup->created_at)?->toISOString(),
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'data' => $rows,
         ])->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
     }
 
