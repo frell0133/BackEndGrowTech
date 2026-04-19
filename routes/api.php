@@ -90,6 +90,26 @@ Route::prefix('v1')->group(function () {
     ]));
 
     // =========================
+    // 1) PUBLIC SHARED ACCESS (selalu bisa diakses agar FE bisa sinkron maintenance)
+    // =========================
+    Route::prefix('content')->group(function () {
+        Route::get('settings', [ContentController::class, 'settings'])
+            ->middleware('throttle:public-content');
+        Route::get('feature-access', [ContentController::class, 'featureAccess'])
+            ->middleware('throttle:public-content');
+    });
+
+    Route::get('maintenance/public-check', fn () => response()->json([
+        'success' => true,
+        'data' => [
+            'allowed' => true,
+            'scope' => 'public',
+        ],
+        'meta' => (object)[],
+        'error' => null,
+    ]));
+
+    // =========================
     // 1) PUBLIC CATALOG (UMUM)
     // =========================
     Route::middleware(['public.access'])->group(function () {
@@ -134,10 +154,6 @@ Route::prefix('v1')->group(function () {
         ]));
 
         Route::prefix('content')->group(function () {
-            Route::get('settings', [ContentController::class, 'settings'])
-                ->middleware('throttle:public-content');
-            Route::get('feature-access', [ContentController::class, 'featureAccess'])
-                ->middleware('throttle:public-content');
             Route::get('banners', [ContentController::class, 'banners'])
                 ->middleware('throttle:public-content');
             Route::get('popup', [ContentController::class, 'popup'])
@@ -147,16 +163,6 @@ Route::prefix('v1')->group(function () {
             Route::get('faqs', [ContentController::class, 'faqs'])
                 ->middleware('throttle:public-content');
         });
-
-        Route::get('maintenance/public-check', fn () => response()->json([
-            'success' => true,
-            'data' => [
-                'allowed' => true,
-                'scope' => 'public',
-            ],
-            'meta' => (object)[],
-            'error' => null,
-        ]));
 
         Route::prefix('bootstrap')->group(function () {
             Route::get('customer-home', \App\Http\Controllers\Api\V1\Bootstrap\CustomerHomeBootstrapController::class)

@@ -50,15 +50,14 @@ class ContentController extends Controller
 
     public function featureAccess(SystemAccessService $access)
     {
-        $data = PublicCache::rememberContent('feature-access', 60, function () use ($access) {
-            return $access->featurePayload([
-                'public_access',
-                'user_auth_access',
-                'catalog_access',
-                'checkout_access',
-                'topup_access',
-            ]);
-        });
+        $data = $access->featurePayload([
+            'public_access',
+            'user_auth_access',
+            'user_area_access',
+            'catalog_access',
+            'checkout_access',
+            'topup_access',
+        ]);
 
         return $this->ok($data);
     }
