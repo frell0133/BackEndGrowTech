@@ -33,10 +33,14 @@ class CheckFeatureAccess
                     'key' => $key,
                 ],
                 'error' => [
-                    'message' => $access->message($key, 'Fitur sedang maintenance.'),
+                    'message' => $access->message($key, 'Fitur sedang maintenance.', true),
                     'details' => null,
                 ],
-            ], 503);
+            ], 503, [
+                'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+                'Pragma' => 'no-cache',
+                'Expires' => '0',
+            ]);
         }
 
         return $next($request);

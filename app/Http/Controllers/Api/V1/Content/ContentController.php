@@ -17,10 +17,49 @@ class ContentController extends Controller
 {
     use ApiResponse;
 
+    private function noStoreHeaders(): array
+    {
+        return [
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma' => 'no-cache',
+            'Expires' => '0',
+        ];
+    }
+
     public function settings(Request $request)
     {
         $group = trim((string) $request->query('group', 'all'));
         $group = $group !== '' ? $group : 'all';
+
+        if (in_array($group, ['website', 'system', 'all'], true)) {
+            $rows = DB::table('site_settings')
+                ->where('is_public', true)
+                ->when($group !== 'all', fn ($q) => $q->where('group', $group))
+                ->orderBy('group')
+                ->orderBy('key')
+                ->get()
+                ->map(function ($r) {
+                    if (is_string($r->value)) {
+                        $decoded = json_decode($r->value, true);
+                        if (json_last_error() === JSON_ERROR_NONE) {
+                            $r->value = $decoded;
+                        }
+                    }
+
+                    return $r;
+                });
+
+            return response()->json([
+                'success' => true,
+                'data' => $rows,
+                'meta' => [
+                    'generated_at' => now()->toIso8601String(),
+                    'group' => $group,
+                ],
+                'error' => null,
+            ], 200, $this->noStoreHeaders());
+        }
+
         $cacheKey = 'settings:' . $group;
 
         $rows = PublicCache::rememberContent($cacheKey, 300, function () use ($group) {
@@ -57,9 +96,16 @@ class ContentController extends Controller
             'catalog_access',
             'checkout_access',
             'topup_access',
-        ]);
+        ], true);
 
-        return $this->ok($data);
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'meta' => [
+                'generated_at' => now()->toIso8601String(),
+            ],
+            'error' => null,
+        ], 200, $this->noStoreHeaders());
     }
 
     public function banners()

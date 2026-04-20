@@ -14,7 +14,7 @@ class CheckPublicAccess
         /** @var SystemAccessService $access */
         $access = app(SystemAccessService::class);
 
-        if (!$access->enabled('public_access')) {
+        if (!$access->enabled('public_access', true)) {
             return response()->json([
                 'success' => false,
                 'data' => null,
@@ -24,10 +24,14 @@ class CheckPublicAccess
                     'key' => 'public_access',
                 ],
                 'error' => [
-                    'message' => $access->message('public_access', 'Halaman publik sedang maintenance.'),
+                    'message' => $access->message('public_access', 'Halaman publik sedang maintenance.', true),
                     'details' => null,
                 ],
-            ], 503);
+            ], 503, [
+                'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+                'Pragma' => 'no-cache',
+                'Expires' => '0',
+            ]);
         }
 
         return $next($request);

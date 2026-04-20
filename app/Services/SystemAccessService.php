@@ -9,12 +9,11 @@ use App\Support\RuntimeCache;
 class SystemAccessService
 {
     private const CACHE_VERSION_KEY = 'system_access:version';
-    private const CACHE_KEY_PREFIX = 'system_access:payload';
-    private const CACHE_TTL_SECONDS = 600;
 
     /**
-     * Default toggle agar sistem tetap normal
-     * walaupun setting belum pernah disimpan.
+     * Maintenance toggle harus terasa real-time.
+     * Karena itu data dibaca fresh dari database pada setiap request,
+     * lalu hanya di-memo di lifecycle request yang sama.
      */
     private array $defaults = [
         'public_access' => [
@@ -52,29 +51,23 @@ class SystemAccessService
         }
 
         RuntimeCache::increment(self::CACHE_VERSION_KEY);
+        RuntimeCache::flushMemo();
     }
 
-    public function all(): array
+    public function all(bool $fresh = false): array
     {
-        if ($this->resolved !== null) {
+        if (!$fresh && $this->resolved !== null) {
             return $this->resolved;
         }
 
-        $version = $this->currentVersion();
-        $cacheKey = self::CACHE_KEY_PREFIX . ':v' . $version;
-
-        $this->resolved = RuntimeCache::remember(
-            $cacheKey,
-            self::CACHE_TTL_SECONDS,
-            fn () => $this->loadResolvedSettings()
-        );
+        $this->resolved = $this->loadResolvedSettings();
 
         return $this->resolved;
     }
 
-    public function getMany(array $keys): array
+    public function getMany(array $keys, bool $fresh = false): array
     {
-        $all = $this->all();
+        $all = $this->all($fresh);
         $result = [];
 
         foreach ($keys as $key) {
@@ -89,24 +82,24 @@ class SystemAccessService
         return $result;
     }
 
-    public function featurePayload(array $keys): array
+    public function featurePayload(array $keys, bool $fresh = false): array
     {
-        return $this->getMany($keys);
+        return $this->getMany($keys, $fresh);
     }
 
-    public function get(string $key): array
+    public function get(string $key, bool $fresh = false): array
     {
-        return $this->getMany([$key])[$key];
+        return $this->getMany([$key], $fresh)[$key];
     }
 
-    public function enabled(string $key): bool
+    public function enabled(string $key, bool $fresh = false): bool
     {
-        return (bool) ($this->get($key)['enabled'] ?? true);
+        return (bool) ($this->get($key, $fresh)['enabled'] ?? true);
     }
 
-    public function message(string $key, ?string $fallback = null): string
+    public function message(string $key, ?string $fallback = null, bool $fresh = false): string
     {
-        return (string) ($this->get($key)['message'] ?? ($fallback ?: 'Layanan sedang maintenance.'));
+        return (string) ($this->get($key, $fresh)['message'] ?? ($fallback ?: 'Layanan sedang maintenance.'));
     }
 
     public function isAdmin(?User $user): bool
@@ -120,7 +113,7 @@ class SystemAccessService
             return true;
         }
 
-        return $this->enabled('user_auth_access');
+        return $this->enabled('user_auth_access', true);
     }
 
     public function canAccessUserArea(?User $user): bool
@@ -129,7 +122,7 @@ class SystemAccessService
             return true;
         }
 
-        return $this->enabled('user_area_access');
+        return $this->enabled('user_area_access', true);
     }
 
     public function canUseFeature(?User $user, string $featureKey): bool
@@ -138,19 +131,7 @@ class SystemAccessService
             return true;
         }
 
-        return $this->enabled($featureKey);
-    }
-
-    private function currentVersion(): int
-    {
-        $value = RuntimeCache::get(self::CACHE_VERSION_KEY);
-
-        if (!$value) {
-            RuntimeCache::forever(self::CACHE_VERSION_KEY, 1);
-            return 1;
-        }
-
-        return (int) $value;
+        return $this->enabled($featureKey, true);
     }
 
     private function loadResolvedSettings(): array

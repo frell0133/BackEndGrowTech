@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api\V1\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Services\SupabaseStorageService;
+use App\Services\SystemAccessService;
 use App\Support\ApiResponse;
 use App\Support\PublicCache;
+use App\Support\RuntimeCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -76,11 +78,15 @@ class AdminSiteSettingController extends Controller
             ]
         );
 
-        PublicCache::bumpContent();
+        $this->flushRelatedCaches($data['group']);
 
         return response()->json([
             'success' => true,
             'data' => ['saved' => true],
+        ], 200, [
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma' => 'no-cache',
+            'Expires' => '0',
         ]);
     }
 
@@ -96,7 +102,7 @@ class AdminSiteSettingController extends Controller
             ->where('key', $data['key'])
             ->delete();
 
-        PublicCache::bumpContent();
+        $this->flushRelatedCaches($data['group']);
 
         return $this->ok(['deleted' => true]);
     }
@@ -120,5 +126,15 @@ class AdminSiteSettingController extends Controller
             'signed_url' => $signed['signedUrl'],
             'public_url' => $supabase->publicObjectUrl($bucket, $signed['path']),
         ]);
+    }
+
+    private function flushRelatedCaches(string $group): void
+    {
+        PublicCache::bumpContent();
+        RuntimeCache::flushMemo();
+
+        if ($group === 'system') {
+            SystemAccessService::bumpCacheVersion();
+        }
     }
 }

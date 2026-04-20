@@ -38,10 +38,14 @@ class CheckUserAccess
                     'key' => 'user_area_access',
                 ],
                 'error' => [
-                    'message' => $access->message('user_area_access', 'Area user sedang maintenance.'),
+                    'message' => $access->message('user_area_access', 'Area user sedang maintenance.', true),
                     'details' => null,
                 ],
-            ], 503);
+            ], 503, [
+                'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+                'Pragma' => 'no-cache',
+                'Expires' => '0',
+            ]);
         }
 
         return $next($request);
