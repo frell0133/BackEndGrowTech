@@ -10,11 +10,6 @@ class SystemAccessService
 {
     private const CACHE_VERSION_KEY = 'system_access:version';
 
-    /**
-     * Maintenance toggle harus terasa real-time.
-     * Karena itu data dibaca fresh dari database pada setiap request,
-     * lalu hanya di-memo di lifecycle request yang sama.
-     */
     private array $defaults = [
         'public_access' => [
             'enabled' => true,

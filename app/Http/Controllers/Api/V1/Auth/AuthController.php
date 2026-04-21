@@ -134,8 +134,8 @@ class AuthController extends Controller
             );
         }
 
-    $trustedDevice = $trustedDeviceService->hasValidTrustedDevice($user, $request);
-       if ($trustedDevice) {
+        $trustedDevice = $trustedDeviceService->hasValidTrustedDevice($user, $request);
+        if ($trustedDevice) {
             $token = $user->createToken('api-token-trusted-device')->plainTextToken;
             $issued = $trustedDeviceService->issueRememberedDevicePayload($user, $request, $trustedDevice);
 
@@ -225,6 +225,9 @@ class AuthController extends Controller
     {
         $bucket = (string) config('services.supabase.bucket_avatars', 'avatars');
         $avatarUrl = null;
+        $isAdmin = method_exists($user, 'isAdmin')
+            ? (bool) $user->isAdmin()
+            : (($user->role === 'admin') && !is_null($user->admin_role_id));
 
         if (!empty($user->avatar_path)) {
             try {
@@ -248,7 +251,7 @@ class AuthController extends Controller
             'avatar_url' => $avatarUrl,
             'full_name' => $user->full_name,
             'admin_role_id' => $user->admin_role_id,
-            'is_admin' => method_exists($user, 'isAdmin') ? $user->isAdmin() : (($user->role === 'admin') && !is_null($user->admin_role_id)),
+            'is_admin' => $isAdmin,
         ];
     }
 }
