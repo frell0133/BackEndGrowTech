@@ -114,36 +114,36 @@ Route::prefix('v1')->group(function () {
     // =========================
     Route::middleware(['public.access'])->group(function () {
         Route::get('categories', [PublicCategoryController::class, 'index'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
         Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
 
         Route::get('subcategories', [PublicSubcategoryController::class, 'index'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
         Route::get('subcategories/{idOrSlug}', [PublicSubcategoryController::class, 'show'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
 
         Route::get('products', [ProductController::class, 'index'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
         Route::get('products/{product}', [ProductController::class, 'show'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
 
         // alias public supaya FE existing /api/v1/catalog/* tetap jalan
         Route::prefix('catalog')->group(function () {
             Route::get('categories', [PublicCategoryController::class, 'index'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
             Route::get('categories/{idOrSlug}/subcategories', [PublicCategoryController::class, 'subcategories'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
 
             Route::get('subcategories', [PublicSubcategoryController::class, 'index'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
             Route::get('subcategories/{idOrSlug}', [PublicSubcategoryController::class, 'show'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
 
             Route::get('products', [ProductController::class, 'index'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
             Route::get('products/{product}', [ProductController::class, 'show'])
-            ->middleware('throttle:public-catalog');
+            ->middleware(['feature.access:catalog', 'throttle:public-catalog']);
         });
 
         Route::get('products/{product}/availability', fn () => response()->json([
@@ -151,7 +151,7 @@ Route::prefix('v1')->group(function () {
             'data' => ['available' => null, 'todo' => true],
             'meta' => (object)[],
             'error' => null,
-        ]));
+        ]))->middleware('feature.access:catalog');
 
         Route::prefix('content')->group(function () {
             Route::get('banners', [ContentController::class, 'banners'])
