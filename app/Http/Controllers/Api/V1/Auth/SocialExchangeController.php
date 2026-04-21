@@ -56,7 +56,13 @@ class SocialExchangeController extends Controller
             $response = $this->ok([
                 'requires_2fa' => false,
                 'trusted_device' => true,
-                'user' => $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code'),
+                'user' => array_merge(
+                    $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code'),
+                    [
+                        'admin_role_id' => $user->admin_role_id,
+                        'is_admin' => method_exists($user, 'isAdmin') ? $user->isAdmin() : (($user->role === 'admin') && !is_null($user->admin_role_id)),
+                    ]
+                ),
                 'token' => $token,
                 'token_type' => 'Bearer',
                 'trusted_device_credential' => $issued['credential'],
@@ -99,7 +105,13 @@ class SocialExchangeController extends Controller
             'expires_in' => $challenge['expires_in'],
             'email_hint' => $challenge['email_hint'],
             'remember' => $remember,
-            'user' => $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code'),
+            'user' => array_merge(
+                $user->only('id', 'name', 'email', 'role', 'tier', 'referral_code'),
+                [
+                    'admin_role_id' => $user->admin_role_id,
+                    'is_admin' => method_exists($user, 'isAdmin') ? $user->isAdmin() : (($user->role === 'admin') && !is_null($user->admin_role_id)),
+                ]
+            ),
         ]);
     }
 }

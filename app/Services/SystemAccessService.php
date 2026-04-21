@@ -104,7 +104,20 @@ class SystemAccessService
 
     public function isAdmin(?User $user): bool
     {
-        return $user && strtolower((string) $user->role) === 'admin';
+        if (!$user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isAdmin')) {
+            try {
+                return (bool) $user->isAdmin();
+            } catch (\Throwable $e) {
+                // fallback below
+            }
+        }
+
+        return strtolower((string) $user->role) === 'admin'
+            && !is_null($user->admin_role_id ?? null);
     }
 
     public function canUserAuthenticate(?User $user): bool

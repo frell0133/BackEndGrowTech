@@ -247,6 +247,8 @@ class AuthController extends Controller
             'avatar_path' => $user->avatar_path,
             'avatar_url' => $avatarUrl,
             'full_name' => $user->full_name,
+            'admin_role_id' => $user->admin_role_id,
+            'is_admin' => method_exists($user, 'isAdmin') ? $user->isAdmin() : (($user->role === 'admin') && !is_null($user->admin_role_id)),
         ];
     }
 }
