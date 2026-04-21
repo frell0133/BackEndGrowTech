@@ -28,7 +28,7 @@ class CheckFeatureAccess
                 'data' => null,
                 'meta' => [
                     'maintenance' => true,
-                    'scope' => 'feature',
+                    'scope' => $feature,
                     'feature' => $feature,
                     'key' => $key,
                 ],

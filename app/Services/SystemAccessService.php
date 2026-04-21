@@ -120,6 +120,16 @@ class SystemAccessService
             && !is_null($user->admin_role_id ?? null);
     }
 
+
+    public function canAccessPublic(?User $user = null): bool
+    {
+        if ($this->isAdmin($user)) {
+            return true;
+        }
+
+        return $this->enabled('public_access', true);
+    }
+
     public function canUserAuthenticate(?User $user): bool
     {
         if ($this->isAdmin($user)) {
