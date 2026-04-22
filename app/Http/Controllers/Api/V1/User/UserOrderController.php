@@ -22,6 +22,7 @@ use App\Services\OrderFulfillmentService;
 use App\Services\DiscountCampaignService;
 use App\Support\ApiResponse;
 use App\Support\RuntimeCache;
+use App\Support\PublicCache;
 use App\Http\Controllers\Controller;
 use App\Support\DispatchesInvoiceEmail;
 use App\Models\ReferralSetting;
@@ -1275,10 +1276,29 @@ class UserOrderController extends Controller
         $order->setAttribute('total_item_qty', (int) $itemDetails->sum(fn ($row) => (int) ($row['qty'] ?? 0)));
         $order->setAttribute('item_details', $itemDetails->values());
         $order->setAttribute('license_details', $licenseDetails);
+        $voucherDiscountTotal = (float) collect($order->vouchers ?? [])->sum(function ($voucher) {
+            return (float) ($voucher->pivot->discount_amount ?? 0);
+        });
+
+        $campaignDiscountTotal = (float) collect($order->discountCampaigns ?? [])->sum(function ($campaign) {
+            return (float) ($campaign->pivot->discount_amount ?? 0);
+        });
+
         $order->setAttribute('history_summary', [
             'invoice' => (string) ($order->invoice_number ?? ''),
             'waktu' => $order->created_at,
             'harga' => (float) ($order->amount ?? 0),
+            'subtotal' => (float) ($order->subtotal ?? 0),
+            'discount_total' => (float) ($order->discount_total ?? 0),
+            'voucher_discount_total' => $voucherDiscountTotal,
+            'campaign_discount_total' => $campaignDiscountTotal,
+            'tax_percent' => (int) ($order->tax_percent ?? 0),
+            'tax_amount' => (float) ($order->tax_amount ?? 0),
+            'gateway_fee_percent' => (float) ($order->gateway_fee_percent ?? 0),
+            'gateway_fee_amount' => (float) ($order->gateway_fee_amount ?? 0),
+            'total_paid' => (float) ($order->amount ?? 0),
+            'payment_gateway_code' => (string) ($order->payment_gateway_code ?? $order->payment?->gateway_code ?? ''),
+            'payment_reference' => (string) ($order->payment?->external_id ?? ''),
             'total_item_qty' => (int) $itemDetails->sum(fn ($row) => (int) ($row['qty'] ?? 0)),
             'categories' => $categories,
             'items' => $itemDetails->values(),
@@ -1324,6 +1344,7 @@ class UserOrderController extends Controller
                 'product.category:id,name,slug',
                 'product.subcategory:id,category_id,name,slug',
                 'vouchers:id,code,type,value',
+                'discountCampaigns:id,name,type,value',
                 'deliveries:id,order_id,license_id,delivery_mode,emailed_at,revealed_at,created_at',
                 'deliveries.license:id,product_id,license_key,data_other,note,status,delivered_at,sold_at,updated_at',
             ])
@@ -1393,6 +1414,7 @@ class UserOrderController extends Controller
                 'product.category',
                 'product.subcategory',
                 'vouchers:id,code,type,value',
+                'discountCampaigns:id,name,type,value',
                 'deliveries.license',
             ])
             ->first();

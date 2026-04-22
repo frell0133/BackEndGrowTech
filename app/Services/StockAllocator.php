@@ -6,6 +6,7 @@ use App\Models\Order;
 use App\Models\ProductStock;
 use App\Models\ProductStockLog;
 use Illuminate\Support\Facades\DB;
+use App\Support\PublicCache;
 
 class StockAllocator
 {
@@ -18,7 +19,7 @@ class StockAllocator
    */
   public function reserveForOrder(Order $order, int $productId, int $qty, ?int $actorId = null): array
   {
-    return DB::transaction(function () use ($order, $productId, $qty, $actorId) {
+    $result = DB::transaction(function () use ($order, $productId, $qty, $actorId) {
 
       $stocks = ProductStock::where('product_id', $productId)
         ->where('status', 'available')
@@ -64,7 +65,7 @@ class StockAllocator
    */
   public function deliver(Order $order, ?int $actorId = null): array
   {
-    return DB::transaction(function () use ($order, $actorId) {
+    $result = DB::transaction(function () use ($order, $actorId) {
       $stocks = ProductStock::where('reserved_order_id', $order->id)
         ->where('status', 'reserved')
         ->orderBy('id')

@@ -4,13 +4,14 @@ namespace App\Services;
 
 use App\Models\License;
 use Illuminate\Support\Facades\DB;
+use App\Support\PublicCache;
 
 class LicenseStockService
 {
     // Reserve N licenses untuk sebuah order_id
     public function reserve(int $productId, int $orderId, int $qty): array
     {
-        return DB::transaction(function () use ($productId, $orderId, $qty) {
+        $reserved = DB::transaction(function () use ($productId, $orderId, $qty) {
 
             $stocks = License::query()
                 ->where('product_id', $productId)
@@ -34,12 +35,17 @@ class LicenseStockService
 
             return $stocks->all();
         });
+
+        PublicCache::bumpCatalogProducts();
+        PublicCache::bumpDashboard();
+
+        return $reserved;
     }
 
     // Setelah payment settle: mark delivered semua license untuk order_id
     public function markDeliveredByOrder(int $orderId): int
     {
-        return DB::transaction(function () use ($orderId) {
+        $count = DB::transaction(function () use ($orderId) {
 
             $now = now();
 
@@ -57,12 +63,17 @@ class LicenseStockService
 
             return $licenses->count();
         });
+
+        PublicCache::bumpCatalogProducts();
+        PublicCache::bumpDashboard();
+
+        return $count;
     }
 
     // Cancel order / gagal bayar: release balik available
     public function releaseByOrder(int $orderId): int
     {
-        return DB::transaction(function () use ($orderId) {
+        $count = DB::transaction(function () use ($orderId) {
 
             $licenses = License::query()
                 ->where('reserved_order_id', $orderId)
@@ -79,5 +90,10 @@ class LicenseStockService
 
             return $licenses->count();
         });
+
+        PublicCache::bumpCatalogProducts();
+        PublicCache::bumpDashboard();
+
+        return $count;
     }
 }
