@@ -19,10 +19,6 @@ class SystemAccessService
             'enabled' => true,
             'message' => 'Login dan registrasi user sedang maintenance.',
         ],
-        'user_area_access' => [
-            'enabled' => true,
-            'message' => 'Area user sedang maintenance.',
-        ],
         'catalog_access' => [
             'enabled' => true,
             'message' => 'Katalog sedang maintenance.',
@@ -130,7 +126,7 @@ class SystemAccessService
             return true;
         }
 
-        return $this->enabled('user_area_access', true);
+        return $this->enabled('user_auth_access', true);
     }
 
     public function canUseFeature(?User $user, string $featureKey): bool
@@ -148,6 +144,7 @@ class SystemAccessService
 
         $rows = Setting::query()
             ->where('group', 'system')
+            ->whereIn('key', array_keys($this->defaults))
             ->get(['key', 'value']);
 
         foreach ($rows as $row) {

@@ -34,11 +34,11 @@ class CheckUserAccess
                 'data' => null,
                 'meta' => [
                     'maintenance' => true,
-                    'scope' => 'user',
-                    'key' => 'user_area_access',
+                    'scope' => 'auth',
+                    'key' => 'user_auth_access',
                 ],
                 'error' => [
-                    'message' => $access->message('user_area_access', 'Area user sedang maintenance.', true),
+                    'message' => $access->message('user_auth_access', 'Login dan area user sedang maintenance.', true),
                     'details' => null,
                 ],
             ], 503, [

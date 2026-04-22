@@ -92,7 +92,6 @@ class ContentController extends Controller
         $data = $access->featurePayload([
             'public_access',
             'user_auth_access',
-            'user_area_access',
             'catalog_access',
             'checkout_access',
             'topup_access',

@@ -2,14 +2,13 @@
 
 namespace Database\Seeders;
 
-use Illuminate\Database\Seeder;
 use App\Models\Setting;
+use Illuminate\Database\Seeder;
 
 class SettingsSeeder extends Seeder
 {
     public function run(): void
     {
-        // Contact - WhatsApp
         Setting::updateOrCreate(
             ['group' => 'contact', 'key' => 'whatsapp'],
             [
@@ -22,7 +21,6 @@ class SettingsSeeder extends Seeder
             ]
         );
 
-        // Contact - Email
         Setting::updateOrCreate(
             ['group' => 'contact', 'key' => 'email'],
             [
@@ -34,9 +32,6 @@ class SettingsSeeder extends Seeder
             ]
         );
 
-        // =========================
-        // SYSTEM ACCESS / MAINTENANCE
-        // =========================
         $systemDefaults = [
             'public_access' => [
                 'enabled' => true,
@@ -45,10 +40,6 @@ class SettingsSeeder extends Seeder
             'user_auth_access' => [
                 'enabled' => true,
                 'message' => 'Login dan registrasi user sedang maintenance.',
-            ],
-            'user_area_access' => [
-                'enabled' => true,
-                'message' => 'Area user sedang maintenance.',
             ],
             'catalog_access' => [
                 'enabled' => true,
@@ -73,5 +64,10 @@ class SettingsSeeder extends Seeder
                 ]
             );
         }
+
+        Setting::query()
+            ->where('group', 'system')
+            ->where('key', 'user_area_access')
+            ->delete();
     }
 }

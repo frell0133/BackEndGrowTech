@@ -17,6 +17,13 @@ class AdminSystemAccessController extends Controller
     {
         $rows = Setting::query()
             ->where('group', 'system')
+            ->whereIn('key', [
+                'public_access',
+                'user_auth_access',
+                'catalog_access',
+                'checkout_access',
+                'topup_access',
+            ])
             ->orderBy('key')
             ->get();
 
@@ -35,7 +42,6 @@ class AdminSystemAccessController extends Controller
         $allowedKeys = [
             'public_access',
             'user_auth_access',
-            'user_area_access',
             'catalog_access',
             'checkout_access',
             'topup_access',
