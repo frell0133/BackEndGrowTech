@@ -7,6 +7,8 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Str;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
@@ -1208,147 +1210,85 @@ class UserOrderController extends Controller
         return $normalized;
     }
 
-    private function transformHistoryOrder(Order $order): Order
+
+    private function hasTable(string $table): bool
     {
-        $items = collect($order->items ?? []);
-        $deliveries = collect($order->deliveries ?? []);
+        try {
+            return Schema::hasTable($table);
+        } catch (\Throwable $e) {
+            Log::warning('history_orders_table_check_failed', [
+                'table' => $table,
+                'error' => $e->getMessage(),
+            ]);
 
-        $itemDetails = $items->map(function ($item) {
-            $product = $item->product;
-            $category = $product?->category;
-            $subcategory = $product?->subcategory;
-
-            return [
-                'order_item_id' => (int) $item->id,
-                'product_id' => $product?->id ? (int) $product->id : null,
-                'product' => $item->product_name ?: $product?->name,
-                'product_slug' => $item->product_slug ?: $product?->slug,
-                'category' => $category?->name,
-                'subcategory' => $subcategory?->name,
-                'qty' => (int) ($item->qty ?? 0),
-                'unit_price' => (float) ($item->unit_price ?? 0),
-                'line_subtotal' => (float) ($item->line_subtotal ?? 0),
-            ];
-        })->values();
-
-        if ($itemDetails->isEmpty() && $order->product) {
-            $itemDetails = collect([[
-                'order_item_id' => null,
-                'product_id' => $order->product?->id ? (int) $order->product->id : null,
-                'product' => $order->product?->name,
-                'product_slug' => $order->product?->slug,
-                'category' => $order->product?->category?->name,
-                'subcategory' => $order->product?->subcategory?->name,
-                'qty' => (int) ($order->qty ?? 0),
-                'unit_price' => (float) ((int) ($order->qty ?? 0) > 0 ? ((float) ($order->subtotal ?? $order->amount ?? 0) / max(1, (int) $order->qty)) : (float) ($order->amount ?? 0)),
-                'line_subtotal' => (float) ($order->subtotal ?? $order->amount ?? 0),
-            ]]);
+            return false;
         }
-
-        $licenseDetails = $deliveries->map(function ($delivery) {
-            $license = $delivery->license;
-
-            return [
-                'delivery_id' => (int) $delivery->id,
-                'delivery_mode' => $delivery->delivery_mode,
-                'emailed_at' => $delivery->emailed_at,
-                'revealed_at' => $delivery->revealed_at,
-                'license_id' => $license?->id ? (int) $license->id : null,
-                'license_key' => $license?->license_key,
-                'data_other' => $license?->data_other,
-                'note' => $license?->note,
-                'status' => $license?->status,
-                'delivered_at' => $license?->delivered_at,
-                'sold_at' => $license?->sold_at,
-            ];
-        })->values();
-
-        $categories = $itemDetails->pluck('category')->filter()->unique()->values();
-
-        $rawStatus = (string) ($order->status?->value ?? $order->status ?? '');
-        $displayStatus = $this->displayStatusForUser($rawStatus);
-
-        $order->setAttribute('display_status', $displayStatus);
-        $order->setAttribute('display_status_label', strtoupper($displayStatus));
-        $order->setAttribute('payment_reference', $order->payment?->external_id);
-        $order->setAttribute('transaction_datetime', $order->created_at?->timezone('Asia/Jakarta')->format(\DateTimeInterface::ATOM));
-        $order->setAttribute('payment_datetime', $order->payment?->created_at?->timezone('Asia/Jakarta')->format(\DateTimeInterface::ATOM));
-        $order->setAttribute('total_item_qty', (int) $itemDetails->sum(fn ($row) => (int) ($row['qty'] ?? 0)));
-        $order->setAttribute('item_details', $itemDetails->values());
-        $order->setAttribute('license_details', $licenseDetails);
-        $voucherDiscountTotal = (float) collect($order->vouchers ?? [])->sum(function ($voucher) {
-            return (float) ($voucher->pivot->discount_amount ?? 0);
-        });
-
-        $campaignDiscountTotal = (float) collect($order->discountCampaigns ?? [])->sum(function ($campaign) {
-            return (float) ($campaign->pivot->discount_amount ?? 0);
-        });
-
-        $order->setAttribute('history_summary', [
-            'invoice' => (string) ($order->invoice_number ?? ''),
-            'waktu' => $order->created_at,
-            'harga' => (float) ($order->amount ?? 0),
-            'subtotal' => (float) ($order->subtotal ?? 0),
-            'discount_total' => (float) ($order->discount_total ?? 0),
-            'voucher_discount_total' => $voucherDiscountTotal,
-            'campaign_discount_total' => $campaignDiscountTotal,
-            'tax_percent' => (int) ($order->tax_percent ?? 0),
-            'tax_amount' => (float) ($order->tax_amount ?? 0),
-            'gateway_fee_percent' => (float) ($order->gateway_fee_percent ?? 0),
-            'gateway_fee_amount' => (float) ($order->gateway_fee_amount ?? 0),
-            'total_paid' => (float) ($order->amount ?? 0),
-            'payment_gateway_code' => (string) ($order->payment_gateway_code ?? $order->payment?->gateway_code ?? ''),
-            'payment_reference' => (string) ($order->payment?->external_id ?? ''),
-            'total_item_qty' => (int) $itemDetails->sum(fn ($row) => (int) ($row['qty'] ?? 0)),
-            'categories' => $categories,
-            'items' => $itemDetails->values(),
-        ]);
-
-        return $order;
     }
 
-    public function index(Request $request)
+    private function historyRelations(bool $minimal = false): array
     {
-        $user = $request->user();
-        $this->syncExpiredCreatedOrdersForUser((int) $user->id);
+        $relations = [
+            'payment:id,order_id,gateway_code,external_id,amount,status,created_at',
+            'product:id,category_id,subcategory_id,name,slug',
+            'product.category:id,name,slug',
+            'product.subcategory:id,category_id,name,slug',
+        ];
 
-        $perPage = max(1, min((int) $request->query('per_page', 10), 100));
-        $status = trim((string) $request->query('status', ''));
-        $invoice = trim((string) ($request->query('invoice_number') ?: $request->query('invoice') ?: ''));
-        $dateFrom = $request->query('date_from');
-        $dateTo = $request->query('date_to');
-        $product = trim((string) $request->query('product', ''));
-        $category = trim((string) $request->query('category', ''));
+        if (! $minimal && $this->hasTable('order_items')) {
+            $relations['items'] = function ($q) {
+                $q->select([
+                    'id',
+                    'order_id',
+                    'product_id',
+                    'qty',
+                    'unit_price',
+                    'line_subtotal',
+                    'product_name',
+                    'product_slug',
+                ])->with([
+                    'product:id,category_id,subcategory_id,name,slug',
+                    'product.category:id,name,slug',
+                    'product.subcategory:id,category_id,name,slug',
+                ]);
+            };
+        }
 
-        $query = Order::query()
-            ->where('user_id', (int) $user->id)
-            ->with([
-                'payment:id,order_id,gateway_code,external_id,amount,status,created_at',
-                'items' => function ($q) {
-                    $q->select([
-                        'id',
-                        'order_id',
-                        'product_id',
-                        'qty',
-                        'unit_price',
-                        'line_subtotal',
-                        'product_name',
-                        'product_slug',
-                    ])->with([
-                        'product:id,category_id,subcategory_id,name,slug',
-                        'product.category:id,name,slug',
-                        'product.subcategory:id,category_id,name,slug',
-                    ]);
-                },
-                'product:id,category_id,subcategory_id,name,slug',
-                'product.category:id,name,slug',
-                'product.subcategory:id,category_id,name,slug',
-                'vouchers:id,code,type,value',
-                'discountCampaigns:id,name,type,value',
-                'deliveries:id,order_id,license_id,delivery_mode,emailed_at,revealed_at,created_at',
-                'deliveries.license:id,product_id,license_key,data_other,note,status,delivered_at,sold_at,updated_at',
-            ])
+        if (! $minimal && $this->hasTable('order_vouchers') && $this->hasTable('vouchers')) {
+            $relations[] = 'vouchers:id,code,type,value';
+        }
+
+        if (! $minimal && $this->hasTable('order_discount_campaigns') && $this->hasTable('discount_campaigns')) {
+            $relations[] = 'discountCampaigns:id,name,type,value';
+        }
+
+        if (! $minimal && $this->hasTable('deliveries')) {
+            $relations[] = 'deliveries:id,order_id,license_id,delivery_mode,emailed_at,revealed_at,created_at';
+
+            if ($this->hasTable('licenses')) {
+                $relations[] = 'deliveries.license:id,product_id,license_key,data_other,note,status,delivered_at,sold_at,updated_at';
+            }
+        }
+
+        return $relations;
+    }
+
+    private function buildHistoryOrderQuery(int $userId, bool $minimal = false): Builder
+    {
+        return Order::query()
+            ->where('user_id', $userId)
+            ->with($this->historyRelations($minimal))
             ->latest('id');
+    }
+
+    private function applyHistoryFilters(Builder $query, array $filters, bool $minimal = false): Builder
+    {
+        $status = trim((string) ($filters['status'] ?? ''));
+        $invoice = trim((string) ($filters['invoice'] ?? ''));
+        $dateFrom = $filters['date_from'] ?? null;
+        $dateTo = $filters['date_to'] ?? null;
+        $product = trim((string) ($filters['product'] ?? ''));
+        $category = trim((string) ($filters['category'] ?? ''));
+        $supportsOrderItems = ! $minimal && $this->hasTable('order_items');
 
         if ($status !== '') {
             $query->where('status', $status);
@@ -1367,14 +1307,23 @@ class UserOrderController extends Controller
         }
 
         if ($product !== '') {
-            $query->where(function ($q) use ($product) {
-                $q->whereHas('items', function ($item) use ($product) {
-                    $item->where('product_name', 'like', "%{$product}%")
-                        ->orWhereHas('product', function ($prod) use ($product) {
-                            $prod->where('name', 'like', "%{$product}%")
-                                ->orWhere('slug', 'like', "%{$product}%");
-                        });
-                })->orWhereHas('product', function ($prod) use ($product) {
+            $query->where(function ($q) use ($product, $supportsOrderItems) {
+                if ($supportsOrderItems) {
+                    $q->whereHas('items', function ($item) use ($product) {
+                        $item->where('product_name', 'like', "%{$product}%")
+                            ->orWhereHas('product', function ($prod) use ($product) {
+                                $prod->where('name', 'like', "%{$product}%")
+                                    ->orWhere('slug', 'like', "%{$product}%");
+                            });
+                    })->orWhereHas('product', function ($prod) use ($product) {
+                        $prod->where('name', 'like', "%{$product}%")
+                            ->orWhere('slug', 'like', "%{$product}%");
+                    });
+
+                    return;
+                }
+
+                $q->whereHas('product', function ($prod) use ($product) {
                     $prod->where('name', 'like', "%{$product}%")
                         ->orWhere('slug', 'like', "%{$product}%");
                 });
@@ -1382,18 +1331,171 @@ class UserOrderController extends Controller
         }
 
         if ($category !== '') {
-            $query->where(function ($q) use ($category) {
-                $q->whereHas('items.product.category', function ($cat) use ($category) {
-                    $cat->where('name', 'like', "%{$category}%")
-                        ->orWhere('slug', 'like', "%{$category}%");
-                })->orWhereHas('product.category', function ($cat) use ($category) {
+            $query->where(function ($q) use ($category, $supportsOrderItems) {
+                if ($supportsOrderItems) {
+                    $q->whereHas('items.product.category', function ($cat) use ($category) {
+                        $cat->where('name', 'like', "%{$category}%")
+                            ->orWhere('slug', 'like', "%{$category}%");
+                    })->orWhereHas('product.category', function ($cat) use ($category) {
+                        $cat->where('name', 'like', "%{$category}%")
+                            ->orWhere('slug', 'like', "%{$category}%");
+                    });
+
+                    return;
+                }
+
+                $q->whereHas('product.category', function ($cat) use ($category) {
                     $cat->where('name', 'like', "%{$category}%")
                         ->orWhere('slug', 'like', "%{$category}%");
                 });
             });
         }
 
-        $data = $query->paginate($perPage);
+        return $query;
+    }
+
+    private function transformHistoryOrder(Order $order): Order
+    {
+        $items = $order->relationLoaded('items') ? collect($order->getRelation('items') ?? []) : collect();
+        $deliveries = $order->relationLoaded('deliveries') ? collect($order->getRelation('deliveries') ?? []) : collect();
+        $payment = $order->relationLoaded('payment') ? $order->getRelation('payment') : null;
+        $product = $order->relationLoaded('product') ? $order->getRelation('product') : $order->product;
+        $vouchers = $order->relationLoaded('vouchers') ? collect($order->getRelation('vouchers') ?? []) : collect();
+        $discountCampaigns = $order->relationLoaded('discountCampaigns') ? collect($order->getRelation('discountCampaigns') ?? []) : collect();
+
+        $itemDetails = $items->map(function ($item) {
+            $product = $item->relationLoaded('product') ? $item->getRelation('product') : $item->product;
+            $category = $product?->relationLoaded('category') ? $product->getRelation('category') : $product?->category;
+            $subcategory = $product?->relationLoaded('subcategory') ? $product->getRelation('subcategory') : $product?->subcategory;
+
+            return [
+                'order_item_id' => (int) $item->id,
+                'product_id' => $product?->id ? (int) $product->id : null,
+                'product' => $item->product_name ?: $product?->name,
+                'product_slug' => $item->product_slug ?: $product?->slug,
+                'category' => $category?->name,
+                'subcategory' => $subcategory?->name,
+                'qty' => (int) ($item->qty ?? 0),
+                'unit_price' => (float) ($item->unit_price ?? 0),
+                'line_subtotal' => (float) ($item->line_subtotal ?? 0),
+            ];
+        })->values();
+
+        if ($itemDetails->isEmpty() && $product) {
+            $productCategory = $product?->relationLoaded('category') ? $product->getRelation('category') : $product?->category;
+            $productSubcategory = $product?->relationLoaded('subcategory') ? $product->getRelation('subcategory') : $product?->subcategory;
+
+            $itemDetails = collect([[
+                'order_item_id' => null,
+                'product_id' => $product?->id ? (int) $product->id : null,
+                'product' => $product?->name,
+                'product_slug' => $product?->slug,
+                'category' => $productCategory?->name,
+                'subcategory' => $productSubcategory?->name,
+                'qty' => (int) ($order->qty ?? 0),
+                'unit_price' => (float) ((int) ($order->qty ?? 0) > 0
+                    ? ((float) ($order->subtotal ?? $order->amount ?? 0) / max(1, (int) $order->qty))
+                    : (float) ($order->amount ?? 0)),
+                'line_subtotal' => (float) ($order->subtotal ?? $order->amount ?? 0),
+            ]]);
+        }
+
+        $licenseDetails = $deliveries->map(function ($delivery) {
+            $license = $delivery->relationLoaded('license') ? $delivery->getRelation('license') : $delivery->license;
+
+            return [
+                'delivery_id' => (int) $delivery->id,
+                'delivery_mode' => $delivery->delivery_mode,
+                'emailed_at' => $delivery->emailed_at,
+                'revealed_at' => $delivery->revealed_at,
+                'license_id' => $license?->id ? (int) $license->id : null,
+                'license_key' => $license?->license_key,
+                'data_other' => $license?->data_other,
+                'note' => $license?->note,
+                'status' => $license?->status,
+                'delivered_at' => $license?->delivered_at,
+                'sold_at' => $license?->sold_at,
+            ];
+        })->values();
+
+        $categories = $itemDetails->pluck('category')->filter()->unique()->values();
+        $rawStatus = (string) ($order->status?->value ?? $order->status ?? '');
+        $displayStatus = $this->displayStatusForUser($rawStatus);
+        $voucherDiscountTotal = (float) $vouchers->sum(function ($voucher) {
+            return (float) ($voucher->pivot->discount_amount ?? 0);
+        });
+        $campaignDiscountTotal = (float) $discountCampaigns->sum(function ($campaign) {
+            return (float) ($campaign->pivot->discount_amount ?? 0);
+        });
+
+        $order->setAttribute('display_status', $displayStatus);
+        $order->setAttribute('display_status_label', strtoupper($displayStatus));
+        $order->setAttribute('payment_reference', $payment?->external_id);
+        $order->setAttribute('transaction_datetime', $order->created_at?->timezone('Asia/Jakarta')->format(\DateTimeInterface::ATOM));
+        $order->setAttribute('payment_datetime', $payment?->created_at?->timezone('Asia/Jakarta')->format(\DateTimeInterface::ATOM));
+        $order->setAttribute('total_item_qty', (int) $itemDetails->sum(fn ($row) => (int) ($row['qty'] ?? 0)));
+        $order->setAttribute('item_details', $itemDetails->values());
+        $order->setAttribute('license_details', $licenseDetails);
+        $order->setAttribute('history_summary', [
+            'invoice' => (string) ($order->invoice_number ?? ''),
+            'waktu' => $order->created_at,
+            'harga' => (float) ($order->amount ?? 0),
+            'subtotal' => (float) ($order->subtotal ?? 0),
+            'discount_total' => (float) ($order->discount_total ?? 0),
+            'voucher_discount_total' => $voucherDiscountTotal,
+            'campaign_discount_total' => $campaignDiscountTotal,
+            'tax_percent' => (int) ($order->tax_percent ?? 0),
+            'tax_amount' => (float) ($order->tax_amount ?? 0),
+            'gateway_fee_percent' => (float) ($order->gateway_fee_percent ?? 0),
+            'gateway_fee_amount' => (float) ($order->gateway_fee_amount ?? 0),
+            'total_paid' => (float) ($order->amount ?? 0),
+            'payment_gateway_code' => (string) ($order->payment_gateway_code ?? $payment?->gateway_code ?? ''),
+            'payment_reference' => (string) ($payment?->external_id ?? ''),
+            'total_item_qty' => (int) $itemDetails->sum(fn ($row) => (int) ($row['qty'] ?? 0)),
+            'categories' => $categories,
+            'items' => $itemDetails->values(),
+        ]);
+
+        return $order;
+    }
+
+    public function index(Request $request)
+    {
+        $user = $request->user();
+        $this->syncExpiredCreatedOrdersForUser((int) $user->id);
+
+        $perPage = max(1, min((int) $request->query('per_page', 10), 100));
+        $filters = [
+            'status' => $request->query('status', ''),
+            'invoice' => $request->query('invoice_number') ?: $request->query('invoice') ?: '',
+            'date_from' => $request->query('date_from'),
+            'date_to' => $request->query('date_to'),
+            'product' => $request->query('product', ''),
+            'category' => $request->query('category', ''),
+        ];
+
+        try {
+            $query = $this->applyHistoryFilters(
+                $this->buildHistoryOrderQuery((int) $user->id),
+                $filters
+            );
+
+            $data = $query->paginate($perPage);
+        } catch (\Throwable $e) {
+            Log::error('history_orders_primary_query_failed', [
+                'user_id' => (int) $user->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            $query = $this->applyHistoryFilters(
+                $this->buildHistoryOrderQuery((int) $user->id, true),
+                $filters,
+                true
+            );
+
+            $data = $query->paginate($perPage);
+        }
+
         $data->getCollection()->transform(fn (Order $order) => $this->transformHistoryOrder($order));
 
         return $this->ok($data);
@@ -1404,20 +1506,21 @@ class UserOrderController extends Controller
         $user = $request->user();
         $this->syncExpiredCreatedOrdersForUser((int) $user->id);
 
-        $order = Order::query()
-            ->where('id', (int) $id)
-            ->where('user_id', (int) $user->id)
-            ->with([
-                'payment:id,order_id,gateway_code,external_id,amount,status,created_at',
-                'items.product.category',
-                'items.product.subcategory',
-                'product.category',
-                'product.subcategory',
-                'vouchers:id,code,type,value',
-                'discountCampaigns:id,name,type,value',
-                'deliveries.license',
-            ])
-            ->first();
+        try {
+            $order = $this->buildHistoryOrderQuery((int) $user->id)
+                ->where('id', (int) $id)
+                ->first();
+        } catch (\Throwable $e) {
+            Log::error('history_order_show_primary_failed', [
+                'user_id' => (int) $user->id,
+                'order_id' => (int) $id,
+                'error' => $e->getMessage(),
+            ]);
+
+            $order = $this->buildHistoryOrderQuery((int) $user->id, true)
+                ->where('id', (int) $id)
+                ->first();
+        }
 
         if (! $order) {
             return $this->fail('Order tidak ditemukan', 404);
