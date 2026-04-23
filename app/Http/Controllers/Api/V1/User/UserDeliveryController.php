@@ -13,6 +13,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class UserDeliveryController extends Controller
 {
@@ -62,7 +63,6 @@ class UserDeliveryController extends Controller
     {
         return 'dispatch:delivery:mail:order:' . $orderId;
     }
-
 
     private function revealExpiresAt(?Delivery $delivery)
     {
@@ -117,7 +117,21 @@ class UserDeliveryController extends Controller
         }
     }
 
-    public function info(Request $request, $id)
+    /**
+     * Self-healing info endpoint for success page.
+     *
+     * Bug sebelumnya:
+     * - payment sudah paid
+     * - FE langsung redirect ke success
+     * - queue/process fulfillment belum selesai
+     * - success page dapat payload kosong/null lalu stuck di "Menyiapkan produk digital..."
+     *
+     * Solusi:
+     * - bila order sudah paid/fulfilled tapi deliveries masih kosong,
+     *   endpoint ini mencoba fulfill sinkron sekali lagi
+     * - tetap mengembalikan shape data stabil agar FE tidak null-stuck
+     */
+    public function info(Request $request, $id, OrderFulfillmentService $fulfill)
     {
         $user = $request->user();
         if (!$user) {
@@ -129,12 +143,36 @@ class UserDeliveryController extends Controller
             return $this->fail('Order not found', 404);
         }
 
+        $shouldSelfHeal = $this->isPaidOrder($order) && $order->deliveries->count() === 0;
+
+        if ($shouldSelfHeal) {
+            try {
+                $result = $fulfill->fulfillPaidOrder($order);
+
+                Log::info('USER DELIVERY INFO SELF_HEAL', [
+                    'order_id' => (int) $order->id,
+                    'ok' => (bool) ($result['ok'] ?? false),
+                    'message' => $result['message'] ?? null,
+                    'deliveries_before' => 0,
+                    'deliveries_after_hint' => (int) ($result['deliveriesCount'] ?? 0),
+                ]);
+
+                $order = $this->loadOrderForUser((int) $id, (int) $user->id) ?: $order;
+            } catch (\Throwable $e) {
+                Log::warning('USER DELIVERY INFO SELF_HEAL FAILED', [
+                    'order_id' => (int) $order->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         $totalQty = $this->getTotalQty($order);
         $firstDelivery = $order->deliveries->first();
+        $deliveriesCount = (int) $order->deliveries->count();
 
         $baseRevealAvailable = $this->isPaidOrder($order)
             && ($totalQty === 1)
-            && $order->deliveries->count() === 1
+            && $deliveriesCount === 1
             && $firstDelivery
             && $firstDelivery->delivery_mode === 'one_time';
 
@@ -142,12 +180,13 @@ class UserDeliveryController extends Controller
         $canReveal = $baseRevealAvailable && (!$firstDelivery?->revealed_at || $revealActive);
         $productNames = collect($order->items ?? [])->map(fn ($item) => $item->product_name)->filter()->values();
         $revealExpiresAt = $this->revealExpiresAt($firstDelivery);
+        $fulfillmentPending = $this->isPaidOrder($order) && $deliveriesCount === 0;
 
         return $this->ok([
             'order_id' => $order->id,
             'total_qty' => $totalQty,
             'delivery_mode' => $firstDelivery?->delivery_mode ?? ($totalQty === 1 ? 'one_time' : 'email_only'),
-            'deliveries_count' => $order->deliveries->count(),
+            'deliveries_count' => $deliveriesCount,
             'can_reveal' => $canReveal,
             'reveal_active' => $revealActive,
             'reveal_window_seconds' => self::ONE_TIME_REVEAL_SECONDS,
@@ -161,6 +200,8 @@ class UserDeliveryController extends Controller
             'payment_status' => (string) ($order->payment->status?->value ?? $order->payment->status ?? null),
             'primary_product_name' => $productNames->first() ?? $order->product?->name,
             'product_names' => $productNames->all(),
+            'fulfillment_pending' => $fulfillmentPending,
+            'delivery_ready' => $deliveriesCount > 0,
         ]);
     }
 
