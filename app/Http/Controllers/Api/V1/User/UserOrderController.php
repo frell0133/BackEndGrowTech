@@ -560,6 +560,7 @@ class UserOrderController extends Controller
                 'gateway_fee_amount' => (float) $gatewayFeeAmount,
                 'amount' => (float) $amount,
                 'payment_gateway_code' => null,
+                'checkout_source' => 'buy_now',
             ]);
 
             // ✅ referral transaction (pending) jika diskon referral dipakai

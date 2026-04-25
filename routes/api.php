@@ -295,6 +295,8 @@ Route::prefix('v1')->group(function () {
             ->middleware('feature.access:checkout');
         Route::get('cart/checkout', [UserCartController::class, 'checkoutPreview'])
             ->middleware('feature.access:checkout');
+        Route::post('cart/buy-now', [UserCartController::class, 'buyNow'])
+            ->middleware('feature.access:checkout');
 
         // Orders (User)
         Route::post('orders', [UserOrderController::class, 'store'])

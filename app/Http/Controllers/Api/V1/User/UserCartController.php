@@ -689,7 +689,7 @@ class UserCartController extends Controller
             ->with(['category:id,name,slug', 'subcategory:id,category_id,name,slug,provider,image_url,image_path'])
             ->first();
 
-        if (!$product) return $this->failWithCartState($user, $cart, 'Product not available', 404);
+        if (!$product) return $this->fail('Product not available', 404);
 
         $stock = app(ProductAvailabilityService::class)->forProductId((int) $product->id);
         if ($stock < $qty) {
