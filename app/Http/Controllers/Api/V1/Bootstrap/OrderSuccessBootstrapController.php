@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\User\UserOrderController;
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use App\Support\RuntimeCache;
+use App\Services\OrderFulfillmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -28,7 +29,7 @@ class OrderSuccessBootstrapController extends Controller
         $cacheKey = sprintf('bootstrap:order-success:%d:user:%d', $orderId, (int) $user->id);
 
         $payload = RuntimeCache::remember($cacheKey, self::BOOTSTRAP_TTL, function () use ($request, $id, $deliveryController, $orderController) {
-            $deliveryResponse = $deliveryController->info($request, $id);
+            $deliveryResponse = $deliveryController->info($request, $id, app(OrderFulfillmentService::class));
             if (!$this->isSuccess($deliveryResponse)) {
                 return ['response' => $deliveryResponse];
             }
