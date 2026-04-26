@@ -9,6 +9,7 @@ use App\Models\Banner;
 use App\Services\SupabaseStorageService;
 use App\Support\PublicCache;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class AdminBannerController extends Controller
 {
@@ -54,6 +55,7 @@ class AdminBannerController extends Controller
         $payload = $request->validate([
             'sort_order' => ['sometimes', 'integer', 'min:0'],
             'is_active'  => ['sometimes', 'boolean'],
+            'image_path' => ['sometimes', 'nullable', 'string'],
         ]);
 
         $banner->fill($payload)->save();
@@ -63,6 +65,36 @@ class AdminBannerController extends Controller
         return response()->json([
             'success' => true,
             'data' => $banner,
+        ]);
+    }
+
+
+    public function reorder(Request $request)
+    {
+        $payload = $request->validate([
+            'banners' => ['required', 'array', 'min:1'],
+            'banners.*.id' => ['required', 'integer', 'exists:banners,id'],
+            'banners.*.sort_order' => ['required', 'integer', 'min:0'],
+        ]);
+
+        DB::transaction(function () use ($payload) {
+            foreach ($payload['banners'] as $item) {
+                Banner::query()
+                    ->whereKey((int) $item['id'])
+                    ->update(['sort_order' => (int) $item['sort_order']]);
+            }
+        });
+
+        PublicCache::bumpContent();
+
+        $items = Banner::query()
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $items,
         ]);
     }
 

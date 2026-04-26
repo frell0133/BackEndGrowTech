@@ -31,7 +31,7 @@ class ContentController extends Controller
         $group = trim((string) $request->query('group', 'all'));
         $group = $group !== '' ? $group : 'all';
 
-        if (in_array($group, ['website', 'system', 'all'], true)) {
+        if (in_array($group, ['website', 'system', 'contact', 'all'], true)) {
             $rows = DB::table('site_settings')
                 ->where('is_public', true)
                 ->when($group !== 'all', fn ($q) => $q->where('group', $group))
@@ -128,7 +128,11 @@ class ContentController extends Controller
             })->values();
         });
 
-        return $this->ok($data);
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'error' => null,
+        ], 200, $this->noStoreHeaders());
     }
 
     public function popup(Request $request)
@@ -171,6 +175,10 @@ class ContentController extends Controller
                 ->get();
         });
 
-        return $this->ok($faqs);
+        return response()->json([
+            'success' => true,
+            'data' => $faqs,
+            'error' => null,
+        ], 200, $this->noStoreHeaders());
     }
 }

@@ -556,6 +556,7 @@ Route::prefix('v1')->group(function () {
         Route::middleware('admin.can:manage_banners')->group(function () {
             Route::get('banners', [AdminBannerController::class, 'index']);
             Route::post('banners', [AdminBannerController::class, 'store']);
+            Route::post('banners/reorder', [AdminBannerController::class, 'reorder']);
             Route::patch('banners/{banner}', [AdminBannerController::class, 'update']);
             Route::post('banners/image/sign', [AdminBannerController::class, 'signImageUpload']);
             Route::patch('banners/{banner}/image', [AdminBannerController::class, 'updateImage']);

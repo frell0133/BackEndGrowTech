@@ -29,12 +29,47 @@ class AdminSubCategoryController extends Controller
         return $validated;
     }
 
+    /**
+     * Saat update parsial (contoh: toggle status), jangan pernah menimpa gambar lama
+     * dengan default hanya karena image_url/image_path tidak dikirim dari FE.
+     */
+    private function preserveExistingImagePayload(array $validated): array
+    {
+        foreach (['image_url', 'image_path'] as $field) {
+            if (!array_key_exists($field, $validated)) {
+                continue;
+            }
+
+            $value = trim((string) ($validated[$field] ?? ''));
+            if ($value === '') {
+                unset($validated[$field]);
+            }
+        }
+
+        return $validated;
+    }
+
     public function index(Request $request)
     {
         $categoryId = $request->query('category_id');
+        $search = trim((string) ($request->query('q') ?? $request->query('search', '')));
+        $status = strtolower(trim((string) $request->query('status', 'all')));
 
         $data = SubCategory::with('category')
             ->when($categoryId, fn ($q) => $q->where('category_id', (int) $categoryId))
+            ->when($search !== '', function ($q) use ($search) {
+                $q->where(function ($w) use ($search) {
+                    $w->where('name', 'like', "%{$search}%")
+                        ->orWhere('slug', 'like', "%{$search}%")
+                        ->orWhere('provider', 'like', "%{$search}%")
+                        ->orWhereHas('category', function ($cat) use ($search) {
+                            $cat->where('name', 'like', "%{$search}%");
+                        });
+                });
+            })
+            ->when(in_array($status, ['active', 'inactive'], true), function ($q) use ($status) {
+                $q->where('is_active', $status === 'active');
+            })
             ->orderBy('sort_order')
             ->latest('id')
             ->get();
@@ -97,7 +132,7 @@ class AdminSubCategoryController extends Controller
             'description' => ['nullable', 'string'],
         ]);
 
-        $sub->update($this->defaultImagePayload($validated));
+        $sub->update($this->preserveExistingImagePayload($validated));
 
         PublicCache::bumpCatalog();
         PublicCache::bumpDashboard();
