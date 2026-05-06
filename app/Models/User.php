@@ -53,6 +53,10 @@ class User extends Authenticatable
         'remember_token',
     ];
 
+    protected $appends = [
+        'login_method',
+    ];
+
     /**
      * Get the attributes that should be cast.
      *
@@ -64,6 +68,22 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+
+    public function getLoginMethodAttribute(): string
+    {
+        $provider = strtolower(trim((string) ($this->provider ?? '')));
+
+        return match ($provider) {
+            'google' => 'google',
+            'discord' => 'discord',
+            default => 'email',
+        };
+    }
+
+    public function isSocialLogin(): bool
+    {
+        return in_array($this->login_method, ['google', 'discord'], true);
     }
 
     public function orders()

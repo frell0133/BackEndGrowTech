@@ -27,6 +27,10 @@ class UserWithdrawController extends Controller
         $v = $request->validate([
             'amount' => ['required', 'integer', 'min:1'],
             'payout_details' => ['nullable', 'array'], // optional metadata saja
+        ], [
+            'amount.required' => 'Nominal withdraw wajib diisi.',
+            'amount.integer' => 'Nominal withdraw harus berupa angka bulat.',
+            'amount.min' => 'Withdraw tidak bisa dilakukan dengan nominal Rp 0. Masukkan nominal minimal Rp 1.',
         ]);
 
         $amount = (int) $v['amount'];
@@ -34,7 +38,7 @@ class UserWithdrawController extends Controller
         $settings = ReferralSetting::current();
         $minWd = (int) ($settings->min_withdrawal ?? 0);
         if ($minWd > 0 && $amount < $minWd) {
-            return $this->fail("Minimal withdraw adalah {$minWd}", 422);
+            return $this->fail("Saldo yang diajukan belum memenuhi minimal withdraw Rp " . number_format($minWd, 0, ',', '.') . ".", 422);
         }
 
         // ✅ saldo sumber: wallet komisi (IDR_COMMISSION)
@@ -52,7 +56,7 @@ class UserWithdrawController extends Controller
 
         if ($amount > $available) {
             return $this->fail(
-                "Saldo komisi tidak cukup. Available={$available} (saldo={$commissionBalance}, pending={$pendingTotal})",
+                "Saldo komisi tidak cukup. Saldo referral yang bisa ditarik Rp " . number_format($available, 0, ',', '.') . ".",
                 422
             );
         }

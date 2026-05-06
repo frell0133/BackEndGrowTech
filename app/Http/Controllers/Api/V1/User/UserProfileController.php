@@ -9,6 +9,7 @@ use App\Support\ApiResponse;
 use App\Support\RuntimeCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class UserProfileController extends Controller
@@ -49,13 +50,16 @@ class UserProfileController extends Controller
                 'avatar_path' => $user->avatar_path,
                 'full_name' => $user->full_name,
                 'address' => $user->address,
+                'provider' => $user->provider,
+                'login_method' => $user->login_method ?? 'email',
+                'can_change_email' => !in_array(strtolower((string) ($user->provider ?? '')), ['google', 'discord'], true),
             ];
         });
 
         return $this->ok($payload);
     }
 
-    public function updateProfile(Request $request)
+    public function updateProfile(Request $request, TrustedDeviceService $trustedDeviceService)
     {
         $user = $request->user();
         if (!$user) {
@@ -63,12 +67,57 @@ class UserProfileController extends Controller
         }
 
         $validated = $request->validate([
+            'name' => ['nullable', 'string', 'max:120'],
             'full_name' => ['nullable', 'string', 'max:150'],
             'address' => ['nullable', 'string', 'max:1000'],
+            'email' => ['nullable', 'email', 'max:190', Rule::unique('users', 'email')->ignore($user->id)],
+            'current_password' => ['nullable', 'string'],
+        ], [
+            'email.unique' => 'Email sudah digunakan oleh akun lain.',
         ]);
 
+        $provider = strtolower(trim((string) ($user->provider ?? '')));
+        $isSocialAccount = in_array($provider, ['google', 'discord'], true);
+        $emailChanged = array_key_exists('email', $validated)
+            && strtolower(trim((string) $validated['email'])) !== strtolower((string) $user->email);
+
+        if ($emailChanged && $isSocialAccount) {
+            throw ValidationException::withMessages([
+                'email' => ['Email akun Google/Discord tidak dapat diubah. Gunakan email dari provider login tersebut.'],
+            ]);
+        }
+
+        if ($emailChanged) {
+            if (empty($validated['current_password']) || !Hash::check($validated['current_password'], $user->password)) {
+                throw ValidationException::withMessages([
+                    'current_password' => ['Password saat ini wajib diisi dan harus benar untuk mengganti email.'],
+                ]);
+            }
+            $validated['email'] = strtolower(trim((string) $validated['email']));
+        } else {
+            unset($validated['email']);
+        }
+
+        unset($validated['current_password']);
+
         $user->update($validated);
+        $user->refresh();
         $this->bumpProfileVersion((int) $user->id);
+
+        if ($emailChanged) {
+            if (method_exists($user, 'tokens')) {
+                $user->tokens()->delete();
+            }
+            $trustedDeviceService->revokeAllForUser($user);
+
+            $response = $this->ok($user->fresh(), [
+                'message' => 'Email berhasil diperbarui. Silakan login ulang.',
+                'email_changed' => true,
+                'logout_required' => true,
+            ]);
+
+            return $trustedDeviceService->clearTrustedDeviceCookie($response);
+        }
 
         return $this->ok($user->fresh(), ['message' => 'Profil berhasil diperbarui']);
     }

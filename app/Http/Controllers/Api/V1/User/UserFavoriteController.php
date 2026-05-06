@@ -104,6 +104,16 @@ class UserFavoriteController extends Controller
             if (!$purchased) {
                 return $this->fail('Rating hanya bisa diberikan setelah membeli produk ini.', 403);
             }
+
+            $alreadyRated = Favorite::query()
+                ->where('user_id', $user->id)
+                ->where('product_id', $productId)
+                ->whereNotNull('rating')
+                ->exists();
+
+            if ($alreadyRated) {
+                return $this->fail('Rating produk sudah terkunci dan tidak dapat diubah.', 409);
+            }
         }
 
         DB::transaction(function () use ($user, $product, $rating) {
@@ -140,8 +150,11 @@ class UserFavoriteController extends Controller
         PublicCache::bumpCatalogProducts();
 
         return $this->ok([
-            'message' => 'Favorite saved',
-            'can_edit_rating' => !is_null($rating),
+            'message' => is_null($rating)
+                ? 'Produk berhasil ditambahkan ke favorite.'
+                : 'Rating produk berhasil disimpan dan tidak dapat diubah lagi.',
+            'can_edit_rating' => false,
+            'rating_locked' => !is_null($rating),
         ]);
     }
 
@@ -155,7 +168,7 @@ class UserFavoriteController extends Controller
             ->first();
 
         if (!$fav) {
-            return $this->ok(['message' => 'Already not favorited']);
+            return $this->ok(['message' => 'Produk sudah tidak ada di favorite.']);
         }
 
         $product = Product::query()->find($productId);
@@ -176,7 +189,7 @@ class UserFavoriteController extends Controller
         $this->bumpIndexVersion((int) $user->id);
         PublicCache::bumpCatalogProducts();
 
-        return $this->ok(['message' => 'Removed from favorites']);
+        return $this->ok(['message' => 'Produk berhasil dihapus dari favorite.']);
     }
 
     private function refreshProductRatingAggregate(int $productId, int $purchases): void
