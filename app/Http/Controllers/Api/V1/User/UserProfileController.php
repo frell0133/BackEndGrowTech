@@ -88,36 +88,16 @@ class UserProfileController extends Controller
         }
 
         if ($emailChanged) {
-            if (empty($validated['current_password']) || !Hash::check($validated['current_password'], $user->password)) {
-                throw ValidationException::withMessages([
-                    'current_password' => ['Password saat ini wajib diisi dan harus benar untuk mengganti email.'],
-                ]);
-            }
-            $validated['email'] = strtolower(trim((string) $validated['email']));
-        } else {
-            unset($validated['email']);
+            throw ValidationException::withMessages([
+                'email' => ['Ganti email wajib melalui verifikasi OTP email lama dan email baru.'],
+            ]);
         }
 
-        unset($validated['current_password']);
+        unset($validated['email'], $validated['current_password']);
 
         $user->update($validated);
         $user->refresh();
         $this->bumpProfileVersion((int) $user->id);
-
-        if ($emailChanged) {
-            if (method_exists($user, 'tokens')) {
-                $user->tokens()->delete();
-            }
-            $trustedDeviceService->revokeAllForUser($user);
-
-            $response = $this->ok($user->fresh(), [
-                'message' => 'Email berhasil diperbarui. Silakan login ulang.',
-                'email_changed' => true,
-                'logout_required' => true,
-            ]);
-
-            return $trustedDeviceService->clearTrustedDeviceCookie($response);
-        }
 
         return $this->ok($user->fresh(), ['message' => 'Profil berhasil diperbarui']);
     }

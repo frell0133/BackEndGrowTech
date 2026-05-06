@@ -363,6 +363,8 @@ class TwoFactorService
             'register' => 'Verifikasi Registrasi',
             'login' => 'Verifikasi Login',
             'social' => 'Verifikasi Login Sosial',
+            'email_change_current' => 'Verifikasi Email Lama',
+            'email_change_new' => 'Verifikasi Email Baru',
             default => 'Verifikasi Akun',
         };
     }
@@ -375,6 +377,8 @@ class TwoFactorService
             'register' => "{$appName} - OTP Verifikasi Registrasi",
             'login' => "{$appName} - OTP Login",
             'social' => "{$appName} - OTP Login Sosial",
+            'email_change_current' => "{$appName} - OTP Verifikasi Email Lama",
+            'email_change_new' => "{$appName} - OTP Verifikasi Email Baru",
             default => "{$appName} - OTP Verifikasi",
         };
     }

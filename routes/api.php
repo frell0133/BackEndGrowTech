@@ -21,6 +21,7 @@ use App\Http\Controllers\Api\V1\User\UserReferralController;
 use App\Http\Controllers\Api\V1\User\UserWithdrawController;
 use App\Http\Controllers\Api\V1\User\UserVoucherController;
 use App\Http\Controllers\Api\V1\User\UserProfileController;
+use App\Http\Controllers\Api\V1\User\UserEmailChangeController;
 use App\Http\Controllers\Api\V1\User\UserTopupController;
 use App\Http\Controllers\Api\V1\User\UserCartController;
 use App\Http\Controllers\Api\V1\User\UserFavoriteController;
@@ -215,6 +216,18 @@ Route::prefix('v1')->group(function () {
             // profile
             Route::get('me/profile', [UserProfileController::class, 'showProfile']);
             Route::patch('me/profile', [UserProfileController::class, 'updateProfile']);
+
+            // email change manual account only: old email OTP -> new email OTP -> update
+            Route::prefix('me/email-change')->group(function () {
+                Route::post('request-current', [UserEmailChangeController::class, 'requestCurrent'])
+                    ->middleware('throttle:otp-resend');
+                Route::post('verify-current', [UserEmailChangeController::class, 'verifyCurrent'])
+                    ->middleware('throttle:otp-verify');
+                Route::post('request-new', [UserEmailChangeController::class, 'requestNew'])
+                    ->middleware('throttle:otp-resend');
+                Route::post('verify-new', [UserEmailChangeController::class, 'verifyNew'])
+                    ->middleware('throttle:otp-verify');
+            });
 
             // avatar (supabase)
             Route::post('me/avatar/sign', [UserProfileController::class, 'signAvatarUpload']);
