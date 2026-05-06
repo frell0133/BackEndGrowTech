@@ -7,12 +7,14 @@ use App\Http\Controllers\Controller;
 use App\Models\Favorite;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\ProductRating;
 use App\Services\ProductAvailabilityService;
 use App\Support\ApiResponse;
 use App\Support\PublicCache;
 use App\Support\RuntimeCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class UserFavoriteController extends Controller
 {
@@ -92,28 +94,17 @@ class UserFavoriteController extends Controller
         $v = $request->validate([
             'product_id' => ['required', 'integer', 'min:1'],
             'rating' => ['nullable', 'integer', 'min:1', 'max:5'],
+            'order_id' => ['nullable', 'integer', 'min:1'],
         ]);
 
         $productId = (int) $v['product_id'];
         $rating = isset($v['rating']) ? (int) $v['rating'] : null;
+        $orderId = isset($v['order_id']) ? (int) $v['order_id'] : null;
 
         $product = Product::query()->findOrFail($productId);
 
         if (!is_null($rating)) {
-            $purchased = $this->hasPurchasedProduct($user->id, $productId);
-            if (!$purchased) {
-                return $this->fail('Rating hanya bisa diberikan setelah membeli produk ini.', 403);
-            }
-
-            $alreadyRated = Favorite::query()
-                ->where('user_id', $user->id)
-                ->where('product_id', $productId)
-                ->whereNotNull('rating')
-                ->exists();
-
-            if ($alreadyRated) {
-                return $this->fail('Rating produk sudah terkunci dan tidak dapat diubah.', 409);
-            }
+            return $this->storePurchaseRating($user, $product, $rating, $orderId);
         }
 
         DB::transaction(function () use ($user, $product, $rating) {
@@ -150,11 +141,9 @@ class UserFavoriteController extends Controller
         PublicCache::bumpCatalogProducts();
 
         return $this->ok([
-            'message' => is_null($rating)
-                ? 'Produk berhasil ditambahkan ke favorite.'
-                : 'Rating produk berhasil disimpan dan tidak dapat diubah lagi.',
+            'message' => 'Produk berhasil ditambahkan ke favorite.',
             'can_edit_rating' => false,
-            'rating_locked' => !is_null($rating),
+            'rating_locked' => false,
         ]);
     }
 
@@ -192,11 +181,93 @@ class UserFavoriteController extends Controller
         return $this->ok(['message' => 'Produk berhasil dihapus dari favorite.']);
     }
 
+    private function storePurchaseRating($user, Product $product, int $rating, ?int $orderId)
+    {
+        $order = null;
+
+        if ($orderId) {
+            $order = $this->findPaidOrderContainingProduct((int) $user->id, $orderId, (int) $product->id);
+
+            if (!$order) {
+                return $this->fail('Rating hanya bisa diberikan untuk order yang sudah dibayar dan berisi produk ini.', 403);
+            }
+        } elseif (!$this->hasPurchasedProduct((int) $user->id, (int) $product->id)) {
+            return $this->fail('Rating hanya bisa diberikan setelah membeli produk ini.', 403);
+        }
+
+        if (Schema::hasTable('product_ratings')) {
+            $alreadyRated = ProductRating::query()
+                ->where('user_id', $user->id)
+                ->where('product_id', $product->id)
+                ->when($orderId, fn ($q) => $q->where('order_id', $orderId), fn ($q) => $q->whereNull('order_id'))
+                ->exists();
+
+            if ($alreadyRated) {
+                return $this->fail('Rating untuk pembelian ini sudah terkunci dan tidak dapat diubah. Jika membeli produk ini lagi, kamu bisa memberi rating baru pada transaksi berikutnya.', 409);
+            }
+        } else {
+            $alreadyRated = Favorite::query()
+                ->where('user_id', $user->id)
+                ->where('product_id', $product->id)
+                ->whereNotNull('rating')
+                ->exists();
+
+            if ($alreadyRated) {
+                return $this->fail('Rating produk sudah terkunci pada mode database lama. Jalankan migrate agar rating bisa per pembelian.', 409);
+            }
+        }
+
+        DB::transaction(function () use ($user, $product, $rating, $orderId) {
+            if (Schema::hasTable('product_ratings')) {
+                ProductRating::query()->create([
+                    'user_id' => $user->id,
+                    'product_id' => $product->id,
+                    'order_id' => $orderId,
+                    'rating' => $rating,
+                ]);
+            } else {
+                Favorite::query()->updateOrCreate(
+                    ['user_id' => $user->id, 'product_id' => $product->id],
+                    ['rating' => $rating, 'is_favorited' => false]
+                );
+            }
+
+            $this->refreshProductRatingAggregate($product->id, (int) ($product->purchases_count ?? 0));
+        });
+
+        $this->bumpIndexVersion((int) $user->id);
+        PublicCache::bumpCatalogProducts();
+
+        return $this->ok([
+            'message' => 'Rating untuk pembelian ini berhasil disimpan.',
+            'can_edit_rating' => false,
+            'rating_locked' => true,
+            'can_rate_next_purchase' => true,
+        ]);
+    }
+
+    private function findPaidOrderContainingProduct(int $userId, int $orderId, int $productId): ?Order
+    {
+        return Order::query()
+            ->where('id', $orderId)
+            ->where('user_id', $userId)
+            ->whereIn('status', [OrderStatus::PAID, OrderStatus::FULFILLED])
+            ->where(function ($q) use ($productId) {
+                $q->where('product_id', $productId)
+                    ->orWhereHas('items', function ($qq) use ($productId) {
+                        $qq->where('product_id', $productId);
+                    });
+            })
+            ->first();
+    }
+
     private function refreshProductRatingAggregate(int $productId, int $purchases): void
     {
-        $agg = Favorite::query()
-            ->where('product_id', $productId)
-            ->whereNotNull('rating')
+        $query = Schema::hasTable('product_ratings')
+            ? ProductRating::query()->where('product_id', $productId)
+            : Favorite::query()->where('product_id', $productId)->whereNotNull('rating');
+
+        $agg = $query
             ->selectRaw('COUNT(*) as rating_count, COALESCE(AVG(rating), 0) as rating_avg')
             ->first();
 

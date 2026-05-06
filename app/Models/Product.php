@@ -68,5 +68,10 @@ class Product extends Model
     {
         return $this->hasMany(\App\Models\Favorite::class);
     }
+
+    public function productRatings(): HasMany
+    {
+        return $this->hasMany(\App\Models\ProductRating::class);
+    }
     
 }
