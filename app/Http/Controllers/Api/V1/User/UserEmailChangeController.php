@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1\User;
 
 use App\Http\Controllers\Controller;
 use App\Models\AuthChallenge;
+use App\Models\AuditLog;
 use App\Models\User;
 use App\Services\TwoFactorService;
 use App\Support\ApiResponse;
@@ -230,6 +231,7 @@ class UserEmailChangeController extends Controller
 
         RuntimeCache::forget($this->oldEmailTokenKey((int) $user->id, $oldToken));
         $this->bumpProfileVersion((int) $user->id);
+        $this->writeEmailChangeAudit($request, $updatedUser, $currentEmail, $newEmail);
 
         return $this->ok($updatedUser, [
             'message' => 'Email berhasil diganti dan sudah diverifikasi.',
@@ -307,4 +309,67 @@ class UserEmailChangeController extends Controller
 
         RuntimeCache::increment($key);
     }
+
+    private function writeEmailChangeAudit(Request $request, User $user, string $oldEmail, string $newEmail): void
+    {
+        try {
+            $oldEmail = $this->normalizeEmail($oldEmail);
+            $newEmail = $this->normalizeEmail($newEmail);
+
+            AuditLog::create([
+                'user_id' => (int) $user->id,
+                'action' => 'user.email_changed',
+                'entity' => 'users',
+                'entity_id' => (int) $user->id,
+                'meta' => [
+                    'scope' => 'user_security',
+                    'module' => 'user_email_change',
+                    'status' => 'success',
+                    'source' => 'self_service',
+                    'summary' => sprintf(
+                        'User %s mengganti email dari %s menjadi %s melalui verifikasi OTP email lama dan email baru.',
+                        $user->name ?: $oldEmail,
+                        $oldEmail,
+                        $newEmail
+                    ),
+                    'target' => [
+                        'id' => (int) $user->id,
+                        'name' => $user->name,
+                        'full_name' => $user->full_name,
+                        'role' => $user->role,
+                        'provider' => $user->provider,
+                    ],
+                    'email_change' => [
+                        'old_email' => $oldEmail,
+                        'new_email' => $newEmail,
+                        'verified_current_email' => true,
+                        'verified_new_email' => true,
+                        'method' => 'manual_otp_two_step',
+                    ],
+                    'security' => [
+                        'old_email_otp_verified' => true,
+                        'new_email_otp_verified' => true,
+                        'email_verified_at_reset' => false,
+                    ],
+                    'request' => [
+                        'method' => $request->method(),
+                        'path' => $request->path(),
+                        'route' => optional($request->route())->uri(),
+                    ],
+                    'context' => [
+                        'ip' => $request->ip(),
+                        'user_agent' => substr((string) $request->userAgent(), 0, 500),
+                    ],
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            \Log::warning('EMAIL_CHANGE_AUDIT_USER_FAILED', [
+                'user_id' => $user->id ?? null,
+                'old_email' => $oldEmail,
+                'new_email' => $newEmail,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
 }

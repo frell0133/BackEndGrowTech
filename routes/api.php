@@ -437,6 +437,7 @@ Route::prefix('v1')->group(function () {
         // Users
         Route::middleware('admin.can:manage_users')->group(function () {
             Route::get('users', [AdminUserController::class, 'index']);
+            Route::get('users/email-change-logs', [AdminUserController::class, 'emailChangeLogs']);
             Route::get('users/{id}', [AdminUserController::class, 'show']);
             Route::patch('users/{id}', [AdminUserController::class, 'update']);
             Route::get('users/{id}/ledger', [AdminUserController::class, 'ledger']);
