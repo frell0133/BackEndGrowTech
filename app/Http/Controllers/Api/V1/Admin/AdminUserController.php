@@ -13,6 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Database\QueryException;
 use App\Services\TrustedDeviceService;
 
 class AdminUserController extends Controller
@@ -269,21 +270,42 @@ class AdminUserController extends Controller
 
     /**
      * DELETE /admin/users/{id}
+     *
+     * User tidak dihapus permanen karena bisa masih direferensikan oleh order, ledger,
+     * referral_transactions, audit_logs, dan histori transaksi lain. Sistem memakai soft delete
+     * agar data hilang dari daftar aktif tetapi histori audit tetap aman.
      */
     public function destroy(Request $request, string $id)
     {
         $user = User::query()->find($id);
-        if (!$user) return $this->fail('User tidak ditemukan', 404);
+        if (!$user) return $this->fail('User tidak ditemukan atau sudah dihapus', 404);
 
         // Proteksi: admin tidak bisa hapus dirinya sendiri
-        if ((string)$request->user()->id === (string)$user->id) {
+        if ((string) $request->user()->id === (string) $user->id) {
             return $this->fail('Tidak bisa menghapus akun sendiri', 422);
         }
 
-        // Kalau kamu pakai SoftDeletes => soft delete; kalau tidak => hard delete
-        $user->delete();
+        try {
+            if (method_exists($user, 'tokens')) {
+                $user->tokens()->delete();
+            }
 
-        return $this->ok(['deleted' => true], ['message' => 'User berhasil dihapus']);
+            app(TrustedDeviceService::class)->revokeAllForUser($user);
+
+            // Dengan SoftDeletes pada model User, ini mengisi deleted_at, bukan hard delete.
+            $user->delete();
+        } catch (QueryException $exception) {
+            report($exception);
+
+            return $this->fail(
+                'User tidak bisa dihapus permanen karena masih memiliki riwayat transaksi/referral. Aktifkan soft delete users lalu jalankan migration.',
+                409
+            );
+        }
+
+        return $this->ok(['deleted' => true], [
+            'message' => 'User berhasil dihapus dari daftar. Riwayat transaksi dan referral tetap disimpan untuk audit.',
+        ]);
     }
 
     /**
