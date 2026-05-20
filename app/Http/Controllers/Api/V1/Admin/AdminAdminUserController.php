@@ -7,7 +7,7 @@ use App\Models\AdminPermission;
 use App\Models\AdminRole;
 use App\Models\User;
 use App\Services\AdminAuditLogger;
-use App\Services\TrustedDeviceService;
+use App\Services\AdminRoleLifecycleService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -16,13 +16,14 @@ class AdminAdminUserController extends Controller
 {
     use ApiResponse;
 
+    private function roleLifecycle(): AdminRoleLifecycleService
+    {
+        return app(AdminRoleLifecycleService::class);
+    }
+
     private function invalidateUserSessions(User $user): void
     {
-        if (method_exists($user, 'tokens')) {
-            $user->tokens()->delete();
-        }
-
-        app(TrustedDeviceService::class)->revokeAllForUser($user);
+        $this->roleLifecycle()->invalidateUserSessions($user);
     }
 
     public function index(Request $request)
@@ -61,6 +62,10 @@ class AdminAdminUserController extends Controller
             return $this->fail('Role owner/super admin tidak boleh di-assign lewat endpoint ini', 422);
         }
 
+        if (str_starts_with((string) $role->slug, 'custom_user_')) {
+            return $this->fail('Custom role personal tidak boleh di-assign sebagai preset role', 422);
+        }
+
         if ($user->adminRole?->is_super) {
             return $this->fail('Akun owner/super admin tidak boleh diubah lewat endpoint ini', 422);
         }
@@ -76,7 +81,8 @@ class AdminAdminUserController extends Controller
             $user->admin_role_id = $role->id;
             $user->save();
 
-            $user->load('adminRole.permissions');
+            $this->roleLifecycle()->deleteCustomRoleForUser($user);
+            $user->refresh()->load('adminRole.permissions');
             $this->invalidateUserSessions($user);
 
             $audit->log(
@@ -129,6 +135,9 @@ class AdminAdminUserController extends Controller
             $user->admin_role_id = null;
             $user->role = 'user';
             $user->save();
+
+            $this->roleLifecycle()->deleteCustomRoleForUser($user);
+            $user->refresh();
             $this->invalidateUserSessions($user);
 
             $audit->log(
@@ -219,7 +228,9 @@ class AdminAdminUserController extends Controller
         DB::transaction(function () use ($request, $audit, $user, $role, $before) {
             $user->admin_role_id = $role->id;
             $user->save();
-            $user->load('adminRole.permissions');
+
+            $this->roleLifecycle()->deleteCustomRoleForUser($user);
+            $user->refresh()->load('adminRole.permissions');
             $this->invalidateUserSessions($user);
 
             $audit->log(

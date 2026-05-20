@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api\V1\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\AdminPermission;
 use App\Models\AdminRole;
+use App\Models\User;
 use App\Services\AdminAuditLogger;
+use App\Services\AdminRoleLifecycleService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,11 +16,17 @@ class AdminRoleController extends Controller
 {
     use ApiResponse;
 
+    private function roleLifecycle(): AdminRoleLifecycleService
+    {
+        return app(AdminRoleLifecycleService::class);
+    }
+
     public function index()
     {
         $roles = AdminRole::with([
                 'permissions' => fn ($q) => $q->orderBy('group')->orderBy('key'),
             ])
+            ->where('slug', 'not like', 'custom_user_%')
             ->orderByDesc('is_super')
             ->orderByDesc('is_system')
             ->orderBy('name')
@@ -39,6 +47,10 @@ class AdminRoleController extends Controller
             'permission_keys' => 'nullable|array',
             'permission_keys.*' => 'string',
         ]);
+
+        if (str_starts_with((string) $data['slug'], 'custom_user_')) {
+            return $this->fail('Slug custom_user_* khusus role personal admin dan tidak boleh dibuat manual', 422);
+        }
 
         $keys = array_values(array_unique($data['permission_keys'] ?? []));
 
@@ -106,6 +118,10 @@ class AdminRoleController extends Controller
             return $this->fail('Role owner/super admin tidak boleh diubah dari endpoint ini', 422);
         }
 
+        if (str_starts_with((string) $role->slug, 'custom_user_')) {
+            return $this->fail('Role custom personal hanya boleh diubah dari akses admin user terkait', 422);
+        }
+
         if ($request->hasAny(['is_super', 'is_system', 'slug'])) {
             return $this->fail('Field is_super / is_system / slug tidak boleh diubah dari endpoint ini', 422);
         }
@@ -169,8 +185,18 @@ class AdminRoleController extends Controller
                     ],
                     'before' => $before,
                     'after' => $this->roleSnapshot($role),
+                    'security' => [
+                        'affected_admin_sessions_revoked' => true,
+                        'reason' => 'preset_role_changed',
+                    ],
                 ],
             );
+
+            User::query()
+                ->where('role', 'admin')
+                ->where('admin_role_id', $role->id)
+                ->cursor()
+                ->each(fn (User $adminUser) => $this->roleLifecycle()->invalidateUserSessions($adminUser));
         });
 
         $role->refresh()->load(['permissions' => fn ($q) => $q->orderBy('group')->orderBy('key')]);
@@ -184,6 +210,10 @@ class AdminRoleController extends Controller
 
         if ($role->is_super) {
             return $this->fail('Tidak boleh hapus role owner/super admin', 422);
+        }
+
+        if (str_starts_with((string) $role->slug, 'custom_user_')) {
+            return $this->fail('Role custom personal dikelola otomatis oleh lifecycle admin user', 422);
         }
 
         if ($role->is_system) {

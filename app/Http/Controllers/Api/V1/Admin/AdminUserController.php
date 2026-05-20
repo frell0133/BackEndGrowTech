@@ -14,11 +14,17 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Database\QueryException;
-use App\Services\TrustedDeviceService;
+use Illuminate\Support\Facades\DB;
+use App\Services\AdminRoleLifecycleService;
 
 class AdminUserController extends Controller
 {
     use ApiResponse;
+
+    private function roleLifecycle(): AdminRoleLifecycleService
+    {
+        return app(AdminRoleLifecycleService::class);
+    }
 
     /**
      * GET /admin/users
@@ -180,20 +186,31 @@ class AdminUserController extends Controller
             'tier' => ['nullable', Rule::in(User::allowedTiers())],
         ]);
 
-        $user = User::create([
-            'name' => $validated['name'],
-            'full_name' => $validated['full_name'] ?? null,
-            'address' => $validated['address'] ?? null,
-            'email' => strtolower($validated['email']),
-            'password' => Hash::make($validated['password']),
-            'role' => $validated['role'],
-            'tier' => $validated['tier'] ?? User::TIER_MEMBER,
-        ]);
+        $user = DB::transaction(function () use ($validated) {
+            $user = User::create([
+                'name' => $validated['name'],
+                'full_name' => $validated['full_name'] ?? null,
+                'address' => $validated['address'] ?? null,
+                'email' => strtolower($validated['email']),
+                'password' => Hash::make($validated['password']),
+                'role' => $validated['role'],
+                'tier' => $validated['tier'] ?? User::TIER_MEMBER,
+            ]);
+
+            if (($validated['role'] ?? null) === 'admin') {
+                $this->roleLifecycle()->ensureEmptyCustomRoleForUser($user);
+                $user->refresh()->load('adminRole.permissions');
+            }
+
+            return $user;
+        });
 
         // ✅ kalau mau debug, taruh SEBELUM return
         \Log::info('ADMIN CREATE USER', [
             'admin_id' => optional($request->user())->id,
             'email' => $user->email,
+            'role' => $user->role,
+            'admin_role_id' => $user->admin_role_id,
         ]);
 
         return $this->ok($user, ['message' => 'User berhasil dibuat']);
@@ -241,31 +258,59 @@ class AdminUserController extends Controller
             }
         }
 
-        $originalEmail = (string) $user->email;
-        $originalRole = (string) $user->role;
+        $user->load('adminRole.permissions');
 
-        if (($validated['role'] ?? null) === 'user') {
-            $validated['admin_role_id'] = null;
+        if ($user->adminRole?->is_super && ($validated['role'] ?? null) === 'user') {
+            throw ValidationException::withMessages([
+                'role' => ['Akun owner/super admin tidak boleh diubah menjadi user dari halaman manajemen user.'],
+            ]);
         }
 
-        $user->fill($validated)->save();
+        $originalEmail = (string) $user->email;
+        $originalRole = (string) $user->role;
+        $originalAdminRoleId = $user->admin_role_id ? (int) $user->admin_role_id : null;
+
+        $user = DB::transaction(function () use ($user, $validated) {
+            if (($validated['role'] ?? null) === 'user') {
+                $validated['admin_role_id'] = null;
+            }
+
+            $user->fill($validated)->save();
+
+            if (($user->role ?? null) === 'user') {
+                $this->roleLifecycle()->deleteCustomRoleForUser($user);
+                $user->refresh();
+            }
+
+            if (($user->role ?? null) === 'admin') {
+                $roleSlug = (string) ($user->adminRole?->slug ?? '');
+                $hasPersonalCustomRole = $roleSlug === $this->roleLifecycle()->customSlugForUser($user);
+
+                if (is_null($user->admin_role_id)) {
+                    $this->roleLifecycle()->ensureEmptyCustomRoleForUser($user);
+                    $user->refresh()->load('adminRole.permissions');
+                } elseif ($hasPersonalCustomRole) {
+                    $this->roleLifecycle()->refreshCustomRoleNameForUser($user);
+                    $user->refresh()->load('adminRole.permissions');
+                }
+            }
+
+            return $user;
+        });
 
         $emailChanged = isset($validated['email']) && strtolower((string) $validated['email']) !== strtolower($originalEmail);
         $roleChanged = isset($validated['role']) && (string) $validated['role'] !== $originalRole;
+        $adminRoleChanged = ($user->admin_role_id ? (int) $user->admin_role_id : null) !== $originalAdminRoleId;
 
-        if ($emailChanged || $roleChanged) {
-            if (method_exists($user, 'tokens')) {
-                $user->tokens()->delete();
-            }
-
-            app(TrustedDeviceService::class)->revokeAllForUser($user);
+        if ($emailChanged || $roleChanged || $adminRoleChanged) {
+            $this->roleLifecycle()->invalidateUserSessions($user);
         }
 
         if ($emailChanged) {
             $this->writeEmailChangeAudit($request, $user->fresh(), $originalEmail, (string) $validated['email']);
         }
 
-        return $this->ok($user, ['message' => 'User berhasil diupdate']);
+        return $this->ok($user->fresh()->load('adminRole.permissions'), ['message' => 'User berhasil diupdate']);
     }
 
     /**
@@ -285,15 +330,24 @@ class AdminUserController extends Controller
             return $this->fail('Tidak bisa menghapus akun sendiri', 422);
         }
 
+        if ($user->adminRole?->is_super) {
+            return $this->fail('Akun owner/super admin tidak boleh dihapus dari halaman manajemen user', 422);
+        }
+
         try {
-            if (method_exists($user, 'tokens')) {
-                $user->tokens()->delete();
-            }
+            DB::transaction(function () use ($user) {
+                $this->roleLifecycle()->invalidateUserSessions($user);
 
-            app(TrustedDeviceService::class)->revokeAllForUser($user);
+                $user->role = 'user';
+                $user->admin_role_id = null;
+                $user->save();
 
-            // Dengan SoftDeletes pada model User, ini mengisi deleted_at, bukan hard delete.
-            $user->delete();
+                $this->roleLifecycle()->deleteCustomRoleForUser($user);
+                $user->refresh();
+
+                // Dengan SoftDeletes pada model User, ini mengisi deleted_at, bukan hard delete.
+                $user->delete();
+            });
         } catch (QueryException $exception) {
             report($exception);
 
