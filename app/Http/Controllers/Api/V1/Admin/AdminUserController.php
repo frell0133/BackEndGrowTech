@@ -26,6 +26,22 @@ class AdminUserController extends Controller
         return app(AdminRoleLifecycleService::class);
     }
 
+    private function normalizeEmailInput(Request $request, string $key = 'email'): void
+    {
+        if ($request->has($key) && $request->input($key) !== null) {
+            $request->merge([
+                $key => strtolower(trim((string) $request->input($key))),
+            ]);
+        }
+    }
+
+    private function activeEmailUniqueRule(?int $ignoreUserId = null)
+    {
+        $rule = Rule::unique('users', 'email')->whereNull('deleted_at');
+
+        return $ignoreUserId ? $rule->ignore($ignoreUserId) : $rule;
+    }
+
     /**
      * GET /admin/users
      * Query:
@@ -176,11 +192,13 @@ class AdminUserController extends Controller
      */
     public function store(Request $request)
     {
+        $this->normalizeEmailInput($request);
+
         $validated = $request->validate([
             'name' => ['required','string','max:120'],
             'full_name' => ['nullable','string','max:150'],
             'address' => ['nullable','string','max:1000'],
-            'email' => ['required','email','max:190','unique:users,email'],
+            'email' => ['required','email','max:190', $this->activeEmailUniqueRule()],
             'password' => ['required','string','min:8'],
             'role' => ['required', Rule::in(['user','admin'])],
             'tier' => ['nullable', Rule::in(User::allowedTiers())],
@@ -225,11 +243,13 @@ class AdminUserController extends Controller
         $user = User::query()->find($id);
         if (!$user) return $this->fail('User tidak ditemukan', 404);
 
+        $this->normalizeEmailInput($request);
+
         $validated = $request->validate([
             'name' => ['sometimes','string','max:120'],
             'full_name' => ['sometimes','nullable','string','max:150'],
             'address' => ['sometimes','nullable','string','max:1000'],
-            'email' => ['sometimes','email','max:190', Rule::unique('users','email')->ignore($user->id)],
+            'email' => ['sometimes','email','max:190', $this->activeEmailUniqueRule((int) $user->id)],
             'password' => ['sometimes','nullable','string','min:8'],
             'role' => ['sometimes', Rule::in(['user','admin'])],
             'tier' => ['sometimes', Rule::in(User::allowedTiers())],

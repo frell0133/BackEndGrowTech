@@ -66,11 +66,17 @@ class UserProfileController extends Controller
             return $this->fail('Unauthenticated', 401);
         }
 
+        if ($request->has('email') && $request->input('email') !== null) {
+            $request->merge([
+                'email' => strtolower(trim((string) $request->input('email'))),
+            ]);
+        }
+
         $validated = $request->validate([
             'name' => ['nullable', 'string', 'max:120'],
             'full_name' => ['nullable', 'string', 'max:150'],
             'address' => ['nullable', 'string', 'max:1000'],
-            'email' => ['nullable', 'email', 'max:190', Rule::unique('users', 'email')->ignore($user->id)],
+            'email' => ['nullable', 'email', 'max:190', Rule::unique('users', 'email')->whereNull('deleted_at')->ignore($user->id)],
             'current_password' => ['nullable', 'string'],
         ], [
             'email.unique' => 'Email sudah digunakan oleh akun lain.',

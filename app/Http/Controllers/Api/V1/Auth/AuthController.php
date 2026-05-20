@@ -13,6 +13,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
 
 class AuthController extends Controller
 {
@@ -20,6 +21,12 @@ class AuthController extends Controller
 
     public function register(Request $request, TwoFactorService $twoFactor, SystemAccessService $access)
     {
+        if ($request->has('email') && $request->input('email') !== null) {
+            $request->merge([
+                'email' => strtolower(trim((string) $request->input('email'))),
+            ]);
+        }
+
         if (!$access->enabled('user_auth_access')) {
             return $this->fail(
                 $access->message('user_auth_access', 'Registrasi user sedang maintenance.'),
@@ -30,7 +37,7 @@ class AuthController extends Controller
 
         $data = $request->validate([
             'name' => ['required', 'string', 'max:120'],
-            'email' => ['required', 'email', 'max:190', 'unique:users,email'],
+            'email' => ['required', 'email', 'max:190', Rule::unique('users', 'email')->whereNull('deleted_at')],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
             'referrer_code' => ['nullable', 'string', 'max:50'],
             'referral_code' => ['nullable', 'string', 'max:50'],

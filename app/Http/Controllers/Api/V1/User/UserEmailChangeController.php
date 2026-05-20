@@ -103,12 +103,18 @@ class UserEmailChangeController extends Controller
 
     public function requestNew(Request $request, TwoFactorService $twoFactor)
     {
+        if ($request->has('new_email') && $request->input('new_email') !== null) {
+            $request->merge([
+                'new_email' => strtolower(trim((string) $request->input('new_email'))),
+            ]);
+        }
+
         $user = $this->currentUser($request);
         $this->ensureManualAccount($user);
 
         $data = $request->validate([
             'old_email_token' => ['required', 'string'],
-            'new_email' => ['required', 'email', 'max:190', Rule::unique('users', 'email')->ignore($user->id)],
+            'new_email' => ['required', 'email', 'max:190', Rule::unique('users', 'email')->whereNull('deleted_at')->ignore($user->id)],
         ], [
             'new_email.required' => 'Email baru wajib diisi.',
             'new_email.email' => 'Format email baru tidak valid.',
@@ -206,7 +212,7 @@ class UserEmailChangeController extends Controller
             return $this->fail('Email baru tidak valid atau sama dengan email lama.', 422);
         }
 
-        if (User::query()->where('email', $newEmail)->whereKeyNot($user->id)->exists()) {
+        if (User::query()->where('email', $newEmail)->whereNull('deleted_at')->whereKeyNot($user->id)->exists()) {
             return $this->fail('Email baru sudah digunakan oleh akun lain.', 422);
         }
 
@@ -215,7 +221,7 @@ class UserEmailChangeController extends Controller
             $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
             $this->ensureManualAccount($lockedUser);
 
-            if (User::query()->where('email', $newEmail)->whereKeyNot($lockedUser->id)->exists()) {
+            if (User::query()->where('email', $newEmail)->whereNull('deleted_at')->whereKeyNot($lockedUser->id)->exists()) {
                 throw ValidationException::withMessages([
                     'new_email' => ['Email baru sudah digunakan oleh akun lain.'],
                 ]);
